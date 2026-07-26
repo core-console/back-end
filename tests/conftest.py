@@ -1,0 +1,45 @@
+"""Shared in-process ASGI test fixtures."""
+
+from collections.abc import AsyncIterator
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
+from core_console.app import create_app
+from core_console.config import Environment, Settings
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    """Keep async tests on the standard-library event loop."""
+
+    return "asyncio"
+
+
+@pytest.fixture
+def settings() -> Settings:
+    """Return explicit test settings that never consult real infrastructure."""
+
+    return Settings(
+        environment=Environment.TEST,
+        database_url=None,
+        database_connect_timeout_seconds=0.1,
+    )
+
+
+@pytest.fixture
+def app(settings: Settings) -> FastAPI:
+    """Create one isolated application per test."""
+
+    return create_app(settings)
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    """Start lifespan and send requests through HTTPX without real networking."""
+
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+            yield http
