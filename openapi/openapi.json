@@ -1,0 +1,153 @@
+{
+  "components": {
+    "schemas": {
+      "HelloWorldResponse": {
+        "additionalProperties": false,
+        "description": "Frontend-compatible hello world response.",
+        "properties": {
+          "message": {
+            "examples": [
+              "Hello, world!"
+            ],
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "HelloWorldResponse",
+        "type": "object"
+      },
+      "ProblemDetails": {
+        "additionalProperties": true,
+        "description": "Machine-readable API error response.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stable machine-readable application error code.",
+            "title": "Code"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "title": "ProblemDetails",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Initial backend-owned API definition for Core Console. Operational endpoints are intentionally excluded.",
+    "title": "Core Console API",
+    "version": "0.1.0"
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "openapi": "3.1.1",
+  "paths": {
+    "/helloWorld": {
+      "get": {
+        "description": "Returns a minimal response used to verify API connectivity.",
+        "operationId": "getHelloWorld",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "message": "Hello, world!"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/HelloWorldResponse"
+                }
+              }
+            },
+            "description": "The hello world message was returned successfully."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "internal_error",
+                  "detail": "An unexpected error occurred.",
+                  "status": 500,
+                  "title": "Internal Server Error",
+                  "type": "about:blank"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected server error occurred."
+          }
+        },
+        "security": [],
+        "summary": "Get the hello world message",
+        "tags": [
+          "Hello"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Same-origin API gateway",
+      "url": "/api"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Initial API connectivity endpoints",
+      "name": "Hello"
+    }
+  ]
+}

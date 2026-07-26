@@ -7,6 +7,10 @@ from fastapi import FastAPI
 
 from core_console.config import Settings, load_settings
 from core_console.database.resources import DatabaseResources
+from core_console.health.api import router as health_router
+from core_console.modules.hello.api import router as hello_router
+from core_console.openapi import CoreConsoleApp
+from core_console.problems import install_problem_handlers
 from core_console.resources import ApplicationResources
 
 
@@ -29,11 +33,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if database is not None:
                 await database.dispose()
 
-    return FastAPI(
+    app = CoreConsoleApp(
         title="Core Console API",
         version="0.1.0",
         lifespan=lifespan,
-        openapi_url=None,
-        docs_url=None,
+        openapi_url="/api/openapi.json",
+        docs_url="/api/docs",
         redoc_url=None,
     )
+    install_problem_handlers(app)
+    app.include_router(hello_router)
+    app.include_router(health_router)
+    return app

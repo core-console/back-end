@@ -1,6 +1,7 @@
 """Run the complete local and CI validation gate."""
 
 import subprocess
+import sys
 from collections.abc import Sequence
 
 CHECKS: tuple[tuple[str, Sequence[str]], ...] = (
@@ -9,6 +10,10 @@ CHECKS: tuple[tuple[str, Sequence[str]], ...] = (
     ("Ruff lint", ("ruff", "check", ".")),
     ("mypy", ("mypy",)),
     ("pytest", ("pytest",)),
+    (
+        "OpenAPI drift",
+        (sys.executable, "scripts/export_openapi.py", "--check"),
+    ),
 )
 
 
