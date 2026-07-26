@@ -10,6 +10,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from core_console.request_context import get_request_id
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
 logger = logging.getLogger(__name__)
@@ -79,6 +82,55 @@ def _status_title(status_code: int) -> str:
         return "HTTP Error"
 
 
+class UnexpectedExceptionMiddleware:
+    """Translate otherwise unhandled HTTP exceptions into safe Problem Details."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def track_response_start(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, track_response_start)
+        except Exception as exc:
+            if response_started:
+                raise
+
+            request = Request(scope)
+            logger.exception(
+                "Unhandled exception while serving %s %s",
+                request.method,
+                request.url.path,
+                exc_info=exc,
+                extra={
+                    "event": "http.request.failed",
+                    "request_id": get_request_id(),
+                },
+            )
+            response = problem_response(
+                ProblemDetails(
+                    type="about:blank",
+                    title="Internal Server Error",
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    detail="An unexpected error occurred.",
+                    instance=request.url.path,
+                    code="internal_error",
+                )
+            )
+            await response(scope, receive, send)
+
+
 def install_problem_handlers(app: FastAPI) -> None:
     """Install consistent error translation at the HTTP boundary."""
 
@@ -133,22 +185,3 @@ def install_problem_handlers(app: FastAPI) -> None:
             }
         )
         return problem_response(problem)
-
-    @app.exception_handler(Exception)
-    async def handle_unexpected_exception(request: Request, exc: Exception) -> Response:
-        logger.exception(
-            "Unhandled exception while serving %s %s",
-            request.method,
-            request.url.path,
-            exc_info=exc,
-        )
-        return problem_response(
-            ProblemDetails(
-                type="about:blank",
-                title="Internal Server Error",
-                status=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred.",
-                instance=request.url.path,
-                code="internal_error",
-            )
-        )

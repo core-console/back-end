@@ -14,7 +14,7 @@ The repository pins both tools. Install dependencies deterministically:
 
 ```console
 uv python install
-uv sync --locked --all-groups
+uv sync
 ```
 
 No PostgreSQL, Keycloak, Kubernetes cluster, or real network service is required
@@ -28,8 +28,15 @@ Copy `.env.example` to `.env` only when local overrides are needed. Never commit
 Run the application:
 
 ```console
-uv run --frozen uvicorn core_console.app:create_app --factory --reload
+uv run start
 ```
+
+This is the local development entrypoint and enables automatic reload. HTTP
+access completion logging is owned by the application Middleware, so this entry
+point disables Uvicorn's duplicate access log. This also prevents raw Query
+Strings and successful health probes from appearing in Uvicorn access output.
+Uvicorn lifecycle and server-error logging remain enabled as the final server
+boundary.
 
 Useful endpoints:
 
@@ -54,6 +61,26 @@ All environment input is validated by Pydantic Settings:
 
 `DATABASE_URL` is held as a secret value and has no implicit host, username,
 password, or production fallback.
+
+## Request correlation and logging
+
+The backend validates an inbound `X-Request-ID` and reuses it only when it is at
+most 128 characters and contains ASCII letters, digits, `-`, `_`, `.`, or `:`.
+Missing, empty, or invalid values are replaced with `uuid4().hex`. The adopted
+identifier is propagated through a `ContextVar` for application logs within that
+request and returned in the response `X-Request-ID` header.
+
+Each non-successful-health HTTP request emits one JSON completion event with the
+method, matched route template, status, and `duration_ms`. Duration uses a
+monotonic clock rather than wall time. Successful liveness and readiness probes
+are suppressed; readiness failures remain visible without a traceback for
+expected database configuration, connection, or timeout failures.
+
+Application logs currently go only to the process console (`stdout`/`stderr`).
+No file logging, log storage system, metrics, tracing, collector, trace ID, or
+span ID is configured. When APISIX is introduced, it will become the primary
+generator for external request IDs; this backend will continue validating
+inbound values and generating a safe fallback.
 
 ## Database boundary
 

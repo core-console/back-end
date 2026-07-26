@@ -1,6 +1,7 @@
 """Shared in-process ASGI test fixtures."""
 
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from fastapi import FastAPI
@@ -33,6 +34,20 @@ def app(settings: Settings) -> FastAPI:
     """Create one isolated application per test."""
 
     return create_app(settings)
+
+
+@pytest.fixture
+def application_log_records(
+    caplog: pytest.LogCaptureFixture,
+) -> Iterator[pytest.LogCaptureFixture]:
+    """Capture application logs despite their production propagation boundary."""
+
+    application_logger = logging.getLogger("core_console")
+    application_logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        application_logger.removeHandler(caplog.handler)
 
 
 @pytest.fixture

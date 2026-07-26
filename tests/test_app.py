@@ -9,6 +9,8 @@ from pydantic import SecretStr
 from core_console.app import create_app
 from core_console.config import Environment, Settings
 from core_console.database.resources import DatabaseResources
+from core_console.http_logging import HttpRequestLoggingMiddleware
+from core_console.problems import UnexpectedExceptionMiddleware
 from core_console.resources import get_application_resources
 
 
@@ -22,6 +24,13 @@ def test_application_factory_creates_fastapi_app() -> None:
     app = create_app(settings)
 
     assert isinstance(app, FastAPI)
+
+
+def test_http_middleware_order(app: FastAPI) -> None:
+    assert [getattr(middleware.cls, "__name__", None) for middleware in app.user_middleware] == [
+        HttpRequestLoggingMiddleware.__name__,
+        UnexpectedExceptionMiddleware.__name__,
+    ]
 
 
 @pytest.mark.anyio

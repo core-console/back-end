@@ -18,6 +18,9 @@ dependencies = [
     "uvicorn==0.51.0",
 ]
 
+[project.scripts]
+start = "core_console.cli:start"
+
 [dependency-groups]
 dev = [
     "anyio==4.14.2",
