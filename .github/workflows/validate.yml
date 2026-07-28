@@ -25,7 +25,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
-          version: "0.11.32"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -37,3 +36,26 @@ jobs:
 
       - name: Run complete validation
         run: uv run --frozen python scripts/validate.py
+
+      - name: Build wheel
+        run: |
+          wheel_dir="${RUNNER_TEMP}/core-console-wheel"
+          uv build --wheel --out-dir "$wheel_dir"
+
+          shopt -s nullglob
+          wheels=("$wheel_dir"/*.whl)
+          if (( ${#wheels[@]} != 1 )); then
+            echo "Expected exactly one wheel, found ${#wheels[@]}" >&2
+            exit 1
+          fi
+          echo "WHEEL_PATH=${wheels[0]}" >> "$GITHUB_ENV"
+
+      - name: Validate isolated wheel installation
+        run: |
+          package_venv="${RUNNER_TEMP}/core-console-install"
+          .venv/bin/python -m venv "$package_venv"
+          uv pip install --strict --python "$package_venv/bin/python" "$WHEEL_PATH"
+
+          cd "$RUNNER_TEMP"
+          "$package_venv/bin/python" -I \
+            "$GITHUB_WORKSPACE/scripts/validate_installation.py"

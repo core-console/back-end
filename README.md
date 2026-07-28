@@ -7,10 +7,9 @@ justifies a specialist service.
 
 ## Prerequisites
 
-- CPython 3.14.6
-- uv 0.11.32
-
-The repository pins both tools. Install dependencies deterministically:
+Python and uv versions are pinned by `.python-version` and
+`tool.uv.required-version` in `pyproject.toml`. Install dependencies
+deterministically:
 
 ```console
 uv python install
