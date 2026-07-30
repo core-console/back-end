@@ -111,6 +111,10 @@ under `/api`; the contract represents that prefix as an OpenAPI server and keeps
 the frontend-compatible path `/helloWorld`. Operational health endpoints are not
 frontend business APIs and are excluded from this contract.
 
+Contract changes must be reviewed with the backend API implementation and
+committed here before consumers synchronize them. The frontend snapshot is a
+consumer copy; backend validation and CI never write to the frontend repository.
+
 Export the deterministic contract:
 
 ```console
