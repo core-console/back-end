@@ -43,3 +43,20 @@
 - Run `uv run --frozen python scripts/validate.py` and `git diff --check` before
   handing off a change.
 - Follow Conventional Commits and keep each commit to one logical concern.
+
+## Change approval boundary
+
+- Do not commit or push unless the user explicitly approves it in the current conversation.
+- Implementation tasks stop after validation and report `READY_FOR_REVIEW`.
+- Repository instructions take precedence over conflicting workflow defaults.
+- Do not expand the approved scope while addressing review findings.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This repository uses a single-context domain-doc layout. See `docs/agents/domain.md`.
