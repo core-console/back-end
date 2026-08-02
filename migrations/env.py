@@ -2,20 +2,21 @@
 
 import asyncio
 from logging.config import fileConfig
+from typing import cast
 
 from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from core_console.config import load_settings
-from core_console.database.base import Base
+from core_console.modules.users.models import User
 
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-target_metadata = Base.metadata
+target_metadata = User.metadata
 
 
 def configured_database_url() -> str:
@@ -75,9 +76,13 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations with an async SQLAlchemy engine."""
+    """Run migrations with an async SQLAlchemy engine or shared connection."""
 
-    asyncio.run(run_async_migrations())
+    shared_connection = config.attributes.get("connection")
+    if shared_connection is not None:
+        do_run_migrations(cast(Connection, shared_connection))
+    else:
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

@@ -17,6 +17,23 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://core_console_test:core_console_test@localhost:5432/core_console_test
+
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_DB: core_console_test
+          POSTGRES_USER: core_console_test
+          POSTGRES_PASSWORD: core_console_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=core_console_test --dbname=core_console_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Check out repository

@@ -1,6 +1,8 @@
 """Shared in-process ASGI test fixtures."""
 
+import asyncio
 import logging
+import platform
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -12,9 +14,11 @@ from core_console.config import Environment, Settings
 
 
 @pytest.fixture
-def anyio_backend() -> str:
-    """Keep async tests on the standard-library event loop."""
+def anyio_backend() -> str | tuple[str, dict[str, object]]:
+    """Keep async tests on a Psycopg-compatible standard-library event loop."""
 
+    if platform.system() == "Windows":
+        return ("asyncio", {"loop_factory": asyncio.SelectorEventLoop})
     return "asyncio"
 
 

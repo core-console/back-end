@@ -39,7 +39,11 @@
 - Manage Python and dependencies with uv and keep `uv.lock` synchronized.
 - Add only directly used dependencies and only the minimum justified extras.
 - Ruff owns formatting and linting. mypy is the sole static type checker.
-- Tests must not require real networks, PostgreSQL, Keycloak, or Kubernetes.
+- Ordinary unit and foundational tests must not require real public networks,
+  PostgreSQL, Keycloak, or Kubernetes. Explicitly marked PostgreSQL integration
+  tests may use a dedicated local or CI PostgreSQL via `TEST_DATABASE_URL`, but
+  must never fall back to or clean `DATABASE_URL`; Keycloak, Kubernetes, and
+  real public networks remain outside current integration-test dependencies.
 - Run `uv run --frozen python scripts/validate.py` and `git diff --check` before
   handing off a change.
 - Follow Conventional Commits and keep each commit to one logical concern.

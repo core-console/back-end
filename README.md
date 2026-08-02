@@ -17,7 +17,8 @@ uv sync
 ```
 
 No PostgreSQL, Keycloak, Kubernetes cluster, or real network service is required
-to install the project or run its tests.
+to install the project or run the unit tests. The PostgreSQL integration tests
+run only when an explicit, dedicated `TEST_DATABASE_URL` is provided.
 
 ## Development
 
@@ -91,7 +92,8 @@ shutdown.
 
 Request-level `AsyncSession` injection is available in
 `core_console.database.dependencies`. There are no fabricated tables, generic
-repositories, CRUD bases, SQLite fallbacks, or initial migrations.
+repositories, CRUD bases, or SQLite fallbacks. The first real migration creates
+the users persistence schema; application startup does not run migrations.
 
 Alembic reads the same validated `DATABASE_URL`:
 
@@ -154,9 +156,13 @@ uv run --frozen pytest
 uv run --frozen ruff check .
 ```
 
-Tests use HTTPX's in-process ASGI transport. They do not contact real networks or
-PostgreSQL. Coverage can be added when it informs a concrete testing decision;
-there is no arbitrary repository-wide threshold.
+Most tests use HTTPX's in-process ASGI transport and do not contact real networks
+or PostgreSQL. `tests/integration/test_users_postgres.py` uses real PostgreSQL
+only through `TEST_DATABASE_URL`; it never falls back to `DATABASE_URL` and
+skips locally when no safe test target is available. The test target must be a
+dedicated database with a test-marked name. CI supplies a dedicated PostgreSQL
+17.6 service database. Coverage can be added when it informs a concrete testing
+decision; there is no arbitrary repository-wide threshold.
 
 ## Deferred capabilities
 
