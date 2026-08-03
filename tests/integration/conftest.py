@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from core_console.config import Environment, Settings
+from core_console.config import AuthMode, Environment, Settings
 from core_console.modules.users.models import User
 
 
@@ -100,6 +100,9 @@ def _validated_test_database_url() -> str:
     try:
         test_settings = Settings(
             environment=Environment.TEST,
+            auth_mode=AuthMode.DEVELOPMENT,
+            dev_identity_issuer="https://identity.example.test",
+            dev_identity_subject="test-developer",
             database_url=test_environment.test_database_url,
         )
     except Exception as exc:
@@ -116,7 +119,12 @@ def _validated_test_database_url() -> str:
         )
 
     try:
-        development_settings = Settings(environment=Environment.DEVELOPMENT)
+        development_settings = Settings(
+            environment=Environment.DEVELOPMENT,
+            auth_mode=AuthMode.DEVELOPMENT,
+            dev_identity_issuer="https://identity.example.test",
+            dev_identity_subject="test-developer",
+        )
     except Exception as exc:
         pytest.fail(f"development DATABASE_URL is not a valid PostgreSQL URL: {exc}")
     development_database_url = development_settings.database_url_value()

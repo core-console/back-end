@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from core_console.app import create_app
-from core_console.config import Environment, Settings
+from core_console.config import AuthMode, Environment, Settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OPENAPI_PATH = PROJECT_ROOT / "openapi" / "openapi.json"
@@ -16,6 +16,9 @@ def rendered_openapi() -> str:
 
     settings = Settings(
         environment=Environment.TEST,
+        auth_mode=AuthMode.DEVELOPMENT,
+        dev_identity_issuer="https://identity.example.test",
+        dev_identity_subject="openapi-export",
         database_url=None,
         database_connect_timeout_seconds=2.0,
     )

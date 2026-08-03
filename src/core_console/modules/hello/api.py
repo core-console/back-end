@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from core_console.modules.hello.schemas import HelloWorldResponse
-from core_console.problems import PROBLEM_MEDIA_TYPE, ProblemDetails
+from core_console.problems import ProblemDetails
 
 router = APIRouter(prefix="/api", tags=["Hello"])
 
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api", tags=["Hello"])
             "model": ProblemDetails,
             "description": "An unexpected server error occurred.",
             "content": {
-                PROBLEM_MEDIA_TYPE: {
+                "application/json": {
                     "example": {
                         "type": "about:blank",
                         "title": "Internal Server Error",

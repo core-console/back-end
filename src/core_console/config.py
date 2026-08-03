@@ -3,13 +3,22 @@
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import AnyUrl, Field, SecretStr, TypeAdapter, UrlConstraints, field_validator
+from pydantic import (
+    AnyUrl,
+    Field,
+    SecretStr,
+    StringConstraints,
+    TypeAdapter,
+    UrlConstraints,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DatabaseUrl = Annotated[
     AnyUrl,
     UrlConstraints(allowed_schemes=["postgresql+psycopg"], host_required=True),
 ]
+NonBlankString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 _DATABASE_URL_ADAPTER = TypeAdapter(DatabaseUrl)
 
 
@@ -19,6 +28,12 @@ class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
     PRODUCTION = "production"
+
+
+class AuthMode(StrEnum):
+    """Supported external identity sources."""
+
+    DEVELOPMENT = "development"
 
 
 class Settings(BaseSettings):
@@ -36,6 +51,9 @@ class Settings(BaseSettings):
         default=Environment.DEVELOPMENT,
         validation_alias="APP_ENV",
     )
+    auth_mode: AuthMode = Field(validation_alias="AUTH_MODE")
+    dev_identity_issuer: NonBlankString = Field(validation_alias="DEV_IDENTITY_ISSUER")
+    dev_identity_subject: NonBlankString = Field(validation_alias="DEV_IDENTITY_SUBJECT")
     database_url: SecretStr | None = Field(
         default=None,
         validation_alias="DATABASE_URL",
@@ -71,4 +89,4 @@ class Settings(BaseSettings):
 def load_settings() -> Settings:
     """Load and validate settings without caching mutable process state."""
 
-    return Settings()
+    return Settings()  # type: ignore[call-arg]

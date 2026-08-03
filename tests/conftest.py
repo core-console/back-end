@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from core_console.app import create_app
-from core_console.config import Environment, Settings
+from core_console.config import AuthMode, Environment, Settings
 
 
 @pytest.fixture
@@ -28,6 +28,9 @@ def settings() -> Settings:
 
     return Settings(
         environment=Environment.TEST,
+        auth_mode=AuthMode.DEVELOPMENT,
+        dev_identity_issuer="https://identity.example.test",
+        dev_identity_subject="test-developer",
         database_url=None,
         database_connect_timeout_seconds=0.1,
     )

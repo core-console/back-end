@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from core_console.config import Environment, Settings
+from core_console.config import AuthMode, Environment, Settings
 from core_console.database.dependencies import get_session
 from core_console.database.resources import DatabaseResources
 from core_console.resources import ApplicationResources
@@ -23,6 +23,9 @@ def request_with_sessions(
     app.state.resources = ApplicationResources(
         settings=Settings(
             environment=Environment.TEST,
+            auth_mode=AuthMode.DEVELOPMENT,
+            dev_identity_issuer="https://identity.example.test",
+            dev_identity_subject="test-developer",
             database_url=None,
             database_connect_timeout_seconds=0.1,
         ),

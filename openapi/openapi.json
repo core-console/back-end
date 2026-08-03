@@ -20,6 +20,58 @@
         "title": "HelloWorldResponse",
         "type": "object"
       },
+      "MeResponse": {
+        "additionalProperties": false,
+        "description": "Public fields returned for the active current user.",
+        "properties": {
+          "displayName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Displayname"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "displayName",
+          "email"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
       "ProblemDetails": {
         "additionalProperties": true,
         "description": "Machine-readable API error response.",
@@ -136,6 +188,59 @@
           "Hello"
         ]
       }
+    },
+    "/me": {
+      "get": {
+        "description": "Returns the public profile of the active provisioned user.",
+        "operationId": "getCurrentUser",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected server error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is not available."
+          }
+        },
+        "security": [],
+        "summary": "Get the current user",
+        "tags": [
+          "Users"
+        ]
+      }
     }
   },
   "servers": [
@@ -148,6 +253,10 @@
     {
       "description": "Initial API connectivity endpoints",
       "name": "Hello"
+    },
+    {
+      "description": "Current-user endpoints",
+      "name": "Users"
     }
   ]
 }

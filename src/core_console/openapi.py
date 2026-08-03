@@ -9,13 +9,46 @@ from core_console import __version__
 from core_console.problems import PROBLEM_MEDIA_TYPE
 
 API_PREFIX = "/api"
+_PROBLEM_DETAILS_REF = "#/components/schemas/ProblemDetails"
+_HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 
 OPENAPI_TAGS = [
     {
         "name": "Hello",
         "description": "Initial API connectivity endpoints",
-    }
+    },
+    {
+        "name": "Users",
+        "description": "Current-user endpoints",
+    },
 ]
+
+
+def _use_problem_details_media_type(contract_paths: dict[str, Any]) -> None:
+    """Normalize every Problem Details response to its registered media type."""
+
+    for path_item in contract_paths.values():
+        if not isinstance(path_item, dict):
+            continue
+        for method in _HTTP_METHODS:
+            operation = path_item.get(method)
+            if not isinstance(operation, dict):
+                continue
+            responses = operation.get("responses")
+            if not isinstance(responses, dict):
+                continue
+            for response in responses.values():
+                if not isinstance(response, dict):
+                    continue
+                content = response.get("content")
+                if not isinstance(content, dict):
+                    continue
+                json_content = content.get("application/json")
+                if not isinstance(json_content, dict):
+                    continue
+                if json_content.get("schema") != {"$ref": _PROBLEM_DETAILS_REF}:
+                    continue
+                content[PROBLEM_MEDIA_TYPE] = content.pop("application/json")
 
 
 class CoreConsoleApp(FastAPI):
@@ -51,12 +84,7 @@ class CoreConsoleApp(FastAPI):
                 "description": "Same-origin API gateway",
             }
         ]
-
-        hello_responses = contract_paths["/helloWorld"]["get"]["responses"]
-        server_error = hello_responses["500"]
-        json_schema = server_error["content"].pop("application/json")
-        problem_content = server_error["content"].setdefault(PROBLEM_MEDIA_TYPE, {})
-        problem_content["schema"] = json_schema["schema"]
+        _use_problem_details_media_type(contract_paths)
 
         self.openapi_schema = schema
         return schema

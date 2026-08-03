@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from pydantic import SecretStr
 
 from core_console.app import create_app
-from core_console.config import Environment, Settings
+from core_console.config import AuthMode, Environment, Settings
 from core_console.database.resources import DatabaseResources
 from core_console.http_logging import HttpRequestLoggingMiddleware
 from core_console.problems import UnexpectedExceptionMiddleware
@@ -17,6 +17,9 @@ from core_console.resources import get_application_resources
 def test_application_factory_creates_fastapi_app() -> None:
     settings = Settings(
         environment=Environment.TEST,
+        auth_mode=AuthMode.DEVELOPMENT,
+        dev_identity_issuer="https://identity.example.test",
+        dev_identity_subject="test-developer",
         database_url=None,
         database_connect_timeout_seconds=0.1,
     )
@@ -58,6 +61,9 @@ async def test_lifespan_creates_one_engine_and_disposes_it(
     monkeypatch.setattr(DatabaseResources, "create", create_database)
     settings = Settings(
         environment=Environment.TEST,
+        auth_mode=AuthMode.DEVELOPMENT,
+        dev_identity_issuer="https://identity.example.test",
+        dev_identity_subject="test-developer",
         database_url=SecretStr("postgresql+psycopg://core_console:not-real@localhost/core_console"),
         database_connect_timeout_seconds=0.1,
     )

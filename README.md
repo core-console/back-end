@@ -41,6 +41,7 @@ boundary.
 Useful endpoints:
 
 - `GET /api/helloWorld`
+- `GET /api/me`
 - `GET /health/live`
 - `GET /health/ready`
 - `/api/docs` and `/api/openapi.json`
@@ -54,6 +55,9 @@ this does not prevent startup, liveness, or infrastructure-independent APIs.
 All environment input is validated by Pydantic Settings:
 
 - `APP_ENV`: `development`, `test`, or `production`
+- `AUTH_MODE`: required; currently only `development`
+- `DEV_IDENTITY_ISSUER`: required non-blank issuer for the fixed development identity
+- `DEV_IDENTITY_SUBJECT`: required non-blank subject for the fixed development identity
 - `DATABASE_URL`: optional; when present it must use
   `postgresql+psycopg://`
 - `DATABASE_CONNECT_TIMEOUT_SECONDS`: readiness probe timeout, from 0.1 to
@@ -61,6 +65,11 @@ All environment input is validated by Pydantic Settings:
 
 `DATABASE_URL` is held as a secret value and has no implicit host, username,
 password, or production fallback.
+
+Development authentication is server-controlled: the backend resolves the fixed
+`DEV_IDENTITY_ISSUER` and `DEV_IDENTITY_SUBJECT` to a pre-provisioned PostgreSQL
+user. Client headers, query parameters, and cookies cannot select an identity.
+Only an active local user can call `GET /api/me`.
 
 ## Request correlation and logging
 
@@ -166,9 +175,9 @@ decision; there is no arbitrary repository-wide threshold.
 
 ## Deferred capabilities
 
-Authentication, authorization, Redis, task queues, brokers, Agent or LLM SDKs,
-vector databases, service discovery, Kubernetes clients/manifests, and
-distributed-service frameworks are intentionally absent.
+Production authentication, authorization, Redis, task queues, brokers, Agent or
+LLM SDKs, vector databases, service discovery, Kubernetes clients/manifests,
+and distributed-service frameworks are intentionally absent.
 
 The future authentication boundary is documented without a placeholder
 implementation: this backend will validate Bearer access tokens forwarded by

@@ -1,9 +1,12 @@
 """Real PostgreSQL coverage for the users persistence schema."""
 
+from http import HTTPStatus
 from typing import TypedDict
 from uuid import uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient, Response
+from pydantic import SecretStr
 from sqlalchemy import Connection, inspect, text
 from sqlalchemy.engine.interfaces import (
     ReflectedCheckConstraint,
@@ -14,10 +17,36 @@ from sqlalchemy.engine.interfaces import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from core_console.app import create_app
+from core_console.config import AuthMode, Environment, Settings
 from core_console.modules.users.models import User
 from core_console.modules.users.queries import get_user_by_identity
 
 pytestmark = pytest.mark.anyio
+
+
+async def get_me(
+    *,
+    database_url: str,
+    identity_issuer: str,
+    identity_subject: str,
+) -> Response:
+    """Call the current-user API against the protected PostgreSQL target."""
+
+    app = create_app(
+        Settings(
+            environment=Environment.TEST,
+            auth_mode=AuthMode.DEVELOPMENT,
+            dev_identity_issuer=identity_issuer,
+            dev_identity_subject=identity_subject,
+            database_url=SecretStr(database_url),
+            database_connect_timeout_seconds=0.1,
+        )
+    )
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.get("/api/me")
 
 
 class UserSchemaInspection(TypedDict):
@@ -219,3 +248,68 @@ async def test_identity_query_distinguishes_issuer_subject_and_status(
     assert missing is None
     assert active_user.created_at.tzinfo is not None
     assert active_user.updated_at.tzinfo is not None
+
+
+async def test_active_persisted_user_can_get_own_public_profile(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    """The fixed development identity resolves through PostgreSQL to GET /api/me."""
+
+    identity_issuer = f"issuer-{uuid4().hex}"
+    identity_subject = f"subject-{uuid4().hex}"
+    user = User(
+        identity_issuer=identity_issuer,
+        identity_subject=identity_subject,
+        username="local-developer",
+        display_name=None,
+        email="developer@example.test",
+        status="active",
+    )
+    postgres_session.add(user)
+    await postgres_session.commit()
+
+    response = await get_me(
+        database_url=postgres_database_url,
+        identity_issuer=identity_issuer,
+        identity_subject=identity_subject,
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == {
+        "id": str(user.id),
+        "username": "local-developer",
+        "displayName": None,
+        "email": "developer@example.test",
+    }
+
+
+async def test_missing_and_disabled_persisted_users_have_the_same_api_result(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    """Provisioning state is not disclosed by the current-user API."""
+
+    identity_issuer = f"issuer-{uuid4().hex}"
+    disabled_user = User(
+        identity_issuer=identity_issuer,
+        identity_subject=f"subject-{uuid4().hex}",
+        status="disabled",
+    )
+    postgres_session.add(disabled_user)
+    await postgres_session.commit()
+
+    disabled_response = await get_me(
+        database_url=postgres_database_url,
+        identity_issuer=identity_issuer,
+        identity_subject=disabled_user.identity_subject,
+    )
+    missing_response = await get_me(
+        database_url=postgres_database_url,
+        identity_issuer=identity_issuer,
+        identity_subject=f"missing-{uuid4().hex}",
+    )
+
+    assert disabled_response.status_code == HTTPStatus.FORBIDDEN
+    assert disabled_response.json() == missing_response.json()
+    assert disabled_response.json()["code"] == "access_denied"
