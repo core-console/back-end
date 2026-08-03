@@ -32,6 +32,7 @@ def main() -> None:
 
     import core_console
     from core_console.app import create_app
+    from core_console.config import AuthMode, Environment, Settings
 
     module_file = core_console.__file__
     require(module_file is not None, "core_console has no filesystem location")
@@ -54,7 +55,15 @@ def main() -> None:
         f"core_console was imported from repository sources: {module_path}",
     )
 
-    app = create_app()
+    settings = Settings(
+        environment=Environment.TEST,
+        auth_mode=AuthMode.DEVELOPMENT,
+        dev_identity_issuer="https://installation-validation.invalid",
+        dev_identity_subject="installed-wheel-validation",
+        database_url=None,
+        database_connect_timeout_seconds=2.0,
+    )
+    app = create_app(settings)
     require(app is not None, "create_app() returned None")
 
     package = distribution("core-console")
