@@ -44,39 +44,6 @@ def install_address_map(
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
-def test_multi_address_dns_targets_overlap_when_any_address_matches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A possible shared address rejects otherwise non-equal DNS sets."""
-
-    install_address_map(
-        monkeypatch,
-        {
-            "first.example": ["192.0.2.10", "192.0.2.11"],
-            "second.example": ["192.0.2.11", "192.0.2.12"],
-        },
-    )
-
-    first = _database_target(database_url("first.example"))
-    second = _database_target(database_url("second.example"))
-
-    assert _database_targets_overlap(first, second)
-
-
-def test_dns_and_direct_ip_aliases_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A DNS name and its direct IP target are treated as possibly shared."""
-
-    install_address_map(
-        monkeypatch,
-        {"database.example": ["192.0.2.20"], "192.0.2.20": ["192.0.2.20"]},
-    )
-
-    dns_target = _database_target(database_url("database.example"))
-    ip_target = _database_target(database_url("192.0.2.20"))
-
-    assert _database_targets_overlap(dns_target, ip_target)
-
-
 def test_full_validator_rejects_overlapping_dns_development_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

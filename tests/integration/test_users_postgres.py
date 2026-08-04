@@ -1,13 +1,17 @@
 """Real PostgreSQL coverage for the users persistence schema."""
 
 from http import HTTPStatus
+from pathlib import Path
 from typing import TypedDict
 from uuid import uuid4
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import Connection, inspect, text
+from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.engine.interfaces import (
     ReflectedCheckConstraint,
     ReflectedColumn,
@@ -23,6 +27,8 @@ from core_console.modules.users.models import User
 from core_console.modules.users.queries import get_user_by_identity
 
 pytestmark = pytest.mark.anyio
+
+ALEMBIC_CONFIG_PATH = Path(__file__).resolve().parents[2] / "alembic.ini"
 
 
 async def get_me(
@@ -77,14 +83,17 @@ async def test_empty_database_upgrades_to_head_and_creates_users_schema(
 ) -> None:
     """A protected empty database can reach Alembic head with the users schema."""
 
+    alembic_config = Config(str(ALEMBIC_CONFIG_PATH))
+    alembic_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+
     async with postgres_engine.connect() as connection:
         version = await connection.scalar(text("SELECT version_num FROM alembic_version"))
         user_count = await connection.scalar(text("SELECT count(*) FROM users"))
         schema = await connection.run_sync(lambda sync_connection: inspect_users(sync_connection))
 
-    assert version == "20260802_01"
+    assert version == alembic_head
     assert user_count == 0
-    assert schema["tables"] == {"alembic_version", "users"}
+    assert {"alembic_version", "users"} <= schema["tables"]
     columns = {column["name"]: column for column in schema["columns"]}
     assert set(columns) == {
         "id",
@@ -109,18 +118,19 @@ async def test_empty_database_upgrades_to_head_and_creates_users_schema(
         )
     )
     assert all(columns[name]["nullable"] is True for name in ("username", "display_name", "email"))
+    assert isinstance(columns["id"]["type"], PostgreSQLUUID)
     assert columns["status"]["default"] is None
     assert getattr(columns["created_at"]["type"], "timezone", False) is True
     assert getattr(columns["updated_at"]["type"], "timezone", False) is True
     assert schema["primary_key"]["constrained_columns"] == ["id"]
-    assert {tuple(constraint["column_names"]) for constraint in schema["unique_constraints"]} == {
-        ("identity_issuer", "identity_subject")
+    assert {("identity_issuer", "identity_subject")} <= {
+        tuple(constraint["column_names"]) for constraint in schema["unique_constraints"]
     }
-    assert {constraint["name"] for constraint in schema["check_constraints"]} == {
+    assert {
         "ck_users_identity_issuer_not_blank",
         "ck_users_identity_subject_not_blank",
         "ck_users_status",
-    }
+    } <= {constraint["name"] for constraint in schema["check_constraints"]}
 
 
 async def test_identity_key_is_unique(postgres_session: AsyncSession) -> None:

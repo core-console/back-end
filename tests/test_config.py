@@ -11,7 +11,7 @@ def test_valid_development_auth_configuration(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("DEV_IDENTITY_ISSUER", "https://identity.example.test")
     monkeypatch.setenv("DEV_IDENTITY_SUBJECT", "developer")
 
-    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    settings = Settings(_env_file=None, database_url=None)  # type: ignore[call-arg]
 
     assert settings.auth_mode is AuthMode.DEVELOPMENT
     assert settings.dev_identity_issuer == "https://identity.example.test"
@@ -44,9 +44,16 @@ def test_unsupported_auth_mode_is_rejected() -> None:
     ),
 )
 def test_development_identity_parts_are_required_and_not_blank(
+    monkeypatch: pytest.MonkeyPatch,
     field_name: str,
     value: str | None,
 ) -> None:
+    environment_name = {
+        "dev_identity_issuer": "DEV_IDENTITY_ISSUER",
+        "dev_identity_subject": "DEV_IDENTITY_SUBJECT",
+    }[field_name]
+    monkeypatch.delenv(environment_name, raising=False)
+
     values: dict[str, object] = {
         "auth_mode": AuthMode.DEVELOPMENT,
         "dev_identity_issuer": "https://identity.example.test",
@@ -58,7 +65,11 @@ def test_development_identity_parts_are_required_and_not_blank(
         values[field_name] = value
 
     with pytest.raises(ValidationError):
-        Settings.model_validate(values)
+        Settings(  # type: ignore[call-arg]
+            _env_file=None,
+            database_url=None,
+            **values,  # type: ignore[arg-type]
+        )
 
 
 def test_invalid_database_scheme_fails_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
