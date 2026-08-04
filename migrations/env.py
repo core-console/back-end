@@ -1,6 +1,7 @@
 """Alembic environment using the application's validated async database URL."""
 
 import asyncio
+import sys
 from logging.config import fileConfig
 from typing import cast
 
@@ -81,6 +82,11 @@ def run_migrations_online() -> None:
     shared_connection = config.attributes.get("connection")
     if shared_connection is not None:
         do_run_migrations(cast(Connection, shared_connection))
+    elif sys.platform == "win32":
+        asyncio.run(
+            run_async_migrations(),
+            loop_factory=asyncio.SelectorEventLoop,
+        )
     else:
         asyncio.run(run_async_migrations())
 
