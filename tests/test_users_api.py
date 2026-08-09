@@ -261,6 +261,40 @@ async def test_database_failure_is_classified_at_http_boundary(
 
 
 @pytest.mark.anyio
+async def test_management_database_failure_is_classified_after_actor_resolution(
+    app: FastAPI,
+    client: AsyncClient,
+) -> None:
+    """Users workflows preserve the database-unavailable Problem Details contract."""
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id=uuid4(),
+        username="actor",
+        display_name=None,
+        email=None,
+        status="active",
+    )
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+    cast(AsyncMock, session.scalars).side_effect = OperationalError(
+        None,
+        None,
+        PsycopgOperationalError("connection refused"),
+        connection_invalidated=False,
+    )
+
+    async def failing_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_session] = failing_session
+
+    response = await client.get("/api/users")
+
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "database_unavailable"
+
+
+@pytest.mark.anyio
 async def test_unprotected_endpoints_do_not_resolve_current_user(
     app: FastAPI,
     client: AsyncClient,

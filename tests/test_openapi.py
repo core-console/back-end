@@ -76,6 +76,65 @@ def test_openapi_describes_current_user_contract(app: FastAPI) -> None:
         assert {"type": "null"} in me_schema["properties"][property_name]["anyOf"]
 
 
+def test_openapi_describes_users_v1_management_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    operations = (
+        paths["/users"]["get"],
+        paths["/users"]["post"],
+        paths["/users/{userId}"]["patch"],
+        paths["/users/{userId}/deactivate"]["post"],
+        paths["/users/{userId}/reactivate"]["post"],
+    )
+
+    assert paths["/users"]["get"]["operationId"] == "listUsers"
+    assert paths["/users"]["post"]["operationId"] == "createUser"
+    assert paths["/users/{userId}"]["patch"]["operationId"] == "updateUser"
+    assert paths["/users/{userId}/deactivate"]["post"]["operationId"] == "deactivateUser"
+    assert paths["/users/{userId}/reactivate"]["post"]["operationId"] == "reactivateUser"
+    assert set(paths["/users"]) == {"get", "post"}
+    assert set(paths["/users/{userId}"]) == {"patch"}
+    assert "parameters" not in paths["/users"]["get"]
+
+    user_schema = schema["components"]["schemas"]["UserResponse"]
+    assert user_schema["additionalProperties"] is False
+    assert set(user_schema["required"]) == {
+        "id",
+        "displayName",
+        "username",
+        "email",
+        "identityIssuer",
+        "identitySubject",
+        "status",
+    }
+    assert set(user_schema["properties"]) == set(user_schema["required"])
+    assert user_schema["properties"]["status"]["enum"] == ["active", "inactive"]
+
+    create_schema = schema["components"]["schemas"]["CreateUserRequest"]
+    assert set(create_schema["properties"]) == {
+        "displayName",
+        "username",
+        "email",
+        "identityIssuer",
+        "identitySubject",
+    }
+    assert set(create_schema["required"]) == set(create_schema["properties"])
+
+    update_schema = schema["components"]["schemas"]["UpdateUserRequest"]
+    assert set(update_schema["properties"]) == {"displayName", "username", "email"}
+    assert "required" not in update_schema
+
+    for operation in operations:
+        for status, response in operation["responses"].items():
+            if status.startswith("2"):
+                continue
+            assert set(response["content"]) == {"application/problem+json"}
+            assert (
+                response["content"]["application/problem+json"]["schema"]["$ref"]
+                == "#/components/schemas/ProblemDetails"
+            )
+
+
 def test_openapi_converts_problem_details_for_any_operation(app: FastAPI) -> None:
     @app.get(
         "/api/__test_problem",

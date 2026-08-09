@@ -18,7 +18,7 @@ from core_console.resources import get_application_resources
 _DATABASE_UNAVAILABLE_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 
 
-def _is_database_unavailable(error: InterfaceError | OperationalError) -> bool:
+def is_database_unavailable(error: InterfaceError | OperationalError) -> bool:
     """Identify connection and server-availability failures from psycopg."""
 
     if error.connection_invalidated:
@@ -64,7 +64,7 @@ async def get_current_user(
             identity_subject=identity.subject,
         )
     except (InterfaceError, OperationalError) as exc:
-        if not _is_database_unavailable(exc):
+        if not is_database_unavailable(exc):
             raise
         raise ApplicationProblem(
             status=HTTPStatus.SERVICE_UNAVAILABLE,
