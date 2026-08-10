@@ -1,31 +1,47 @@
-# Identity Context
+# Core Console Identity
 
-## Glossary
+This glossary defines the authoritative vocabulary for identity concepts owned
+by the Core Console backend.
 
-- **External Identity** — A complete `(issuer, subject)` pair from an identity source.
-- **Local User** — A user provisioned in this application and identified internally by a stable `users.id`.
-- **Current User** — The Local User projection resolved from an External Identity for the current request; it may be active or disabled.
-- **Provisioned** — A Local User record exists before identity resolution runs.
-- **Active** — A Local User state allowed through the active-user access boundary.
-- **Disabled** — A Local User state that can be resolved as Current User but cannot pass the active-user access boundary.
+## Language
 
-## Identity mapping
+**Local User**:
+Core Console's own user entity. It is identified within Core Console by a Local
+User ID.
 
-- An External Identity is identified by the complete `(issuer, subject)` pair.
-- Each complete External Identity maps to at most one Local User.
-- External Identity is used to resolve a Local User, not as a long-term foreign key for business data.
-- Future business data should reference the stable internal `users.id`; no business foreign-key instance exists yet.
+**Local User ID**:
+The stable UUID assigned by Core Console to identify a Local User.
 
-## Provisioning and access
+**External Identity**:
+A complete `(issuer, subject)` pair that identifies an identity within an
+external identity source and is used to resolve a Local User. Each complete pair
+resolves to at most one Local User.
 
-- Users must be provisioned before identity resolution.
-- Identity resolution never automatically creates, activates, or seeds a user.
-- Only an active Local User can pass the active-user access boundary.
-- Missing and disabled users both return `403 access_denied` to clients, without revealing whether the user exists or is disabled.
+**Profile Attributes**:
+Descriptive or contact data such as username, display name, and email. Profile
+Attributes are not Core Console identity keys.
 
-## Scope boundary
+**Identity Resolution**:
+The association of an External Identity with a Local User for one request. It
+identifies the Local User without deciding whether that Local User may proceed.
 
-- The development identity adapter constructs External Identity from server-controlled Settings.
-- Future validated OIDC or other adapters should produce the same External Identity boundary.
-- RBAC, automatic provisioning, and production OIDC are not implemented.
-- See the existing [README.md](README.md#deferred-capabilities) notes for deferred capabilities; this document does not redesign them.
+**Current User**:
+The Local User associated with the External Identity for one request. Current
+User is a request-scoped role of the Local User, not a separate entity or a
+statement of access eligibility.
+
+**Local User Lifecycle**:
+The Active or Disabled state owned by Core Console. Lifecycle changes do not
+provision, disable, or otherwise mutate an external identity provider.
+
+**Active**:
+The Local User lifecycle state eligible to pass the active-user access boundary.
+
+**Disabled**:
+The Local User lifecycle state that may still be identity-resolved but is
+rejected by the active-user access boundary.
+
+**Inactive**:
+The management API value `inactive` represents Disabled; it is not the canonical
+Core Console lifecycle state.
+_Avoid_: Inactive when referring to the Core Console domain state.
