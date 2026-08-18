@@ -135,6 +135,55 @@ def test_openapi_describes_users_v1_management_contract(app: FastAPI) -> None:
             )
 
 
+def test_openapi_describes_finance_currency_and_ledger_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    operations = (
+        paths["/finance/currencies"]["get"],
+        paths["/finance/ledgers"]["get"],
+        paths["/finance/ledgers"]["post"],
+        paths["/finance/ledgers/{ledgerId}"]["patch"],
+    )
+
+    assert paths["/finance/currencies"]["get"]["operationId"] == "listFinanceCurrencies"
+    assert paths["/finance/ledgers"]["get"]["operationId"] == "listFinanceLedgers"
+    assert paths["/finance/ledgers"]["post"]["operationId"] == "createFinanceLedger"
+    assert paths["/finance/ledgers/{ledgerId}"]["patch"]["operationId"] == "updateFinanceLedger"
+    assert set(paths["/finance/currencies"]) == {"get"}
+    assert set(paths["/finance/ledgers"]) == {"get", "post"}
+    assert set(paths["/finance/ledgers/{ledgerId}"]) == {"patch"}
+
+    currency_schema = schema["components"]["schemas"]["CurrencyResponse"]
+    assert currency_schema["additionalProperties"] is False
+    assert set(currency_schema["required"]) == {"code", "minorUnit"}
+    assert set(currency_schema["properties"]) == {"code", "minorUnit"}
+
+    ledger_schema = schema["components"]["schemas"]["LedgerResponse"]
+    assert ledger_schema["additionalProperties"] is False
+    assert set(ledger_schema["required"]) == {"id", "name"}
+    assert set(ledger_schema["properties"]) == {"id", "name"}
+
+    create_schema = schema["components"]["schemas"]["CreateLedgerRequest"]
+    update_schema = schema["components"]["schemas"]["UpdateLedgerRequest"]
+    assert create_schema["additionalProperties"] is False
+    assert update_schema["additionalProperties"] is False
+    assert set(create_schema["properties"]) == {"name"}
+    assert create_schema["required"] == ["name"]
+    assert set(update_schema["properties"]) == {"name"}
+    assert "required" not in update_schema
+
+    for operation in operations:
+        assert operation["security"] == []
+        for status, response in operation["responses"].items():
+            if status.startswith("2"):
+                continue
+            assert set(response["content"]) == {"application/problem+json"}
+            assert (
+                response["content"]["application/problem+json"]["schema"]["$ref"]
+                == "#/components/schemas/ProblemDetails"
+            )
+
+
 def test_openapi_converts_problem_details_for_any_operation(app: FastAPI) -> None:
     @app.get(
         "/api/__test_problem",

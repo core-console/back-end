@@ -1,6 +1,22 @@
 {
   "components": {
     "schemas": {
+      "CreateLedgerRequest": {
+        "additionalProperties": false,
+        "description": "Explicit first or additional Ledger creation.",
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateLedgerRequest",
+        "type": "object"
+      },
       "CreateUserRequest": {
         "additionalProperties": false,
         "description": "Administrator-supplied profile and immutable external identity.",
@@ -57,6 +73,32 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CurrencyResponse": {
+        "additionalProperties": false,
+        "description": "One backend-supported currency and its decimal scale.",
+        "properties": {
+          "code": {
+            "enum": [
+              "CNY",
+              "JPY",
+              "USD"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "minorUnit": {
+            "minimum": 0.0,
+            "title": "Minorunit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "minorUnit"
+        ],
+        "title": "CurrencyResponse",
+        "type": "object"
+      },
       "HelloWorldResponse": {
         "additionalProperties": false,
         "description": "Frontend-compatible hello world response.",
@@ -74,6 +116,27 @@
           "message"
         ],
         "title": "HelloWorldResponse",
+        "type": "object"
+      },
+      "LedgerResponse": {
+        "additionalProperties": false,
+        "description": "Closed public projection of one Finance Ledger.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "LedgerResponse",
         "type": "object"
       },
       "MeResponse": {
@@ -190,6 +253,19 @@
           "status"
         ],
         "title": "ProblemDetails",
+        "type": "object"
+      },
+      "UpdateLedgerRequest": {
+        "additionalProperties": false,
+        "description": "Name-only partial Ledger update.",
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "title": "UpdateLedgerRequest",
         "type": "object"
       },
       "UpdateUserRequest": {
@@ -314,6 +390,306 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "openapi": "3.1.1",
   "paths": {
+    "/finance/currencies": {
+      "get": {
+        "description": "Returns the deterministic backend-owned Finance currency catalog.",
+        "operationId": "listFinanceCurrencies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CurrencyResponse"
+                  },
+                  "title": "Response Listfinancecurrencies",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected server error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable or not configured."
+          }
+        },
+        "security": [],
+        "summary": "List supported Finance currencies",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers": {
+      "get": {
+        "description": "Returns the Current User's Finance Ledgers in deterministic name order.",
+        "operationId": "listFinanceLedgers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerResponse"
+                  },
+                  "title": "Response Listfinanceledgers",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "List Finance Ledgers",
+        "tags": [
+          "Finance"
+        ]
+      },
+      "post": {
+        "description": "Explicitly creates one personally owned Finance Ledger.",
+        "operationId": "createFinanceLedger",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLedgerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Ledger name conflicts."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Create a Finance Ledger",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}": {
+      "patch": {
+        "description": "Updates only the name of one personally owned Finance Ledger.",
+        "operationId": "updateFinanceLedger",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLedgerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Ledger does not exist."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Ledger name conflicts."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Rename a Finance Ledger",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/helloWorld": {
       "get": {
         "description": "Returns a minimal response used to verify API connectivity.",
@@ -838,6 +1214,10 @@
     {
       "description": "Current-user endpoints",
       "name": "Users"
+    },
+    {
+      "description": "Personal Finance endpoints",
+      "name": "Finance"
     }
   ]
 }

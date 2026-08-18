@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from core_console.config import AuthMode, Environment, Settings
+from core_console.modules.finance.models import FinanceLedger
 from core_console.modules.users.models import User
 
 
@@ -197,5 +198,6 @@ async def postgres_session(
             yield session
         finally:
             await session.rollback()
+            await session.execute(delete(FinanceLedger))
             await session.execute(delete(User))
             await session.commit()

@@ -21,6 +21,10 @@ OPENAPI_TAGS = [
         "name": "Users",
         "description": "Current-user endpoints",
     },
+    {
+        "name": "Finance",
+        "description": "Personal Finance endpoints",
+    },
 ]
 
 

@@ -10,6 +10,7 @@ from core_console.database.resources import DatabaseResources
 from core_console.health.api import router as health_router
 from core_console.http_logging import HttpRequestLoggingMiddleware
 from core_console.logging_config import configure_logging
+from core_console.modules.finance.api import router as finance_router
 from core_console.modules.hello.api import router as hello_router
 from core_console.modules.users.api import router as users_router
 from core_console.openapi import CoreConsoleApp
@@ -50,5 +51,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(HttpRequestLoggingMiddleware)
     app.include_router(hello_router)
     app.include_router(users_router)
+    app.include_router(finance_router)
     app.include_router(health_router)
     return app
