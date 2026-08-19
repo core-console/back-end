@@ -193,6 +193,177 @@ async def test_malformed_ledger_id_uses_validation_problem(
     assert response.json()["code"] == "validation_error"
 
 
+async def test_user_can_manage_account_lifecycle_with_account_relative_balances(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("account-lifecycle")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger_id = ledger.json()["id"]
+        liability = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "  Credit Card  ",
+                "nature": "liability",
+                "currency": "CNY",
+                "openingBalance": {"amount": "250", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        asset = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "JPY",
+                "openingBalance": {"amount": "100", "currency": "JPY"},
+                "trackingStartDate": "2026-08-02",
+            },
+        )
+        unchanged = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}",
+            json={},
+        )
+        wrong_currency = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}",
+            json={"openingBalance": {"amount": "250.00", "currency": "USD"}},
+        )
+        archived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}/archive"
+        )
+        archived_again = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}/archive"
+        )
+        listed = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+        updated = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}",
+            json={
+                "name": "Card",
+                "openingBalance": {"amount": "275.5", "currency": "CNY"},
+                "trackingStartDate": "2026-07-31",
+            },
+        )
+        unarchived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}/unarchive"
+        )
+        unarchived_again = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}/unarchive"
+        )
+
+    assert liability.status_code == HTTPStatus.CREATED
+    assert liability.json() == {
+        "id": liability.json()["id"],
+        "name": "Credit Card",
+        "nature": "liability",
+        "currency": "CNY",
+        "openingBalance": {"amount": "250.00", "currency": "CNY"},
+        "trackingStartDate": "2026-08-01",
+        "currentBalance": {"amount": "250.00", "currency": "CNY"},
+        "status": "active",
+    }
+    assert asset.status_code == HTTPStatus.CREATED
+    assert unchanged.json() == liability.json()
+    assert wrong_currency.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert wrong_currency.json()["code"] == "validation_error"
+    assert archived.json()["status"] == "archived"
+    assert archived_again.json() == archived.json()
+    assert listed.json() == [asset.json(), archived.json()]
+    assert updated.json() == {
+        **liability.json(),
+        "name": "Card",
+        "openingBalance": {"amount": "275.50", "currency": "CNY"},
+        "trackingStartDate": "2026-07-31",
+        "currentBalance": {"amount": "275.50", "currency": "CNY"},
+        "status": "archived",
+    }
+    assert unarchived.json()["status"] == "active"
+    assert unarchived_again.json() == unarchived.json()
+
+
+async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("account-scope-actor")
+    other_user = _user("account-scope-other")
+    postgres_session.add_all([actor, other_user])
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        first_ledger = await client.post("/api/finance/ledgers", json={"name": "First"})
+        second_ledger = await client.post("/api/finance/ledgers", json={"name": "Second"})
+        account = await client.post(
+            f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts",
+            json={
+                "name": "Private",
+                "nature": "asset",
+                "currency": "USD",
+                "openingBalance": {"amount": "1.00", "currency": "USD"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
+        non_owned_ledger = await client.get(
+            f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts"
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        wrong_ledger = await client.patch(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{account.json()['id']}",
+            json={"name": "Leaked"},
+        )
+        missing_account = await client.patch(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{uuid4()}",
+            json={"name": "Missing"},
+        )
+
+    assert non_owned_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert non_owned_ledger.json()["code"] == "finance_ledger_not_found"
+    assert wrong_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert missing_account.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_ledger.json()["code"] == "finance_account_not_found"
+    assert missing_account.json()["code"] == "finance_account_not_found"
+    assert wrong_ledger.json()["detail"] == missing_account.json()["detail"]
+
+
+async def test_account_list_order_uses_status_case_folded_name_and_identifier(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("account-order")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Order"})
+        ledger_id = ledger.json()["id"]
+        created = []
+        for name in ("beta", "Alpha", "alpha"):
+            response = await client.post(
+                f"/api/finance/ledgers/{ledger_id}/accounts",
+                json={
+                    "name": name,
+                    "nature": "asset",
+                    "currency": "CNY",
+                    "openingBalance": {"amount": "0", "currency": "CNY"},
+                    "trackingStartDate": "2026-08-01",
+                },
+            )
+            created.append(response.json())
+        archived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{created[0]['id']}/archive"
+        )
+        listed = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    active = sorted(created[1:], key=lambda account: account["id"])
+    assert listed.json() == [*active, archived.json()]
+
+
 def _user(subject: str) -> User:
     return User(
         identity_issuer="https://identity.example.test/finance-api",

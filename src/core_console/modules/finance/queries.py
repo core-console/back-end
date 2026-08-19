@@ -1,12 +1,22 @@
 """Dedicated queries for persisted Finance Ledgers."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core_console.modules.finance.models import FinanceLedger
+from core_console.modules.finance.models import FinanceAccount, FinanceLedger
+
+
+@dataclass(frozen=True, slots=True)
+class FinanceAccountBalance:
+    """One Account plus its derived Current Balance read projection."""
+
+    account: FinanceAccount
+    current_balance: Decimal
 
 
 async def list_finance_ledgers(
@@ -39,3 +49,52 @@ async def get_finance_ledger(
     )
     result = await session.execute(statement)
     return result.scalar_one_or_none()
+
+
+async def list_finance_account_balances(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+) -> Sequence[FinanceAccountBalance]:
+    """Return Account balance projections in deterministic lifecycle/name order."""
+
+    statement = (
+        select(
+            FinanceAccount,
+            FinanceAccount.opening_balance.label("current_balance"),
+        )
+        .where(FinanceAccount.ledger_id == ledger_id)
+        .order_by(
+            case((FinanceAccount.status == "active", 0), else_=1),
+            FinanceAccount.name_key,
+            FinanceAccount.id,
+        )
+    )
+    result = await session.execute(statement)
+    return [
+        FinanceAccountBalance(account=account, current_balance=current_balance)
+        for account, current_balance in result.all()
+    ]
+
+
+async def get_finance_account_balance(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    account_id: UUID,
+) -> FinanceAccountBalance | None:
+    """Return one Account balance only within its addressed Ledger."""
+
+    statement = select(
+        FinanceAccount,
+        FinanceAccount.opening_balance.label("current_balance"),
+    ).where(
+        FinanceAccount.id == account_id,
+        FinanceAccount.ledger_id == ledger_id,
+    )
+    result = await session.execute(statement)
+    row = result.one_or_none()
+    if row is None:
+        return None
+    account, current_balance = row
+    return FinanceAccountBalance(account=account, current_balance=current_balance)

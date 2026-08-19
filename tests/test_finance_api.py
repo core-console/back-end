@@ -89,6 +89,127 @@ async def test_create_ledger_rejects_invalid_public_requests_without_database_wo
 
 
 @pytest.mark.parametrize(
+    "opening_balance",
+    (
+        {"amount": 10, "currency": "CNY"},
+        {"amount": "1e2", "currency": "CNY"},
+        {"amount": "1.001", "currency": "CNY"},
+        {"amount": "10.00", "currency": "EUR"},
+        {"amount": "10.00", "currency": "USD"},
+    ),
+)
+async def test_create_account_rejects_invalid_money_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    opening_balance: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.post(
+        f"/api/finance/ledgers/{uuid4()}/accounts",
+        json={
+            "name": "Cash",
+            "nature": "asset",
+            "currency": "CNY",
+            "openingBalance": opening_balance,
+            "trackingStartDate": "2026-08-01",
+        },
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.commit).assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"nature": "liability"},
+        {"currency": "USD"},
+        {"status": "archived"},
+        {"currentBalance": {"amount": "0.00", "currency": "CNY"}},
+    ),
+)
+async def test_account_patch_rejects_semantics_and_managed_fields_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    body: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.patch(
+        f"/api/finance/ledgers/{uuid4()}/accounts/{uuid4()}",
+        json=body,
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.commit).assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "path_suffix", "body"),
+    (
+        (
+            "POST",
+            "",
+            {
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01T00:00:00",
+            },
+        ),
+        (
+            "PATCH",
+            f"/{uuid4()}",
+            {"trackingStartDate": "2026-08-01T00:00:00"},
+        ),
+    ),
+)
+async def test_account_requests_require_exact_calendar_tracking_start_dates(
+    app: FastAPI,
+    client: AsyncClient,
+    method: str,
+    path_suffix: str,
+    body: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.request(
+        method,
+        f"/api/finance/ledgers/{uuid4()}/accounts{path_suffix}",
+        json=body,
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.commit).assert_not_awaited()
+
+
+@pytest.mark.parametrize(
     ("failure", "expected_status", "expected_code"),
     (
         (

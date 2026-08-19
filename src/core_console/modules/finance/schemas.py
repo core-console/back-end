@@ -1,9 +1,30 @@
 """Public HTTP schemas for the Finance module."""
 
-from typing import Literal
+from datetime import date
+from re import fullmatch
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
+
+from core_console.modules.finance.money import CurrencyCode, InvalidMoneyError, Money
+
+
+def _validate_exact_calendar_date(value: object) -> object:
+    """Reject datetime coercion and require the public ISO calendar-date shape."""
+
+    if type(value) is date or (
+        isinstance(value, str) and fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)
+    ):
+        return value
+    raise PydanticCustomError(
+        "date_format",
+        "Date must use exact ISO YYYY-MM-DD format.",
+    )
+
+
+type FinanceRequestDate = Annotated[date, BeforeValidator(_validate_exact_calendar_date)]
 
 
 class CurrencyResponse(BaseModel):
@@ -11,7 +32,7 @@ class CurrencyResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    code: Literal["CNY", "JPY", "USD"]
+    code: CurrencyCode
     minor_unit: int = Field(alias="minorUnit", ge=0)
 
 
@@ -22,6 +43,30 @@ class LedgerResponse(BaseModel):
 
     id: UUID
     name: str
+
+
+class MoneyResponse(BaseModel):
+    """Closed public projection of exact Finance Money."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    amount: str
+    currency: CurrencyCode
+
+
+class AccountResponse(BaseModel):
+    """Closed public projection of one Finance Account."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    id: UUID
+    name: str
+    nature: Literal["asset", "liability"]
+    currency: CurrencyCode
+    opening_balance: MoneyResponse = Field(alias="openingBalance")
+    tracking_start_date: date = Field(alias="trackingStartDate")
+    current_balance: MoneyResponse = Field(alias="currentBalance")
+    status: Literal["active", "archived"]
 
 
 class _RequestModel(BaseModel):
@@ -44,3 +89,62 @@ class UpdateLedgerRequest(_RequestModel):
     """Name-only partial Ledger update."""
 
     name: str = Field(default_factory=str, max_length=100)
+
+
+class MoneyRequest(_RequestModel):
+    """Exact decimal-string Money supplied by a Finance caller."""
+
+    amount: str = Field(strict=True)
+    currency: CurrencyCode
+
+    @model_validator(mode="after")
+    def validate_exact_amount(self) -> Self:
+        try:
+            Money.parse(amount=self.amount, currency=self.currency)
+        except InvalidMoneyError as exc:
+            raise PydanticCustomError("value_error", str(exc)) from None
+        return self
+
+    def to_money(self) -> Money:
+        """Return the validated exact application value."""
+
+        return Money.parse(amount=self.amount, currency=self.currency)
+
+
+class CreateAccountRequest(_RequestModel):
+    """Explicit creation state for one Finance Account."""
+
+    name: str = Field(max_length=100)
+    nature: Literal["asset", "liability"]
+    currency: CurrencyCode
+    opening_balance: MoneyRequest = Field(alias="openingBalance")
+    tracking_start_date: FinanceRequestDate = Field(alias="trackingStartDate")
+
+    @model_validator(mode="after")
+    def validate_opening_balance_currency(self) -> Self:
+        if self.opening_balance.currency != self.currency:
+            raise PydanticCustomError(
+                "value_error",
+                "Opening Balance currency must match the Account currency.",
+            )
+        return self
+
+
+def _default_money_request() -> MoneyRequest:
+    """Supply an ignored valid value for an omitted PATCH field."""
+
+    return MoneyRequest(amount="0", currency="CNY")
+
+
+class UpdateAccountRequest(_RequestModel):
+    """Ordinary mutable Account fields using omitted-field semantics."""
+
+    name: str = Field(default_factory=str, max_length=100)
+    opening_balance: MoneyRequest = Field(
+        default_factory=_default_money_request,
+        alias="openingBalance",
+    )
+    tracking_start_date: FinanceRequestDate = Field(
+        default_factory=lambda: date.min,
+        alias="trackingStartDate",
+    )

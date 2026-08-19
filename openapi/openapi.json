@@ -1,6 +1,100 @@
 {
   "components": {
     "schemas": {
+      "AccountResponse": {
+        "additionalProperties": false,
+        "description": "Closed public projection of one Finance Account.",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          },
+          "currentBalance": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nature": {
+            "enum": [
+              "asset",
+              "liability"
+            ],
+            "title": "Nature",
+            "type": "string"
+          },
+          "openingBalance": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trackingStartDate": {
+            "format": "date",
+            "title": "Trackingstartdate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "nature",
+          "currency",
+          "openingBalance",
+          "trackingStartDate",
+          "currentBalance",
+          "status"
+        ],
+        "title": "AccountResponse",
+        "type": "object"
+      },
+      "CreateAccountRequest": {
+        "additionalProperties": false,
+        "description": "Explicit creation state for one Finance Account.",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          },
+          "name": {
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          },
+          "nature": {
+            "enum": [
+              "asset",
+              "liability"
+            ],
+            "title": "Nature",
+            "type": "string"
+          },
+          "openingBalance": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "trackingStartDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "name",
+          "nature",
+          "currency",
+          "openingBalance",
+          "trackingStartDate"
+        ],
+        "title": "CreateAccountRequest",
+        "type": "object"
+      },
       "CreateLedgerRequest": {
         "additionalProperties": false,
         "description": "Explicit first or additional Ledger creation.",
@@ -73,18 +167,20 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CurrencyCode": {
+        "enum": [
+          "CNY",
+          "JPY",
+          "USD"
+        ],
+        "type": "string"
+      },
       "CurrencyResponse": {
         "additionalProperties": false,
         "description": "One backend-supported currency and its decimal scale.",
         "properties": {
           "code": {
-            "enum": [
-              "CNY",
-              "JPY",
-              "USD"
-            ],
-            "title": "Code",
-            "type": "string"
+            "$ref": "#/components/schemas/CurrencyCode"
           },
           "minorUnit": {
             "minimum": 0.0,
@@ -98,6 +194,10 @@
         ],
         "title": "CurrencyResponse",
         "type": "object"
+      },
+      "FinanceRequestDate": {
+        "format": "date",
+        "type": "string"
       },
       "HelloWorldResponse": {
         "additionalProperties": false,
@@ -191,6 +291,44 @@
         "title": "MeResponse",
         "type": "object"
       },
+      "MoneyRequest": {
+        "additionalProperties": false,
+        "description": "Exact decimal-string Money supplied by a Finance caller.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "MoneyRequest",
+        "type": "object"
+      },
+      "MoneyResponse": {
+        "additionalProperties": false,
+        "description": "Closed public projection of exact Finance Money.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "MoneyResponse",
+        "type": "object"
+      },
       "ProblemDetails": {
         "additionalProperties": true,
         "description": "Machine-readable API error response.",
@@ -253,6 +391,25 @@
           "status"
         ],
         "title": "ProblemDetails",
+        "type": "object"
+      },
+      "UpdateAccountRequest": {
+        "additionalProperties": false,
+        "description": "Ordinary mutable Account fields using omitted-field semantics.",
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          },
+          "openingBalance": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "trackingStartDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "title": "UpdateAccountRequest",
         "type": "object"
       },
       "UpdateLedgerRequest": {
@@ -685,6 +842,483 @@
         },
         "security": [],
         "summary": "Rename a Finance Ledger",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/accounts": {
+      "get": {
+        "description": "Returns active and archived Accounts with derived Current Balances.",
+        "operationId": "listFinanceAccounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccountResponse"
+                  },
+                  "title": "Response Listfinanceaccounts",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Ledger does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The path is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "List Finance Accounts",
+        "tags": [
+          "Finance"
+        ]
+      },
+      "post": {
+        "description": "Creates one account-relative position inside an owned Finance Ledger.",
+        "operationId": "createFinanceAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Ledger does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Create a Finance Account",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/accounts/{accountId}": {
+      "patch": {
+        "description": "Updates only ordinary mutable properties of one owned Account.",
+        "operationId": "updateFinanceAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Accountid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Update a Finance Account",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/accounts/{accountId}/archive": {
+      "post": {
+        "description": "Idempotently archives one owned Account without erasing its balance.",
+        "operationId": "archiveFinanceAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Accountid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The path is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Archive a Finance Account",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/accounts/{accountId}/unarchive": {
+      "post": {
+        "description": "Idempotently restores one owned Account to active status.",
+        "operationId": "unarchiveFinanceAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Accountid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The path is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Unarchive a Finance Account",
         "tags": [
           "Finance"
         ]
