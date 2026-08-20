@@ -5,8 +5,10 @@ import pytest
 from core_console.modules.finance.money import InvalidMoneyError, Money
 from core_console.modules.finance.service import (
     InvalidFinanceAccountNameError,
+    InvalidFinanceCategoryNameError,
     InvalidFinanceLedgerNameError,
     normalize_account_name,
+    normalize_category_name,
     normalize_ledger_name,
 )
 
@@ -51,3 +53,13 @@ def test_account_name_normalization_trims_and_uses_unicode_case_folding() -> Non
 def test_account_name_normalization_rejects_invalid_names(name: str) -> None:
     with pytest.raises(InvalidFinanceAccountNameError):
         normalize_account_name(name)
+
+
+def test_category_name_normalization_trims_and_uses_unicode_case_folding() -> None:
+    assert normalize_category_name("\u2003Straße\u2003") == ("Straße", "strasse")
+
+
+@pytest.mark.parametrize("name", (" \t\n ", "界" * 101))
+def test_category_name_normalization_rejects_invalid_names(name: str) -> None:
+    with pytest.raises(InvalidFinanceCategoryNameError):
+        normalize_category_name(name)

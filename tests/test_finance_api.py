@@ -210,6 +210,42 @@ async def test_account_requests_require_exact_calendar_tracking_start_dates(
 
 
 @pytest.mark.parametrize(
+    ("method", "path_suffix", "body"),
+    (
+        ("POST", "", {"name": None}),
+        ("POST", "", {"name": "Food", "kind": "expense"}),
+        ("PATCH", f"/{uuid4()}", {"status": "archived"}),
+        ("PATCH", f"/{uuid4()}", {"name": "界" * 101}),
+    ),
+)
+async def test_category_requests_reject_undeclared_or_invalid_fields_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    method: str,
+    path_suffix: str,
+    body: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.request(
+        method,
+        f"/api/finance/ledgers/{uuid4()}/categories{path_suffix}",
+        json=body,
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.commit).assert_not_awaited()
+
+
+@pytest.mark.parametrize(
     ("failure", "expected_status", "expected_code"),
     (
         (

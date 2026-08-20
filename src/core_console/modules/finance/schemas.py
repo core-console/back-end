@@ -69,6 +69,16 @@ class AccountResponse(BaseModel):
     status: Literal["active", "archived"]
 
 
+class CategoryResponse(BaseModel):
+    """Closed public projection of one neutral Finance Category."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    name: str
+    status: Literal["active", "archived"]
+
+
 class _RequestModel(BaseModel):
     """Accept only declared public Finance JSON fields."""
 
@@ -87,6 +97,18 @@ class CreateLedgerRequest(_RequestModel):
 
 class UpdateLedgerRequest(_RequestModel):
     """Name-only partial Ledger update."""
+
+    name: str = Field(default_factory=str, max_length=100)
+
+
+class CreateCategoryRequest(_RequestModel):
+    """Explicit creation state for one Finance Category."""
+
+    name: str = Field(max_length=100)
+
+
+class UpdateCategoryRequest(_RequestModel):
+    """Name-only partial Category update."""
 
     name: str = Field(default_factory=str, max_length=100)
 

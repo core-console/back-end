@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core_console.modules.finance.models import FinanceAccount, FinanceLedger
+from core_console.modules.finance.models import FinanceAccount, FinanceCategory, FinanceLedger
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,3 +98,39 @@ async def get_finance_account_balance(
         return None
     account, current_balance = row
     return FinanceAccountBalance(account=account, current_balance=current_balance)
+
+
+async def list_finance_categories(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+) -> Sequence[FinanceCategory]:
+    """Return Categories in deterministic lifecycle/name order."""
+
+    statement = (
+        select(FinanceCategory)
+        .where(FinanceCategory.ledger_id == ledger_id)
+        .order_by(
+            case((FinanceCategory.status == "active", 0), else_=1),
+            FinanceCategory.name_key,
+            FinanceCategory.id,
+        )
+    )
+    result = await session.scalars(statement)
+    return result.all()
+
+
+async def get_finance_category(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    category_id: UUID,
+) -> FinanceCategory | None:
+    """Find one Category only within its addressed Ledger."""
+
+    statement = select(FinanceCategory).where(
+        FinanceCategory.id == category_id,
+        FinanceCategory.ledger_id == ledger_id,
+    )
+    result = await session.execute(statement)
+    return result.scalar_one_or_none()

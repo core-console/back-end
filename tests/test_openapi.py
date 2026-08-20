@@ -273,6 +273,62 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
             )
 
 
+def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    collection_path = paths["/finance/ledgers/{ledgerId}/categories"]
+    category_path = paths["/finance/ledgers/{ledgerId}/categories/{categoryId}"]
+    archive_path = paths["/finance/ledgers/{ledgerId}/categories/{categoryId}/archive"]
+    unarchive_path = paths["/finance/ledgers/{ledgerId}/categories/{categoryId}/unarchive"]
+    operations = (
+        collection_path["get"],
+        collection_path["post"],
+        category_path["patch"],
+        archive_path["post"],
+        unarchive_path["post"],
+    )
+
+    assert collection_path["get"]["operationId"] == "listFinanceCategories"
+    assert collection_path["post"]["operationId"] == "createFinanceCategory"
+    assert category_path["patch"]["operationId"] == "updateFinanceCategory"
+    assert archive_path["post"]["operationId"] == "archiveFinanceCategory"
+    assert unarchive_path["post"]["operationId"] == "unarchiveFinanceCategory"
+    assert set(collection_path) == {"get", "post"}
+    assert set(category_path) == {"patch"}
+    assert set(archive_path) == {"post"}
+    assert set(unarchive_path) == {"post"}
+
+    category_schema = schema["components"]["schemas"]["CategoryResponse"]
+    assert category_schema["additionalProperties"] is False
+    assert set(category_schema["properties"]) == {"id", "name", "status"}
+    assert set(category_schema["required"]) == set(category_schema["properties"])
+    assert category_schema["properties"]["status"]["enum"] == ["active", "archived"]
+
+    create_schema = schema["components"]["schemas"]["CreateCategoryRequest"]
+    update_schema = schema["components"]["schemas"]["UpdateCategoryRequest"]
+    assert create_schema["additionalProperties"] is False
+    assert update_schema["additionalProperties"] is False
+    assert set(create_schema["properties"]) == {"name"}
+    assert create_schema["required"] == ["name"]
+    assert set(update_schema["properties"]) == {"name"}
+    assert "required" not in update_schema
+
+    for operation in operations:
+        assert operation["security"] == []
+        assert {parameter["name"] for parameter in operation["parameters"]} <= {
+            "ledgerId",
+            "categoryId",
+        }
+        for status, response in operation["responses"].items():
+            if status.startswith("2"):
+                continue
+            assert set(response["content"]) == {"application/problem+json"}
+            assert (
+                response["content"]["application/problem+json"]["schema"]["$ref"]
+                == "#/components/schemas/ProblemDetails"
+            )
+
+
 def test_openapi_converts_problem_details_for_any_operation(app: FastAPI) -> None:
     @app.get(
         "/api/__test_problem",

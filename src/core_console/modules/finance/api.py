@@ -12,32 +12,43 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.currencies import SUPPORTED_CURRENCIES
-from core_console.modules.finance.models import FinanceLedger
+from core_console.modules.finance.models import FinanceCategory, FinanceLedger
 from core_console.modules.finance.money import CurrencyCode, Money
 from core_console.modules.finance.queries import FinanceAccountBalance, list_finance_ledgers
 from core_console.modules.finance.schemas import (
     AccountResponse,
+    CategoryResponse,
     CreateAccountRequest,
+    CreateCategoryRequest,
     CreateLedgerRequest,
     CurrencyResponse,
     LedgerResponse,
     MoneyResponse,
     UpdateAccountRequest,
+    UpdateCategoryRequest,
     UpdateLedgerRequest,
 )
 from core_console.modules.finance.service import (
     FinanceAccountNotFoundError,
+    FinanceCategoryNameConflictError,
+    FinanceCategoryNotFoundError,
     FinanceLedgerNameConflictError,
     FinanceLedgerNotFoundError,
     InvalidFinanceAccountMoneyError,
     InvalidFinanceAccountNameError,
+    InvalidFinanceCategoryNameError,
     InvalidFinanceLedgerNameError,
     archive_finance_account,
+    archive_finance_category,
     create_finance_account,
+    create_finance_category,
     create_finance_ledger,
     list_finance_accounts,
+    list_finance_categories_for_ledger,
     unarchive_finance_account,
+    unarchive_finance_category,
     update_finance_account,
+    update_finance_category,
     update_finance_ledger,
 )
 from core_console.modules.users.dependencies import is_database_unavailable, require_active_user
@@ -73,6 +84,16 @@ def _to_account_response(balance: FinanceAccountBalance) -> AccountResponse:
         trackingStartDate=account.tracking_start_date,
         currentBalance=_to_money_response(balance.current_balance, account.currency),
         status=cast(Literal["active", "archived"], account.status),
+    )
+
+
+def _to_category_response(category: FinanceCategory) -> CategoryResponse:
+    """Map persistence state to the closed neutral Category projection."""
+
+    return CategoryResponse(
+        id=category.id,
+        name=category.name,
+        status=cast(Literal["active", "archived"], category.status),
     )
 
 
@@ -144,6 +165,39 @@ def _raise_account_not_found() -> Never:
         title="Not Found",
         detail="The requested Finance Account does not exist.",
         code="finance_account_not_found",
+    ) from None
+
+
+def _raise_invalid_category(error: InvalidFinanceCategoryNameError) -> Never:
+    """Raise the shared validation problem for a Category name rule."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        title="Unprocessable Entity",
+        detail=str(error),
+        code="validation_error",
+    ) from None
+
+
+def _raise_category_name_conflict() -> Never:
+    """Raise the stable all-status per-Ledger Category name conflict."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.CONFLICT,
+        title="Conflict",
+        detail="A Finance Category with this name already exists.",
+        code="finance_category_name_conflict",
+    ) from None
+
+
+def _raise_category_not_found() -> Never:
+    """Raise the non-leaking nested Category lookup result."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.NOT_FOUND,
+        title="Not Found",
+        detail="The requested Finance Category does not exist.",
+        code="finance_category_not_found",
     ) from None
 
 
@@ -444,6 +498,225 @@ async def post_account_unarchive(
     return await _change_account_status(
         ledger_id=ledger_id,
         account_id=account_id,
+        actor=actor,
+        session=session,
+        status="active",
+    )
+
+
+@router.get(
+    "/ledgers/{ledgerId}/categories",
+    operation_id="listFinanceCategories",
+    summary="List Finance Categories",
+    description="Returns active and archived neutral Categories in deterministic order.",
+    response_model=list[CategoryResponse],
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The Ledger does not exist."},
+        422: {"model": ProblemDetails, "description": "The path is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def get_categories(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[CategoryResponse]:
+    """List every Category in one owned Ledger."""
+
+    try:
+        categories = await _run_finance_workflow(
+            list_finance_categories_for_ledger(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+            )
+        )
+    except FinanceLedgerNotFoundError:
+        _raise_ledger_not_found()
+    return [_to_category_response(category) for category in categories]
+
+
+@router.post(
+    "/ledgers/{ledgerId}/categories",
+    operation_id="createFinanceCategory",
+    summary="Create a Finance Category",
+    description="Creates one neutral Category inside an owned Finance Ledger.",
+    status_code=HTTPStatus.CREATED,
+    response_model=CategoryResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The Ledger does not exist."},
+        409: {"model": ProblemDetails, "description": "The Category name conflicts."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_category(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    request: CreateCategoryRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CategoryResponse:
+    """Create one neutral Category in an owned Ledger."""
+
+    try:
+        category = await _run_finance_workflow(
+            create_finance_category(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                name=request.name,
+            )
+        )
+    except FinanceLedgerNotFoundError:
+        _raise_ledger_not_found()
+    except InvalidFinanceCategoryNameError as exc:
+        _raise_invalid_category(exc)
+    except FinanceCategoryNameConflictError:
+        _raise_category_name_conflict()
+    return _to_category_response(category)
+
+
+@router.patch(
+    "/ledgers/{ledgerId}/categories/{categoryId}",
+    operation_id="updateFinanceCategory",
+    summary="Update a Finance Category",
+    description="Renames one neutral Category without changing its status.",
+    response_model=CategoryResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The Category name conflicts."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def patch_category(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    category_id: Annotated[UUID, Path(alias="categoryId")],
+    request: UpdateCategoryRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CategoryResponse:
+    """Apply an optional name update to one owned Category."""
+
+    name = request.name if "name" in request.model_fields_set else None
+    try:
+        category = await _run_finance_workflow(
+            update_finance_category(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                category_id=category_id,
+                name=name,
+            )
+        )
+    except FinanceLedgerNotFoundError:
+        _raise_ledger_not_found()
+    except FinanceCategoryNotFoundError:
+        _raise_category_not_found()
+    except InvalidFinanceCategoryNameError as exc:
+        _raise_invalid_category(exc)
+    except FinanceCategoryNameConflictError:
+        _raise_category_name_conflict()
+    return _to_category_response(category)
+
+
+async def _change_category_status(
+    *,
+    ledger_id: UUID,
+    category_id: UUID,
+    actor: CurrentUser,
+    session: AsyncSession,
+    status: Literal["active", "archived"],
+) -> CategoryResponse:
+    """Run one Category lifecycle command with shared error translation."""
+
+    workflow = archive_finance_category if status == "archived" else unarchive_finance_category
+    try:
+        category = await _run_finance_workflow(
+            workflow(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                category_id=category_id,
+            )
+        )
+    except FinanceLedgerNotFoundError:
+        _raise_ledger_not_found()
+    except FinanceCategoryNotFoundError:
+        _raise_category_not_found()
+    except FinanceCategoryNameConflictError:
+        _raise_category_name_conflict()
+    return _to_category_response(category)
+
+
+@router.post(
+    "/ledgers/{ledgerId}/categories/{categoryId}/archive",
+    operation_id="archiveFinanceCategory",
+    summary="Archive a Finance Category",
+    description="Idempotently archives one neutral Category without deleting it.",
+    response_model=CategoryResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The path is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_category_archive(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    category_id: Annotated[UUID, Path(alias="categoryId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CategoryResponse:
+    """Archive one Category idempotently."""
+
+    return await _change_category_status(
+        ledger_id=ledger_id,
+        category_id=category_id,
+        actor=actor,
+        session=session,
+        status="archived",
+    )
+
+
+@router.post(
+    "/ledgers/{ledgerId}/categories/{categoryId}/unarchive",
+    operation_id="unarchiveFinanceCategory",
+    summary="Unarchive a Finance Category",
+    description="Idempotently restores one Category after rechecking name uniqueness.",
+    response_model=CategoryResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The Category name conflicts."},
+        422: {"model": ProblemDetails, "description": "The path is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_category_unarchive(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    category_id: Annotated[UUID, Path(alias="categoryId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CategoryResponse:
+    """Unarchive one Category idempotently."""
+
+    return await _change_category_status(
+        ledger_id=ledger_id,
+        category_id=category_id,
         actor=actor,
         session=session,
         status="active",

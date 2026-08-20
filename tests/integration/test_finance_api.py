@@ -364,6 +364,174 @@ async def test_account_list_order_uses_status_case_folded_name_and_identifier(
     assert listed.json() == [*active, archived.json()]
 
 
+async def test_user_can_manage_the_complete_category_lifecycle(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("category-lifecycle")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger_id = ledger.json()["id"]
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "  Food  "},
+        )
+        unchanged = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}",
+            json={},
+        )
+        renamed = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}",
+            json={"name": "  Groceries  "},
+        )
+        archived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}/archive"
+        )
+        archived_again = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}/archive"
+        )
+        listed = await client.get(f"/api/finance/ledgers/{ledger_id}/categories")
+        unarchived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}/unarchive"
+        )
+        unarchived_again = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}/unarchive"
+        )
+
+    assert created.status_code == HTTPStatus.CREATED
+    assert created.json() == {
+        "id": created.json()["id"],
+        "name": "Food",
+        "status": "active",
+    }
+    assert unchanged.json() == created.json()
+    assert renamed.json() == {**created.json(), "name": "Groceries"}
+    assert archived.json() == {**renamed.json(), "status": "archived"}
+    assert archived_again.json() == archived.json()
+    assert listed.json() == [archived.json()]
+    assert unarchived.json() == {**renamed.json(), "status": "active"}
+    assert unarchived_again.json() == unarchived.json()
+
+
+async def test_category_names_remain_unique_while_archived_within_one_ledger(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("category-uniqueness")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        first_ledger = await client.post("/api/finance/ledgers", json={"name": "First"})
+        second_ledger = await client.post("/api/finance/ledgers", json={"name": "Second"})
+        first_ledger_id = first_ledger.json()["id"]
+        category = await client.post(
+            f"/api/finance/ledgers/{first_ledger_id}/categories",
+            json={"name": "Straße"},
+        )
+        archived = await client.post(
+            f"/api/finance/ledgers/{first_ledger_id}/categories/{category.json()['id']}/archive"
+        )
+        duplicate = await client.post(
+            f"/api/finance/ledgers/{first_ledger_id}/categories",
+            json={"name": "STRASSE"},
+        )
+        other = await client.post(
+            f"/api/finance/ledgers/{first_ledger_id}/categories",
+            json={"name": "Other"},
+        )
+        rename_conflict = await client.patch(
+            f"/api/finance/ledgers/{first_ledger_id}/categories/{other.json()['id']}",
+            json={"name": "strasse"},
+        )
+        unarchived = await client.post(
+            f"/api/finance/ledgers/{first_ledger_id}/categories/{category.json()['id']}/unarchive"
+        )
+        same_name_other_ledger = await client.post(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/categories",
+            json={"name": "STRASSE"},
+        )
+
+    assert archived.json()["status"] == "archived"
+    for response in (duplicate, rename_conflict):
+        assert response.status_code == HTTPStatus.CONFLICT
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert response.json()["code"] == "finance_category_name_conflict"
+    assert unarchived.status_code == HTTPStatus.OK
+    assert unarchived.json()["status"] == "active"
+    assert same_name_other_ledger.status_code == HTTPStatus.CREATED
+
+
+async def test_category_lookups_do_not_leak_across_ledger_or_owner_scope(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("category-scope-actor")
+    other_user = _user("category-scope-other")
+    postgres_session.add_all([actor, other_user])
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        first_ledger = await client.post("/api/finance/ledgers", json={"name": "First"})
+        second_ledger = await client.post("/api/finance/ledgers", json={"name": "Second"})
+        category = await client.post(
+            f"/api/finance/ledgers/{first_ledger.json()['id']}/categories",
+            json={"name": "Private"},
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
+        non_owned_ledger = await client.get(
+            f"/api/finance/ledgers/{first_ledger.json()['id']}/categories"
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        wrong_ledger = await client.patch(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/categories/{category.json()['id']}",
+            json={"name": "Leaked"},
+        )
+        missing_category = await client.patch(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/categories/{uuid4()}",
+            json={"name": "Missing"},
+        )
+
+    assert non_owned_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert non_owned_ledger.json()["code"] == "finance_ledger_not_found"
+    assert wrong_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert missing_category.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_ledger.json()["code"] == "finance_category_not_found"
+    assert missing_category.json()["code"] == "finance_category_not_found"
+    assert wrong_ledger.json()["detail"] == missing_category.json()["detail"]
+
+
+async def test_category_list_order_uses_status_case_folded_name_and_identifier(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("category-order")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Order"})
+        ledger_id = ledger.json()["id"]
+        created = []
+        for name in ("beta", "Alpha", "zebra", "Äpfel"):
+            response = await client.post(
+                f"/api/finance/ledgers/{ledger_id}/categories",
+                json={"name": name},
+            )
+            created.append(response.json())
+        archived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories/{created[0]['id']}/archive"
+        )
+        listed = await client.get(f"/api/finance/ledgers/{ledger_id}/categories")
+
+    assert listed.json() == [created[1], created[2], created[3], archived.json()]
+
+
 def _user(subject: str) -> User:
     return User(
         identity_issuer="https://identity.example.test/finance-api",

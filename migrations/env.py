@@ -10,7 +10,7 @@ from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from core_console.config import load_settings
-from core_console.modules.finance.models import FinanceAccount, FinanceLedger
+from core_console.modules.finance.models import FinanceAccount, FinanceCategory, FinanceLedger
 from core_console.modules.users.models import User
 
 config = context.config
@@ -19,6 +19,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = FinanceAccount.metadata
+assert target_metadata is FinanceCategory.metadata
 assert target_metadata is FinanceLedger.metadata
 assert target_metadata is User.metadata
 

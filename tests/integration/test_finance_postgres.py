@@ -14,13 +14,14 @@ from sqlalchemy.engine.interfaces import (
     ReflectedCheckConstraint,
     ReflectedColumn,
     ReflectedForeignKeyConstraint,
+    ReflectedIndex,
     ReflectedPrimaryKeyConstraint,
     ReflectedUniqueConstraint,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from core_console.modules.finance.models import FinanceAccount, FinanceLedger
+from core_console.modules.finance.models import FinanceAccount, FinanceCategory, FinanceLedger
 from core_console.modules.users.models import User
 
 pytestmark = pytest.mark.anyio
@@ -48,6 +49,17 @@ class FinanceAccountSchemaInspection(TypedDict):
     check_constraints: list[ReflectedCheckConstraint]
 
 
+class FinanceCategorySchemaInspection(TypedDict):
+    """Typed subset of the reflected Finance Category schema."""
+
+    columns: list[ReflectedColumn]
+    primary_key: ReflectedPrimaryKeyConstraint
+    foreign_keys: list[ReflectedForeignKeyConstraint]
+    unique_constraints: list[ReflectedUniqueConstraint]
+    check_constraints: list[ReflectedCheckConstraint]
+    indexes: list[ReflectedIndex]
+
+
 def inspect_finance_ledgers(sync_connection: Connection) -> FinanceLedgerSchemaInspection:
     """Return the reflected schema needed by the migration contract test."""
 
@@ -71,6 +83,20 @@ def inspect_finance_accounts(sync_connection: Connection) -> FinanceAccountSchem
         "primary_key": schema_inspector.get_pk_constraint("finance_accounts"),
         "foreign_keys": schema_inspector.get_foreign_keys("finance_accounts"),
         "check_constraints": schema_inspector.get_check_constraints("finance_accounts"),
+    }
+
+
+def inspect_finance_categories(sync_connection: Connection) -> FinanceCategorySchemaInspection:
+    """Return the reflected schema needed by the Category migration test."""
+
+    schema_inspector = inspect(sync_connection)
+    return {
+        "columns": schema_inspector.get_columns("finance_categories"),
+        "primary_key": schema_inspector.get_pk_constraint("finance_categories"),
+        "foreign_keys": schema_inspector.get_foreign_keys("finance_categories"),
+        "unique_constraints": schema_inspector.get_unique_constraints("finance_categories"),
+        "check_constraints": schema_inspector.get_check_constraints("finance_categories"),
+        "indexes": schema_inspector.get_indexes("finance_categories"),
     }
 
 
@@ -143,6 +169,47 @@ async def test_migrations_add_account_state_without_a_stored_current_balance(
         "ck_finance_accounts_opening_balance_finite",
         "ck_finance_accounts_opening_balance_scale",
         "ck_finance_accounts_status",
+    }
+
+
+async def test_migrations_add_only_durable_ledger_owned_category_state(
+    postgres_engine: AsyncEngine,
+) -> None:
+    async with postgres_engine.connect() as connection:
+        schema = await connection.run_sync(inspect_finance_categories)
+
+    columns = {column["name"]: column for column in schema["columns"]}
+    assert set(columns) == {
+        "id",
+        "ledger_id",
+        "name",
+        "name_key",
+        "status",
+        "created_at",
+        "updated_at",
+    }
+    assert all(column["nullable"] is False for column in columns.values())
+    assert getattr(columns["name_key"]["type"], "collation", None) == "C"
+    assert schema["primary_key"]["constrained_columns"] == ["id"]
+    assert {
+        (tuple(key["constrained_columns"]), key["referred_table"], tuple(key["referred_columns"]))
+        for key in schema["foreign_keys"]
+    } == {(("ledger_id",), "finance_ledgers", ("id",))}
+    assert {tuple(constraint["column_names"]) for constraint in schema["unique_constraints"]} == {
+        ("ledger_id", "name_key")
+    }
+    assert {constraint["name"] for constraint in schema["check_constraints"]} == {
+        "ck_finance_categories_name_not_blank",
+        "ck_finance_categories_name_trimmed",
+        "ck_finance_categories_name_length",
+        "ck_finance_categories_name_key_not_blank",
+        "ck_finance_categories_status",
+    }
+    assert {(index["name"], tuple(index["column_names"])) for index in schema["indexes"]} >= {
+        (
+            "ix_finance_categories_ledger_status_name_key_id",
+            ("ledger_id", "status", "name_key", "id"),
+        )
     }
 
 
@@ -316,6 +383,74 @@ async def test_finance_account_rejects_invalid_persisted_names(
         await postgres_session.commit()
 
 
+async def test_finance_category_name_key_is_unique_per_ledger_including_archived(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("category-unique-owner")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    first_ledger = _ledger(owner.id, name="First", name_key="first")
+    second_ledger = _ledger(owner.id, name="Second", name_key="second")
+    postgres_session.add_all([first_ledger, second_ledger])
+    await postgres_session.flush()
+    postgres_session.add_all(
+        [
+            _category(
+                first_ledger.id,
+                name="Straße",
+                name_key="strasse",
+                status="archived",
+            ),
+            _category(
+                second_ledger.id,
+                name="STRASSE",
+                name_key="strasse",
+                status="active",
+            ),
+        ]
+    )
+    await postgres_session.commit()
+
+    postgres_session.add(
+        _category(
+            first_ledger.id,
+            name="STRASSE",
+            name_key="strasse",
+            status="active",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+@pytest.mark.parametrize(
+    ("name", "name_key", "status"),
+    (
+        ("", "empty", "active"),
+        (" Category ", "category", "active"),
+        ("x" * 101, "long", "active"),
+        ("Valid", "", "active"),
+        ("Valid", "valid", "deleted"),
+    ),
+)
+async def test_finance_category_rejects_invalid_persisted_state(
+    postgres_session: AsyncSession,
+    name: str,
+    name_key: str,
+    status: str,
+) -> None:
+    owner = _user(uuid4().hex)
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    postgres_session.add(_category(ledger.id, name=name, name_key=name_key, status=status))
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
 def _user(subject: str) -> User:
     return User(
         identity_issuer="https://identity.example.test/finance",
@@ -346,5 +481,20 @@ def _account(
         currency=currency,
         opening_balance=opening_balance,
         tracking_start_date=date(2026, 8, 1),
+        status=status,
+    )
+
+
+def _category(
+    ledger_id: UUID,
+    *,
+    name: str,
+    name_key: str,
+    status: str,
+) -> FinanceCategory:
+    return FinanceCategory(
+        ledger_id=ledger_id,
+        name=name,
+        name_key=name_key,
         status=status,
     )
