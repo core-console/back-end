@@ -3,7 +3,7 @@
 from collections.abc import Awaitable
 from decimal import Decimal
 from http import HTTPStatus
-from typing import Annotated, Literal, Never, cast
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path
@@ -74,6 +74,23 @@ from core_console.modules.users.identity import CurrentUser
 from core_console.problems import ApplicationProblem, ProblemDetails
 
 router = APIRouter(prefix="/api/finance", tags=["Finance"])
+
+type _FinanceApplicationError = (
+    FinanceAccountArchivedError
+    | FinanceAccountNotFoundError
+    | FinanceCategoryArchivedError
+    | FinanceCategoryNameConflictError
+    | FinanceCategoryNotFoundError
+    | FinanceLedgerNameConflictError
+    | FinanceLedgerNotFoundError
+    | FinanceTransactionNotFoundError
+    | InvalidFinanceAccountMoneyError
+    | InvalidFinanceAccountNameError
+    | InvalidFinanceAccountTrackingStartDateError
+    | InvalidFinanceCategoryNameError
+    | InvalidFinanceLedgerNameError
+    | InvalidFinanceTransactionError
+)
 
 
 def _to_ledger_response(ledger: FinanceLedger) -> LedgerResponse:
@@ -168,7 +185,7 @@ def _to_transaction_response(
 
 
 async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
-    """Translate database availability failures at the Finance HTTP boundary."""
+    """Translate known Finance failures at the Finance HTTP boundary."""
 
     try:
         return await workflow
@@ -181,138 +198,102 @@ async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
             detail="PostgreSQL is not available.",
             code="database_unavailable",
         ) from None
+    except (
+        FinanceAccountArchivedError,
+        FinanceAccountNotFoundError,
+        FinanceCategoryArchivedError,
+        FinanceCategoryNameConflictError,
+        FinanceCategoryNotFoundError,
+        FinanceLedgerNameConflictError,
+        FinanceLedgerNotFoundError,
+        FinanceTransactionNotFoundError,
+        InvalidFinanceAccountMoneyError,
+        InvalidFinanceAccountNameError,
+        InvalidFinanceAccountTrackingStartDateError,
+        InvalidFinanceCategoryNameError,
+        InvalidFinanceLedgerNameError,
+        InvalidFinanceTransactionError,
+    ) as exc:
+        raise _finance_problem_for(exc) from None
 
 
-def _raise_invalid_ledger_name(error: InvalidFinanceLedgerNameError) -> Never:
-    """Raise the shared validation problem for a Ledger name rule."""
+def _finance_problem_for(error: _FinanceApplicationError) -> ApplicationProblem:
+    """Build the stable Problem Details result for one known Finance failure."""
 
-    raise ApplicationProblem(
-        status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        title="Unprocessable Entity",
-        detail=str(error),
-        code="validation_error",
-    ) from None
-
-
-def _raise_ledger_name_conflict() -> Never:
-    """Raise the stable per-owner Ledger name conflict."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.CONFLICT,
-        title="Conflict",
-        detail="A Finance Ledger with this name already exists.",
-        code="finance_ledger_name_conflict",
-    ) from None
-
-
-def _raise_ledger_not_found() -> Never:
-    """Raise the ownership-safe Ledger lookup result."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.NOT_FOUND,
-        title="Not Found",
-        detail="The requested Finance Ledger does not exist.",
-        code="finance_ledger_not_found",
-    ) from None
-
-
-def _raise_invalid_account(error: ValueError) -> Never:
-    """Raise the shared validation problem for an Account rule."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        title="Unprocessable Entity",
-        detail=str(error),
-        code="validation_error",
-    ) from None
-
-
-def _raise_account_not_found() -> Never:
-    """Raise the non-leaking nested Account lookup result."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.NOT_FOUND,
-        title="Not Found",
-        detail="The requested Finance Account does not exist.",
-        code="finance_account_not_found",
-    ) from None
-
-
-def _raise_invalid_category(error: InvalidFinanceCategoryNameError) -> Never:
-    """Raise the shared validation problem for a Category name rule."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        title="Unprocessable Entity",
-        detail=str(error),
-        code="validation_error",
-    ) from None
-
-
-def _raise_category_name_conflict() -> Never:
-    """Raise the stable all-status per-Ledger Category name conflict."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.CONFLICT,
-        title="Conflict",
-        detail="A Finance Category with this name already exists.",
-        code="finance_category_name_conflict",
-    ) from None
-
-
-def _raise_category_not_found() -> Never:
-    """Raise the non-leaking nested Category lookup result."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.NOT_FOUND,
-        title="Not Found",
-        detail="The requested Finance Category does not exist.",
-        code="finance_category_not_found",
-    ) from None
-
-
-def _raise_transaction_not_found() -> Never:
-    """Raise the non-leaking nested Transaction lookup result."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.NOT_FOUND,
-        title="Not Found",
-        detail="The requested Finance Transaction does not exist.",
-        code="finance_transaction_not_found",
-    ) from None
-
-
-def _raise_transaction_invalid(error: ValueError) -> Never:
-    """Raise the shared validation result for an ordinary Transaction."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        title="Unprocessable Entity",
-        detail=str(error),
-        code="validation_error",
-    ) from None
-
-
-def _raise_account_archived() -> Never:
-    """Raise the stable conflict for an inactive creation Account."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.CONFLICT,
-        title="Conflict",
-        detail="An archived Finance Account cannot receive a new Transaction.",
-        code="finance_account_archived",
-    ) from None
-
-
-def _raise_category_archived() -> Never:
-    """Raise the stable conflict for an inactive creation Category."""
-
-    raise ApplicationProblem(
-        status=HTTPStatus.CONFLICT,
-        title="Conflict",
-        detail="An archived Finance Category cannot classify a new Transaction.",
-        code="finance_category_archived",
-    ) from None
+    if isinstance(
+        error,
+        (
+            InvalidFinanceAccountMoneyError,
+            InvalidFinanceAccountNameError,
+            InvalidFinanceAccountTrackingStartDateError,
+            InvalidFinanceCategoryNameError,
+            InvalidFinanceLedgerNameError,
+            InvalidFinanceTransactionError,
+        ),
+    ):
+        return ApplicationProblem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            title="Unprocessable Entity",
+            detail=str(error),
+            code="validation_error",
+        )
+    if isinstance(error, FinanceLedgerNotFoundError):
+        return ApplicationProblem(
+            status=HTTPStatus.NOT_FOUND,
+            title="Not Found",
+            detail="The requested Finance Ledger does not exist.",
+            code="finance_ledger_not_found",
+        )
+    if isinstance(error, FinanceAccountNotFoundError):
+        return ApplicationProblem(
+            status=HTTPStatus.NOT_FOUND,
+            title="Not Found",
+            detail="The requested Finance Account does not exist.",
+            code="finance_account_not_found",
+        )
+    if isinstance(error, FinanceCategoryNotFoundError):
+        return ApplicationProblem(
+            status=HTTPStatus.NOT_FOUND,
+            title="Not Found",
+            detail="The requested Finance Category does not exist.",
+            code="finance_category_not_found",
+        )
+    if isinstance(error, FinanceTransactionNotFoundError):
+        return ApplicationProblem(
+            status=HTTPStatus.NOT_FOUND,
+            title="Not Found",
+            detail="The requested Finance Transaction does not exist.",
+            code="finance_transaction_not_found",
+        )
+    if isinstance(error, FinanceLedgerNameConflictError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="A Finance Ledger with this name already exists.",
+            code="finance_ledger_name_conflict",
+        )
+    if isinstance(error, FinanceCategoryNameConflictError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="A Finance Category with this name already exists.",
+            code="finance_category_name_conflict",
+        )
+    if isinstance(error, FinanceAccountArchivedError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="An archived Finance Account cannot receive a new Transaction.",
+            code="finance_account_archived",
+        )
+    if isinstance(error, FinanceCategoryArchivedError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="An archived Finance Category cannot classify a new Transaction.",
+            code="finance_category_archived",
+        )
+    raise AssertionError(f"Unhandled Finance application error: {type(error).__name__}")
 
 
 @router.get(
@@ -387,16 +368,13 @@ async def get_accounts(
 ) -> list[AccountResponse]:
     """List every Account in one owned Ledger."""
 
-    try:
-        balances = await _run_finance_workflow(
-            list_finance_accounts(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-            )
+    balances = await _run_finance_workflow(
+        list_finance_accounts(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
+    )
     return [_to_account_response(balance) for balance in balances]
 
 
@@ -423,14 +401,9 @@ async def post_ledger(
 ) -> LedgerResponse:
     """Create one named Ledger for the Current User."""
 
-    try:
-        ledger = await _run_finance_workflow(
-            create_finance_ledger(session, owner_id=actor.id, name=request.name)
-        )
-    except InvalidFinanceLedgerNameError as exc:
-        _raise_invalid_ledger_name(exc)
-    except FinanceLedgerNameConflictError:
-        _raise_ledger_name_conflict()
+    ledger = await _run_finance_workflow(
+        create_finance_ledger(session, owner_id=actor.id, name=request.name)
+    )
     return _to_ledger_response(ledger)
 
 
@@ -458,23 +431,18 @@ async def post_account(
 ) -> AccountResponse:
     """Create one Account in an owned Ledger."""
 
-    try:
-        balance = await _run_finance_workflow(
-            create_finance_account(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                name=request.name,
-                nature=request.nature,
-                currency=request.currency,
-                opening_balance=request.opening_balance.to_money(),
-                tracking_start_date=request.tracking_start_date,
-            )
+    balance = await _run_finance_workflow(
+        create_finance_account(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            name=request.name,
+            nature=request.nature,
+            currency=request.currency,
+            opening_balance=request.opening_balance.to_money(),
+            tracking_start_date=request.tracking_start_date,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except (InvalidFinanceAccountNameError, InvalidFinanceAccountMoneyError) as exc:
-        _raise_invalid_account(exc)
+    )
     return _to_account_response(balance)
 
 
@@ -504,30 +472,19 @@ async def patch_account(
 
     fields = request.model_fields_set
     opening_balance = request.opening_balance.to_money() if "opening_balance" in fields else None
-    try:
-        balance = await _run_finance_workflow(
-            update_finance_account(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                account_id=account_id,
-                name=request.name if "name" in fields else None,
-                opening_balance=opening_balance,
-                tracking_start_date=(
-                    request.tracking_start_date if "tracking_start_date" in fields else None
-                ),
-            )
+    balance = await _run_finance_workflow(
+        update_finance_account(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            account_id=account_id,
+            name=request.name if "name" in fields else None,
+            opening_balance=opening_balance,
+            tracking_start_date=(
+                request.tracking_start_date if "tracking_start_date" in fields else None
+            ),
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except FinanceAccountNotFoundError:
-        _raise_account_not_found()
-    except (
-        InvalidFinanceAccountNameError,
-        InvalidFinanceAccountMoneyError,
-        InvalidFinanceAccountTrackingStartDateError,
-    ) as exc:
-        _raise_invalid_account(exc)
+    )
     return _to_account_response(balance)
 
 
@@ -542,19 +499,14 @@ async def _change_account_status(
     """Run one Account lifecycle command with shared error translation."""
 
     workflow = archive_finance_account if status == "archived" else unarchive_finance_account
-    try:
-        balance = await _run_finance_workflow(
-            workflow(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                account_id=account_id,
-            )
+    balance = await _run_finance_workflow(
+        workflow(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            account_id=account_id,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except FinanceAccountNotFoundError:
-        _raise_account_not_found()
+    )
     return _to_account_response(balance)
 
 
@@ -644,16 +596,13 @@ async def get_categories(
 ) -> list[CategoryResponse]:
     """List every Category in one owned Ledger."""
 
-    try:
-        categories = await _run_finance_workflow(
-            list_finance_categories_for_ledger(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-            )
+    categories = await _run_finance_workflow(
+        list_finance_categories_for_ledger(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
+    )
     return [_to_category_response(category) for category in categories]
 
 
@@ -682,21 +631,14 @@ async def post_category(
 ) -> CategoryResponse:
     """Create one neutral Category in an owned Ledger."""
 
-    try:
-        category = await _run_finance_workflow(
-            create_finance_category(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                name=request.name,
-            )
+    category = await _run_finance_workflow(
+        create_finance_category(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            name=request.name,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except InvalidFinanceCategoryNameError as exc:
-        _raise_invalid_category(exc)
-    except FinanceCategoryNameConflictError:
-        _raise_category_name_conflict()
+    )
     return _to_category_response(category)
 
 
@@ -726,24 +668,15 @@ async def patch_category(
     """Apply an optional name update to one owned Category."""
 
     name = request.name if "name" in request.model_fields_set else None
-    try:
-        category = await _run_finance_workflow(
-            update_finance_category(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                category_id=category_id,
-                name=name,
-            )
+    category = await _run_finance_workflow(
+        update_finance_category(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            category_id=category_id,
+            name=name,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except FinanceCategoryNotFoundError:
-        _raise_category_not_found()
-    except InvalidFinanceCategoryNameError as exc:
-        _raise_invalid_category(exc)
-    except FinanceCategoryNameConflictError:
-        _raise_category_name_conflict()
+    )
     return _to_category_response(category)
 
 
@@ -758,21 +691,14 @@ async def _change_category_status(
     """Run one Category lifecycle command with shared error translation."""
 
     workflow = archive_finance_category if status == "archived" else unarchive_finance_category
-    try:
-        category = await _run_finance_workflow(
-            workflow(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                category_id=category_id,
-            )
+    category = await _run_finance_workflow(
+        workflow(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            category_id=category_id,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except FinanceCategoryNotFoundError:
-        _raise_category_not_found()
-    except FinanceCategoryNameConflictError:
-        _raise_category_name_conflict()
+    )
     return _to_category_response(category)
 
 
@@ -866,21 +792,14 @@ async def patch_ledger(
     """Apply an optional name update to one owned Ledger."""
 
     name = request.name if "name" in request.model_fields_set else None
-    try:
-        ledger = await _run_finance_workflow(
-            update_finance_ledger(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                name=name,
-            )
+    ledger = await _run_finance_workflow(
+        update_finance_ledger(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            name=name,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except InvalidFinanceLedgerNameError as exc:
-        _raise_invalid_ledger_name(exc)
-    except FinanceLedgerNameConflictError:
-        _raise_ledger_name_conflict()
+    )
     return _to_ledger_response(ledger)
 
 
@@ -909,34 +828,21 @@ async def post_transaction(
     """Create one Income or Expense transaction."""
 
     allocation = request.category_allocations[0]
-    try:
-        return await _run_finance_workflow(
-            create_finance_transaction(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                kind=request.kind,
-                account_id=request.account_id,
-                transaction_date=request.transaction_date,
-                economic_amount=request.economic_amount.to_money(),
-                allocation_amount=allocation.amount.to_money(),
-                category_id=allocation.category_id,
-                note=request.note,
-                project=_to_transaction_response,
-            )
+    return await _run_finance_workflow(
+        create_finance_transaction(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            kind=request.kind,
+            account_id=request.account_id,
+            transaction_date=request.transaction_date,
+            economic_amount=request.economic_amount.to_money(),
+            allocation_amount=allocation.amount.to_money(),
+            category_id=allocation.category_id,
+            note=request.note,
+            project=_to_transaction_response,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except FinanceAccountNotFoundError:
-        _raise_account_not_found()
-    except FinanceCategoryNotFoundError:
-        _raise_category_not_found()
-    except FinanceAccountArchivedError:
-        _raise_account_archived()
-    except FinanceCategoryArchivedError:
-        _raise_category_archived()
-    except InvalidFinanceTransactionError as exc:
-        _raise_transaction_invalid(exc)
+    )
 
 
 @router.get(
@@ -961,17 +867,12 @@ async def get_transaction(
 ) -> FinanceTransactionResponse:
     """Read one Income or Expense in an owned Ledger."""
 
-    try:
-        detail = await _run_finance_workflow(
-            get_finance_transaction(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                transaction_id=transaction_id,
-            )
+    detail = await _run_finance_workflow(
+        get_finance_transaction(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
         )
-    except FinanceLedgerNotFoundError:
-        _raise_ledger_not_found()
-    except FinanceTransactionNotFoundError:
-        _raise_transaction_not_found()
+    )
     return _to_transaction_response(detail)

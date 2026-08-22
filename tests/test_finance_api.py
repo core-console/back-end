@@ -14,6 +14,18 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
+from core_console.modules.finance import api as finance_api
+from core_console.modules.finance.service import (
+    FinanceAccountArchivedError,
+    FinanceAccountNotFoundError,
+    FinanceCategoryArchivedError,
+    FinanceCategoryNameConflictError,
+    FinanceCategoryNotFoundError,
+    FinanceLedgerNameConflictError,
+    FinanceLedgerNotFoundError,
+    FinanceTransactionNotFoundError,
+    InvalidFinanceLedgerNameError,
+)
 from core_console.modules.users.dependencies import get_current_user
 from core_console.modules.users.identity import CurrentUser
 
@@ -28,6 +40,181 @@ def _active_user() -> CurrentUser:
         email=None,
         status="active",
     )
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "workflow_name", "failure", "expected"),
+    (
+        (
+            "POST",
+            "/api/finance/ledgers",
+            {"name": "Personal"},
+            "create_finance_ledger",
+            InvalidFinanceLedgerNameError("Ledger name must not be blank."),
+            {
+                "status": HTTPStatus.UNPROCESSABLE_ENTITY,
+                "title": "Unprocessable Entity",
+                "detail": "Ledger name must not be blank.",
+                "code": "validation_error",
+            },
+        ),
+        (
+            "GET",
+            f"/api/finance/ledgers/{uuid4()}/accounts",
+            None,
+            "list_finance_accounts",
+            FinanceLedgerNotFoundError(),
+            {
+                "status": HTTPStatus.NOT_FOUND,
+                "title": "Not Found",
+                "detail": "The requested Finance Ledger does not exist.",
+                "code": "finance_ledger_not_found",
+            },
+        ),
+        (
+            "PATCH",
+            f"/api/finance/ledgers/{uuid4()}/accounts/{uuid4()}",
+            {"name": "Cash"},
+            "update_finance_account",
+            FinanceAccountNotFoundError(),
+            {
+                "status": HTTPStatus.NOT_FOUND,
+                "title": "Not Found",
+                "detail": "The requested Finance Account does not exist.",
+                "code": "finance_account_not_found",
+            },
+        ),
+        (
+            "PATCH",
+            f"/api/finance/ledgers/{uuid4()}/categories/{uuid4()}",
+            {"name": "Food"},
+            "update_finance_category",
+            FinanceCategoryNotFoundError(),
+            {
+                "status": HTTPStatus.NOT_FOUND,
+                "title": "Not Found",
+                "detail": "The requested Finance Category does not exist.",
+                "code": "finance_category_not_found",
+            },
+        ),
+        (
+            "POST",
+            "/api/finance/ledgers",
+            {"name": "Personal"},
+            "create_finance_ledger",
+            FinanceLedgerNameConflictError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": "A Finance Ledger with this name already exists.",
+                "code": "finance_ledger_name_conflict",
+            },
+        ),
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/categories",
+            {"name": "Food"},
+            "create_finance_category",
+            FinanceCategoryNameConflictError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": "A Finance Category with this name already exists.",
+                "code": "finance_category_name_conflict",
+            },
+        ),
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/transactions",
+            {
+                "kind": "income",
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "10.00", "currency": "CNY"},
+                "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+            },
+            "create_finance_transaction",
+            FinanceAccountArchivedError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": "An archived Finance Account cannot receive a new Transaction.",
+                "code": "finance_account_archived",
+            },
+        ),
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/transactions",
+            {
+                "kind": "income",
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "10.00", "currency": "CNY"},
+                "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+            },
+            "create_finance_transaction",
+            FinanceCategoryArchivedError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": "An archived Finance Category cannot classify a new Transaction.",
+                "code": "finance_category_archived",
+            },
+        ),
+        (
+            "GET",
+            f"/api/finance/ledgers/{uuid4()}/transactions/{uuid4()}",
+            None,
+            "get_finance_transaction",
+            FinanceTransactionNotFoundError(),
+            {
+                "status": HTTPStatus.NOT_FOUND,
+                "title": "Not Found",
+                "detail": "The requested Finance Transaction does not exist.",
+                "code": "finance_transaction_not_found",
+            },
+        ),
+    ),
+)
+async def test_known_finance_failures_keep_their_problem_details(
+    app: FastAPI,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    body: dict[str, object] | None,
+    workflow_name: str,
+    failure: Exception,
+    expected: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+    monkeypatch.setattr(
+        finance_api,
+        workflow_name,
+        AsyncMock(side_effect=failure),
+    )
+
+    if body is None:
+        response = await client.request(method, path)
+    else:
+        response = await client.request(method, path, json=body)
+
+    assert response.status_code == expected["status"]
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json() == {
+        "type": "about:blank",
+        "title": expected["title"],
+        "status": expected["status"],
+        "detail": expected["detail"],
+        "instance": path,
+        "code": expected["code"],
+    }
 
 
 async def test_active_user_can_list_the_deterministic_currency_catalog(
