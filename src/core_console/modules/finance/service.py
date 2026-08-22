@@ -1,21 +1,31 @@
 """Finance Ledger application workflows."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from psycopg.errors import UniqueViolation
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core_console.modules.finance.models import FinanceAccount, FinanceCategory, FinanceLedger
+from core_console.modules.finance.models import (
+    FinanceAccount,
+    FinanceAccountMovement,
+    FinanceCategory,
+    FinanceCategoryAllocation,
+    FinanceLedger,
+    FinanceTransaction,
+)
 from core_console.modules.finance.money import CurrencyCode, Money
 from core_console.modules.finance.queries import (
     FinanceAccountBalance,
+    FinanceTransactionDetail,
+    get_earliest_finance_account_transaction_date,
     get_finance_account_balance,
     get_finance_category,
     get_finance_ledger,
+    get_finance_transaction_detail,
     list_finance_account_balances,
     list_finance_categories,
 )
@@ -49,6 +59,14 @@ class FinanceAccountNotFoundError(Exception):
     """The addressed Account is missing from the owned addressed Ledger."""
 
 
+class FinanceAccountArchivedError(Exception):
+    """A new Transaction attempted to use an archived Account."""
+
+
+class InvalidFinanceAccountTrackingStartDateError(ValueError):
+    """An Account Tracking Start Date would exclude associated history."""
+
+
 class InvalidFinanceCategoryNameError(ValueError):
     """A Category name violates the public Finance contract."""
 
@@ -59,6 +77,18 @@ class FinanceCategoryNameConflictError(Exception):
 
 class FinanceCategoryNotFoundError(Exception):
     """The addressed Category is missing from the owned addressed Ledger."""
+
+
+class FinanceCategoryArchivedError(Exception):
+    """A new Allocation attempted to use an archived Category."""
+
+
+class FinanceTransactionNotFoundError(Exception):
+    """The addressed Transaction is missing from the owned addressed Ledger."""
+
+
+class InvalidFinanceTransactionError(ValueError):
+    """An Income or Expense violates the closed Finance contract."""
 
 
 def normalize_ledger_name(name: str) -> tuple[str, str]:
@@ -92,6 +122,37 @@ def normalize_category_name(name: str) -> tuple[str, str]:
     if len(normalized_name) > _FINANCE_NAME_MAX_LENGTH:
         raise InvalidFinanceCategoryNameError("Category name must not exceed 100 characters.")
     return normalized_name, normalized_name.casefold()
+
+
+def normalize_transaction_note(note: str | None) -> str | None:
+    """Trim optional plain text and preserve the closed null/length semantics."""
+
+    if note is None:
+        return None
+    normalized_note = note.strip()
+    if not normalized_note:
+        return None
+    if len(normalized_note) > 500:
+        raise InvalidFinanceTransactionError("Transaction note must not exceed 500 characters.")
+    return normalized_note
+
+
+def derive_account_movement_amount(
+    *,
+    kind: Literal["income", "expense"],
+    account_nature: Literal["asset", "liability"],
+    economic_amount: Money,
+) -> Money:
+    """Derive one account-relative movement from kind and Account Nature."""
+
+    if not economic_amount.amount.is_finite() or economic_amount.amount <= 0:
+        raise InvalidFinanceTransactionError("Economic Amount must be finite and positive.")
+    normalized_direction = 1 if kind == "income" else -1
+    account_direction = normalized_direction if account_nature == "asset" else -normalized_direction
+    return Money(
+        amount=economic_amount.amount * account_direction,
+        currency=economic_amount.currency,
+    )
 
 
 async def create_finance_ledger(
@@ -198,8 +259,21 @@ async def update_finance_account(
         session,
         ledger_id=ledger_id,
         account_id=account_id,
+        for_update=True,
     )
     account = balance.account
+    if tracking_start_date is not None:
+        earliest_transaction_date = await get_earliest_finance_account_transaction_date(
+            session,
+            account_id=account.id,
+        )
+        if (
+            earliest_transaction_date is not None
+            and tracking_start_date > earliest_transaction_date
+        ):
+            raise InvalidFinanceAccountTrackingStartDateError(
+                "Tracking Start Date cannot be later than associated Transaction history."
+            )
     if name is not None:
         account.name, account.name_key = normalize_account_name(name)
     if opening_balance is not None:
@@ -292,6 +366,126 @@ async def create_finance_category(
     return category
 
 
+async def create_finance_transaction[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    kind: Literal["income", "expense"],
+    account_id: UUID,
+    transaction_date: date,
+    economic_amount: Money,
+    allocation_amount: Money,
+    category_id: UUID | None,
+    note: str | None,
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Atomically persist and project one complete Income or Expense."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    account_balance = await _require_finance_account_balance(
+        session,
+        ledger_id=ledger_id,
+        account_id=account_id,
+        for_update=True,
+    )
+    account = account_balance.account
+    if account.status != "active":
+        raise FinanceAccountArchivedError
+    if transaction_date < account.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Account Tracking Start Date."
+        )
+    if economic_amount.currency != account.currency:
+        raise InvalidFinanceTransactionError(
+            "Economic Amount currency must match the Account currency."
+        )
+    if (
+        not allocation_amount.amount.is_finite()
+        or allocation_amount.amount <= 0
+        or allocation_amount != economic_amount
+    ):
+        raise InvalidFinanceTransactionError(
+            "The Category Allocation must equal the complete positive Economic Amount."
+        )
+
+    category = None
+    if category_id is not None:
+        category = await _require_finance_category(
+            session,
+            ledger_id=ledger_id,
+            category_id=category_id,
+            for_update=True,
+        )
+        if category.status != "active":
+            raise FinanceCategoryArchivedError
+
+    account_nature: Literal["asset", "liability"] = (
+        "asset" if account.nature == "asset" else "liability"
+    )
+    movement_amount = derive_account_movement_amount(
+        kind=kind,
+        account_nature=account_nature,
+        economic_amount=economic_amount,
+    )
+    transaction_id = uuid4()
+    transaction = FinanceTransaction(
+        id=transaction_id,
+        ledger_id=ledger_id,
+        kind=kind,
+        transaction_date=transaction_date,
+        note=normalize_transaction_note(note),
+    )
+    movement = FinanceAccountMovement(
+        transaction_id=transaction_id,
+        ledger_id=ledger_id,
+        account_id=account.id,
+        amount=movement_amount.amount,
+        currency=movement_amount.currency,
+    )
+    allocation = FinanceCategoryAllocation(
+        transaction_id=transaction_id,
+        ledger_id=ledger_id,
+        category_id=category.id if category is not None else None,
+        amount=allocation_amount.amount,
+        currency=allocation_amount.currency,
+    )
+    session.add(transaction)
+
+    try:
+        await session.flush()
+        session.add_all([movement, allocation])
+        await session.flush()
+        detail = await _require_finance_transaction_detail(
+            session,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
+        )
+        projected = project(detail)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return projected
+
+
+async def get_finance_transaction(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    transaction_id: UUID,
+) -> FinanceTransactionDetail:
+    """Read one complete Income or Expense through ownership-safe scope."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    return await _require_finance_transaction_detail(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+
+
 async def update_finance_category(
     session: AsyncSession,
     *,
@@ -307,6 +501,7 @@ async def update_finance_category(
         session,
         ledger_id=ledger_id,
         category_id=category_id,
+        for_update=True,
     )
     if name is None:
         return category
@@ -366,6 +561,7 @@ async def _set_finance_category_status(
         session,
         ledger_id=ledger_id,
         category_id=category_id,
+        for_update=True,
     )
     if category.status == status:
         return category
@@ -391,6 +587,7 @@ async def _set_finance_account_status(
         session,
         ledger_id=ledger_id,
         account_id=account_id,
+        for_update=True,
     )
     if balance.account.status == status:
         return balance
@@ -424,6 +621,7 @@ async def _require_finance_account_balance(
     *,
     ledger_id: UUID,
     account_id: UUID,
+    for_update: bool = False,
 ) -> FinanceAccountBalance:
     """Return one in-Ledger Account balance or the safe Account not-found result."""
 
@@ -431,6 +629,7 @@ async def _require_finance_account_balance(
         session,
         ledger_id=ledger_id,
         account_id=account_id,
+        for_update=for_update,
     )
     if balance is None:
         raise FinanceAccountNotFoundError
@@ -442,6 +641,7 @@ async def _require_finance_category(
     *,
     ledger_id: UUID,
     category_id: UUID,
+    for_update: bool = False,
 ) -> FinanceCategory:
     """Return one in-Ledger Category or the safe Category not-found result."""
 
@@ -449,10 +649,29 @@ async def _require_finance_category(
         session,
         ledger_id=ledger_id,
         category_id=category_id,
+        for_update=for_update,
     )
     if category is None:
         raise FinanceCategoryNotFoundError
     return category
+
+
+async def _require_finance_transaction_detail(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    transaction_id: UUID,
+) -> FinanceTransactionDetail:
+    """Return a complete in-Ledger Transaction or the safe not-found result."""
+
+    detail = await get_finance_transaction_detail(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    if detail is None:
+        raise FinanceTransactionNotFoundError
+    return detail
 
 
 async def _commit_ledger_change(session: AsyncSession) -> None:

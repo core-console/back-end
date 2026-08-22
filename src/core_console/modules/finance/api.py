@@ -14,14 +14,25 @@ from core_console.database.dependencies import get_session
 from core_console.modules.finance.currencies import SUPPORTED_CURRENCIES
 from core_console.modules.finance.models import FinanceCategory, FinanceLedger
 from core_console.modules.finance.money import CurrencyCode, Money
-from core_console.modules.finance.queries import FinanceAccountBalance, list_finance_ledgers
+from core_console.modules.finance.queries import (
+    FinanceAccountBalance,
+    FinanceTransactionDetail,
+    list_finance_ledgers,
+)
 from core_console.modules.finance.schemas import (
+    AccountReferenceResponse,
     AccountResponse,
+    CategoryAllocationResponse,
+    CategoryReferenceResponse,
     CategoryResponse,
     CreateAccountRequest,
     CreateCategoryRequest,
+    CreateFinanceTransactionRequest,
     CreateLedgerRequest,
     CurrencyResponse,
+    ExpenseTransactionResponse,
+    FinanceTransactionResponse,
+    IncomeTransactionResponse,
     LedgerResponse,
     MoneyResponse,
     UpdateAccountRequest,
@@ -29,20 +40,27 @@ from core_console.modules.finance.schemas import (
     UpdateLedgerRequest,
 )
 from core_console.modules.finance.service import (
+    FinanceAccountArchivedError,
     FinanceAccountNotFoundError,
+    FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
     FinanceCategoryNotFoundError,
     FinanceLedgerNameConflictError,
     FinanceLedgerNotFoundError,
+    FinanceTransactionNotFoundError,
     InvalidFinanceAccountMoneyError,
     InvalidFinanceAccountNameError,
+    InvalidFinanceAccountTrackingStartDateError,
     InvalidFinanceCategoryNameError,
     InvalidFinanceLedgerNameError,
+    InvalidFinanceTransactionError,
     archive_finance_account,
     archive_finance_category,
     create_finance_account,
     create_finance_category,
     create_finance_ledger,
+    create_finance_transaction,
+    get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
     unarchive_finance_account,
@@ -94,6 +112,58 @@ def _to_category_response(category: FinanceCategory) -> CategoryResponse:
         id=category.id,
         name=category.name,
         status=cast(Literal["active", "archived"], category.status),
+    )
+
+
+def _to_transaction_response(
+    detail: FinanceTransactionDetail,
+) -> FinanceTransactionResponse:
+    """Build the complete closed projection before a create commit."""
+
+    transaction = detail.transaction
+    account = detail.account
+    allocation = detail.allocation
+    account_reference = AccountReferenceResponse(
+        id=account.id,
+        name=account.name,
+        status=cast(Literal["active", "archived"], account.status),
+    )
+    category_reference = (
+        CategoryReferenceResponse(
+            id=detail.category.id,
+            name=detail.category.name,
+            status=cast(Literal["active", "archived"], detail.category.status),
+        )
+        if detail.category is not None
+        else None
+    )
+    economic_amount = _to_money_response(allocation.amount, allocation.currency)
+    category_allocations = [
+        CategoryAllocationResponse(
+            amount=economic_amount,
+            category=category_reference,
+        )
+    ]
+    if transaction.kind == "income":
+        return IncomeTransactionResponse(
+            id=transaction.id,
+            ledgerId=transaction.ledger_id,
+            kind="income",
+            transactionDate=transaction.transaction_date,
+            note=transaction.note,
+            account=account_reference,
+            economicAmount=economic_amount,
+            categoryAllocations=category_allocations,
+        )
+    return ExpenseTransactionResponse(
+        id=transaction.id,
+        ledgerId=transaction.ledger_id,
+        kind="expense",
+        transactionDate=transaction.transaction_date,
+        note=transaction.note,
+        account=account_reference,
+        economicAmount=economic_amount,
+        categoryAllocations=category_allocations,
     )
 
 
@@ -198,6 +268,50 @@ def _raise_category_not_found() -> Never:
         title="Not Found",
         detail="The requested Finance Category does not exist.",
         code="finance_category_not_found",
+    ) from None
+
+
+def _raise_transaction_not_found() -> Never:
+    """Raise the non-leaking nested Transaction lookup result."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.NOT_FOUND,
+        title="Not Found",
+        detail="The requested Finance Transaction does not exist.",
+        code="finance_transaction_not_found",
+    ) from None
+
+
+def _raise_transaction_invalid(error: ValueError) -> Never:
+    """Raise the shared validation result for an ordinary Transaction."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        title="Unprocessable Entity",
+        detail=str(error),
+        code="validation_error",
+    ) from None
+
+
+def _raise_account_archived() -> Never:
+    """Raise the stable conflict for an inactive creation Account."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.CONFLICT,
+        title="Conflict",
+        detail="An archived Finance Account cannot receive a new Transaction.",
+        code="finance_account_archived",
+    ) from None
+
+
+def _raise_category_archived() -> Never:
+    """Raise the stable conflict for an inactive creation Category."""
+
+    raise ApplicationProblem(
+        status=HTTPStatus.CONFLICT,
+        title="Conflict",
+        detail="An archived Finance Category cannot classify a new Transaction.",
+        code="finance_category_archived",
     ) from None
 
 
@@ -408,7 +522,11 @@ async def patch_account(
         _raise_ledger_not_found()
     except FinanceAccountNotFoundError:
         _raise_account_not_found()
-    except (InvalidFinanceAccountNameError, InvalidFinanceAccountMoneyError) as exc:
+    except (
+        InvalidFinanceAccountNameError,
+        InvalidFinanceAccountMoneyError,
+        InvalidFinanceAccountTrackingStartDateError,
+    ) as exc:
         _raise_invalid_account(exc)
     return _to_account_response(balance)
 
@@ -764,3 +882,96 @@ async def patch_ledger(
     except FinanceLedgerNameConflictError:
         _raise_ledger_name_conflict()
     return _to_ledger_response(ledger)
+
+
+@router.post(
+    "/ledgers/{ledgerId}/transactions",
+    operation_id="createFinanceTransaction",
+    summary="Create a Finance Transaction",
+    status_code=HTTPStatus.CREATED,
+    response_model=FinanceTransactionResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The resource is archived."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_transaction(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    request: CreateFinanceTransactionRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FinanceTransactionResponse:
+    """Create one Income or Expense transaction."""
+
+    allocation = request.category_allocations[0]
+    try:
+        return await _run_finance_workflow(
+            create_finance_transaction(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                kind=request.kind,
+                account_id=request.account_id,
+                transaction_date=request.transaction_date,
+                economic_amount=request.economic_amount.to_money(),
+                allocation_amount=allocation.amount.to_money(),
+                category_id=allocation.category_id,
+                note=request.note,
+                project=_to_transaction_response,
+            )
+        )
+    except FinanceLedgerNotFoundError:
+        _raise_ledger_not_found()
+    except FinanceAccountNotFoundError:
+        _raise_account_not_found()
+    except FinanceCategoryNotFoundError:
+        _raise_category_not_found()
+    except FinanceAccountArchivedError:
+        _raise_account_archived()
+    except FinanceCategoryArchivedError:
+        _raise_category_archived()
+    except InvalidFinanceTransactionError as exc:
+        _raise_transaction_invalid(exc)
+
+
+@router.get(
+    "/ledgers/{ledgerId}/transactions/{transactionId}",
+    operation_id="getFinanceTransaction",
+    summary="Get a Finance Transaction",
+    response_model=FinanceTransactionResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The path is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def get_transaction(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    transaction_id: Annotated[UUID, Path(alias="transactionId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FinanceTransactionResponse:
+    """Read one Income or Expense in an owned Ledger."""
+
+    try:
+        detail = await _run_finance_workflow(
+            get_finance_transaction(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                transaction_id=transaction_id,
+            )
+        )
+    except FinanceLedgerNotFoundError:
+        _raise_ledger_not_found()
+    except FinanceTransactionNotFoundError:
+        _raise_transaction_not_found()
+    return _to_transaction_response(detail)

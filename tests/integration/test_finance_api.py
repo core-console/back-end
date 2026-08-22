@@ -6,7 +6,7 @@ from http import HTTPStatus
 from uuid import uuid4
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -306,7 +306,6 @@ async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
                 "trackingStartDate": "2026-08-01",
             },
         )
-
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
         non_owned_ledger = await client.get(
             f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts"
@@ -362,6 +361,287 @@ async def test_account_list_order_uses_status_case_folded_name_and_identifier(
 
     active = sorted(created[1:], key=lambda account: account["id"])
     assert listed.json() == [*active, archived.json()]
+
+
+async def test_income_and_expense_are_readable_and_derive_account_relative_balances(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("ordinary-transactions")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger_id = ledger.json()["id"]
+        asset = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "100.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        liability = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Card",
+                "nature": "liability",
+                "currency": "CNY",
+                "openingBalance": {"amount": "200.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        category = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "Salary"},
+        )
+
+        commands = (
+            ("income", asset.json()["id"], "25.00", category.json()["id"], "  Pay  "),
+            ("expense", asset.json()["id"], "10.00", None, "  "),
+            ("income", liability.json()["id"], "30.00", None, None),
+            ("expense", liability.json()["id"], "5.00", None, None),
+        )
+        created = []
+        for kind, account_id, amount, category_id, note in commands:
+            response = await client.post(
+                f"/api/finance/ledgers/{ledger_id}/transactions",
+                json={
+                    "kind": kind,
+                    "accountId": account_id,
+                    "transactionDate": "2026-08-21",
+                    "economicAmount": {"amount": amount, "currency": "CNY"},
+                    "categoryAllocations": [
+                        {
+                            "amount": {"amount": amount, "currency": "CNY"},
+                            "categoryId": category_id,
+                        }
+                    ],
+                    "note": note,
+                },
+            )
+            created.append(response)
+
+        details = [
+            await client.get(
+                f"/api/finance/ledgers/{ledger_id}/transactions/{response.json()['id']}"
+            )
+            for response in created
+        ]
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    assert [response.status_code for response in created] == [HTTPStatus.CREATED] * 4
+    assert [response.json()["kind"] for response in created] == [
+        "income",
+        "expense",
+        "income",
+        "expense",
+    ]
+    assert (
+        details[0].json()
+        == created[0].json()
+        == {
+            "id": created[0].json()["id"],
+            "ledgerId": ledger_id,
+            "kind": "income",
+            "transactionDate": "2026-08-21",
+            "note": "Pay",
+            "account": {
+                "id": asset.json()["id"],
+                "name": "Cash",
+                "status": "active",
+            },
+            "economicAmount": {"amount": "25.00", "currency": "CNY"},
+            "categoryAllocations": [
+                {
+                    "amount": {"amount": "25.00", "currency": "CNY"},
+                    "category": {
+                        "id": category.json()["id"],
+                        "name": "Salary",
+                        "status": "active",
+                    },
+                }
+            ],
+        }
+    )
+    assert details[1].json() == created[1].json()
+    assert created[1].json()["note"] is None
+    assert created[1].json()["categoryAllocations"][0]["category"] is None
+    balances_by_id = {
+        account["id"]: account["currentBalance"]["amount"] for account in accounts.json()
+    }
+    assert balances_by_id == {
+        asset.json()["id"]: "115.00",
+        liability.json()["id"]: "175.00",
+    }
+
+
+async def test_transaction_creation_enforces_active_scoped_references(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("transaction-scope")
+    other_user = _user("transaction-scope-other")
+    postgres_session.add_all([actor, other_user])
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "USD",
+                "openingBalance": {"amount": "0", "currency": "USD"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        other_account = await client.post(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/accounts",
+            json={
+                "name": "Other Cash",
+                "nature": "asset",
+                "currency": "USD",
+                "openingBalance": {"amount": "0", "currency": "USD"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        category = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/categories",
+            json={"name": "Food"},
+        )
+        archived_account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}/archive"
+        )
+        archived_account_write = await _post_transaction(
+            client,
+            ledger_id=ledger.json()["id"],
+            account_id=archived_account.json()["id"],
+        )
+        await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}/unarchive"
+        )
+        categorized = await _post_transaction(
+            client,
+            ledger_id=ledger.json()["id"],
+            account_id=account.json()["id"],
+            category_id=category.json()["id"],
+        )
+        archived_category = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/categories/{category.json()['id']}/archive"
+        )
+        archived_history = await client.get(
+            f"/api/finance/ledgers/{ledger.json()['id']}/transactions/{categorized.json()['id']}"
+        )
+        wrong_transaction_scope = await client.get(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{categorized.json()['id']}"
+        )
+        missing_transaction = await client.get(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{uuid4()}"
+        )
+        archived_category_write = await _post_transaction(
+            client,
+            ledger_id=ledger.json()["id"],
+            account_id=account.json()["id"],
+            category_id=archived_category.json()["id"],
+        )
+        wrong_account_scope = await _post_transaction(
+            client,
+            ledger_id=other_ledger.json()["id"],
+            account_id=account.json()["id"],
+        )
+        wrong_category_scope = await _post_transaction(
+            client,
+            ledger_id=other_ledger.json()["id"],
+            account_id=other_account.json()["id"],
+            category_id=category.json()["id"],
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
+        non_owned_ledger = await _post_transaction(
+            client,
+            ledger_id=ledger.json()["id"],
+            account_id=account.json()["id"],
+        )
+
+    assert archived_account_write.status_code == HTTPStatus.CONFLICT
+    assert archived_account_write.json()["code"] == "finance_account_archived"
+    assert archived_category_write.status_code == HTTPStatus.CONFLICT
+    assert archived_category_write.json()["code"] == "finance_category_archived"
+    assert archived_history.json()["categoryAllocations"][0]["category"] == {
+        "id": category.json()["id"],
+        "name": "Food",
+        "status": "archived",
+    }
+    assert wrong_transaction_scope.status_code == HTTPStatus.NOT_FOUND
+    assert missing_transaction.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_transaction_scope.json()["code"] == "finance_transaction_not_found"
+    assert missing_transaction.json()["code"] == "finance_transaction_not_found"
+    assert wrong_transaction_scope.json()["detail"] == missing_transaction.json()["detail"]
+    assert wrong_account_scope.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_account_scope.json()["code"] == "finance_account_not_found"
+    assert wrong_category_scope.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_category_scope.json()["code"] == "finance_category_not_found"
+    assert non_owned_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert non_owned_ledger.json()["code"] == "finance_ledger_not_found"
+
+
+async def test_future_transactions_apply_immediately_and_bound_tracking_start_edits(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("transaction-dates")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Dates"})
+        ledger_id = ledger.json()["id"]
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "JPY",
+                "openingBalance": {"amount": "100", "currency": "JPY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        before_tracking = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=account.json()["id"],
+            transaction_date="2026-07-31",
+            amount="20",
+            currency="JPY",
+        )
+        future = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=account.json()["id"],
+            transaction_date="2030-01-01",
+            amount="20",
+            currency="JPY",
+        )
+        moved_tracking_start = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}",
+            json={"trackingStartDate": "2030-01-02"},
+        )
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    assert before_tracking.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert before_tracking.json()["code"] == "validation_error"
+    assert future.status_code == HTTPStatus.CREATED
+    assert future.json()["transactionDate"] == "2030-01-01"
+    assert moved_tracking_start.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert moved_tracking_start.json()["code"] == "validation_error"
+    assert accounts.json()[0]["trackingStartDate"] == "2026-08-01"
+    assert accounts.json()[0]["currentBalance"] == {"amount": "120", "currency": "JPY"}
 
 
 async def test_user_can_manage_the_complete_category_lifecycle(
@@ -530,6 +810,35 @@ async def test_category_list_order_uses_status_case_folded_name_and_identifier(
         listed = await client.get(f"/api/finance/ledgers/{ledger_id}/categories")
 
     assert listed.json() == [created[1], created[2], created[3], archived.json()]
+
+
+async def _post_transaction(
+    client: AsyncClient,
+    *,
+    ledger_id: str,
+    account_id: str,
+    category_id: str | None = None,
+    transaction_date: str = "2026-08-21",
+    amount: str = "10.00",
+    currency: str = "USD",
+) -> Response:
+    """Record one valid Income command for focused boundary tests."""
+
+    return await client.post(
+        f"/api/finance/ledgers/{ledger_id}/transactions",
+        json={
+            "kind": "income",
+            "accountId": account_id,
+            "transactionDate": transaction_date,
+            "economicAmount": {"amount": amount, "currency": currency},
+            "categoryAllocations": [
+                {
+                    "amount": {"amount": amount, "currency": currency},
+                    "categoryId": category_id,
+                }
+            ],
+        },
+    )
 
 
 def _user(subject: str) -> User:

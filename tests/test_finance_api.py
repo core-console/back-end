@@ -246,6 +246,110 @@ async def test_category_requests_reject_undeclared_or_invalid_fields_without_dat
 
 
 @pytest.mark.parametrize(
+    "body",
+    (
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21T00:00:00",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+        },
+        {
+            "kind": "expense",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "0.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "0.00", "currency": "CNY"}}],
+        },
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [],
+        },
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": 10, "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+        },
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "USD"}}],
+        },
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [
+                {"amount": {"amount": "10.00", "currency": "CNY"}},
+                {"amount": {"amount": "10.00", "currency": "CNY"}},
+            ],
+        },
+        {
+            "kind": "expense",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "9.00", "currency": "CNY"}}],
+        },
+        {
+            "kind": "internalTransfer",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+        },
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+            "accountMovement": {"amount": "10.00", "currency": "CNY"},
+        },
+        {
+            "kind": "income",
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "economicAmount": {"amount": "10.00", "currency": "CNY"},
+            "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+            "note": "界" * 501,
+        },
+    ),
+)
+async def test_create_transaction_rejects_invalid_public_contract_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    body: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.post(
+        f"/api/finance/ledgers/{uuid4()}/transactions",
+        json=body,
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.commit).assert_not_awaited()
+
+
+@pytest.mark.parametrize(
     ("failure", "expected_status", "expected_code"),
     (
         (

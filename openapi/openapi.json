@@ -1,6 +1,36 @@
 {
   "components": {
     "schemas": {
+      "AccountReferenceResponse": {
+        "additionalProperties": false,
+        "description": "Current lightweight Account reference embedded in a Transaction.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "AccountReferenceResponse",
+        "type": "object"
+      },
       "AccountResponse": {
         "additionalProperties": false,
         "description": "Closed public projection of one Finance Account.",
@@ -56,6 +86,87 @@
           "status"
         ],
         "title": "AccountResponse",
+        "type": "object"
+      },
+      "CategoryAllocationRequest": {
+        "additionalProperties": false,
+        "description": "One complete v1 allocation, optionally Uncategorized.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "categoryId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoryid"
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "title": "CategoryAllocationRequest",
+        "type": "object"
+      },
+      "CategoryAllocationResponse": {
+        "additionalProperties": false,
+        "description": "One exact classified or Uncategorized Economic Amount portion.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CategoryReferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "amount",
+          "category"
+        ],
+        "title": "CategoryAllocationResponse",
+        "type": "object"
+      },
+      "CategoryReferenceResponse": {
+        "additionalProperties": false,
+        "description": "Current lightweight Category reference embedded in an Allocation.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "CategoryReferenceResponse",
         "type": "object"
       },
       "CategoryResponse": {
@@ -139,6 +250,110 @@
           "name"
         ],
         "title": "CreateCategoryRequest",
+        "type": "object"
+      },
+      "CreateExpenseTransactionRequest": {
+        "additionalProperties": false,
+        "description": "Record value spent outside the Finance Ledger.",
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "title": "Accountid",
+            "type": "string"
+          },
+          "categoryAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAllocationRequest"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Categoryallocations",
+            "type": "array"
+          },
+          "economicAmount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "kind": {
+            "const": "expense",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "accountId",
+          "transactionDate",
+          "economicAmount",
+          "categoryAllocations",
+          "kind"
+        ],
+        "title": "CreateExpenseTransactionRequest",
+        "type": "object"
+      },
+      "CreateIncomeTransactionRequest": {
+        "additionalProperties": false,
+        "description": "Record value received from outside the Finance Ledger.",
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "title": "Accountid",
+            "type": "string"
+          },
+          "categoryAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAllocationRequest"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Categoryallocations",
+            "type": "array"
+          },
+          "economicAmount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "kind": {
+            "const": "income",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "accountId",
+          "transactionDate",
+          "economicAmount",
+          "categoryAllocations",
+          "kind"
+        ],
+        "title": "CreateIncomeTransactionRequest",
         "type": "object"
       },
       "CreateLedgerRequest": {
@@ -241,9 +456,91 @@
         "title": "CurrencyResponse",
         "type": "object"
       },
+      "ExpenseTransactionResponse": {
+        "additionalProperties": false,
+        "description": "Closed public Expense projection.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountReferenceResponse"
+          },
+          "categoryAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAllocationResponse"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Categoryallocations",
+            "type": "array"
+          },
+          "economicAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "expense",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ledgerId",
+          "transactionDate",
+          "note",
+          "account",
+          "economicAmount",
+          "categoryAllocations",
+          "kind"
+        ],
+        "title": "ExpenseTransactionResponse",
+        "type": "object"
+      },
       "FinanceRequestDate": {
         "format": "date",
         "type": "string"
+      },
+      "FinanceTransactionResponse": {
+        "discriminator": {
+          "mapping": {
+            "expense": "#/components/schemas/ExpenseTransactionResponse",
+            "income": "#/components/schemas/IncomeTransactionResponse"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/IncomeTransactionResponse"
+          },
+          {
+            "$ref": "#/components/schemas/ExpenseTransactionResponse"
+          }
+        ]
       },
       "HelloWorldResponse": {
         "additionalProperties": false,
@@ -262,6 +559,71 @@
           "message"
         ],
         "title": "HelloWorldResponse",
+        "type": "object"
+      },
+      "IncomeTransactionResponse": {
+        "additionalProperties": false,
+        "description": "Closed public Income projection.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountReferenceResponse"
+          },
+          "categoryAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAllocationResponse"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Categoryallocations",
+            "type": "array"
+          },
+          "economicAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "income",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ledgerId",
+          "transactionDate",
+          "note",
+          "account",
+          "economicAmount",
+          "categoryAllocations",
+          "kind"
+        ],
+        "title": "IncomeTransactionResponse",
         "type": "object"
       },
       "LedgerResponse": {
@@ -1885,6 +2247,221 @@
         },
         "security": [],
         "summary": "Unarchive a Finance Category",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/transactions": {
+      "post": {
+        "description": "Create one Income or Expense transaction.",
+        "operationId": "createFinanceTransaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "expense": "#/components/schemas/CreateExpenseTransactionRequest",
+                    "income": "#/components/schemas/CreateIncomeTransactionRequest"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CreateIncomeTransactionRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateExpenseTransactionRequest"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceTransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource is archived."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Create a Finance Transaction",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/transactions/{transactionId}": {
+      "get": {
+        "description": "Read one Income or Expense in an owned Ledger.",
+        "operationId": "getFinanceTransaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Transactionid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceTransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The path is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Get a Finance Transaction",
         "tags": [
           "Finance"
         ]

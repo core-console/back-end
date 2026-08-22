@@ -1,5 +1,6 @@
 """Real PostgreSQL coverage for Finance Ledger persistence."""
 
+import asyncio
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -9,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, inspect, text
+from sqlalchemy import Connection, func, inspect, select, text
 from sqlalchemy.engine.interfaces import (
     ReflectedCheckConstraint,
     ReflectedColumn,
@@ -19,9 +20,19 @@ from sqlalchemy.engine.interfaces import (
     ReflectedUniqueConstraint,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from core_console.modules.finance.models import FinanceAccount, FinanceCategory, FinanceLedger
+from core_console.modules.finance.models import (
+    FinanceAccount,
+    FinanceAccountMovement,
+    FinanceCategory,
+    FinanceCategoryAllocation,
+    FinanceLedger,
+    FinanceTransaction,
+)
+from core_console.modules.finance.money import Money
+from core_console.modules.finance.queries import FinanceTransactionDetail
+from core_console.modules.finance.service import create_finance_transaction
 from core_console.modules.users.models import User
 
 pytestmark = pytest.mark.anyio
@@ -58,6 +69,26 @@ class FinanceCategorySchemaInspection(TypedDict):
     unique_constraints: list[ReflectedUniqueConstraint]
     check_constraints: list[ReflectedCheckConstraint]
     indexes: list[ReflectedIndex]
+
+
+class FinanceTransactionSchemaInspection(TypedDict):
+    """Reflected durable Transaction table shape and named invariants."""
+
+    tables: set[str]
+    transaction_columns: set[str]
+    movement_columns: set[str]
+    allocation_columns: set[str]
+    transaction_checks: set[str | None]
+    movement_checks: set[str | None]
+    allocation_checks: set[str | None]
+    movement_foreign_keys: set[str | None]
+    allocation_foreign_keys: set[str | None]
+    transaction_uniques: set[str | None]
+    movement_uniques: set[str | None]
+    allocation_uniques: set[str | None]
+    account_uniques: set[str | None]
+    category_uniques: set[str | None]
+    constraint_triggers: set[str]
 
 
 def inspect_finance_ledgers(sync_connection: Connection) -> FinanceLedgerSchemaInspection:
@@ -97,6 +128,81 @@ def inspect_finance_categories(sync_connection: Connection) -> FinanceCategorySc
         "unique_constraints": schema_inspector.get_unique_constraints("finance_categories"),
         "check_constraints": schema_inspector.get_check_constraints("finance_categories"),
         "indexes": schema_inspector.get_indexes("finance_categories"),
+    }
+
+
+def inspect_finance_transactions(
+    sync_connection: Connection,
+) -> FinanceTransactionSchemaInspection:
+    """Return the first durable Transaction schema and integrity constraints."""
+
+    schema_inspector = inspect(sync_connection)
+    return {
+        "tables": set(schema_inspector.get_table_names()),
+        "transaction_columns": {
+            column["name"] for column in schema_inspector.get_columns("finance_transactions")
+        },
+        "movement_columns": {
+            column["name"] for column in schema_inspector.get_columns("finance_account_movements")
+        },
+        "allocation_columns": {
+            column["name"]
+            for column in schema_inspector.get_columns("finance_category_allocations")
+        },
+        "transaction_checks": {
+            constraint["name"]
+            for constraint in schema_inspector.get_check_constraints("finance_transactions")
+        },
+        "movement_checks": {
+            constraint["name"]
+            for constraint in schema_inspector.get_check_constraints("finance_account_movements")
+        },
+        "allocation_checks": {
+            constraint["name"]
+            for constraint in schema_inspector.get_check_constraints("finance_category_allocations")
+        },
+        "movement_foreign_keys": {
+            constraint["name"]
+            for constraint in schema_inspector.get_foreign_keys("finance_account_movements")
+        },
+        "allocation_foreign_keys": {
+            constraint["name"]
+            for constraint in schema_inspector.get_foreign_keys("finance_category_allocations")
+        },
+        "transaction_uniques": {
+            constraint["name"]
+            for constraint in schema_inspector.get_unique_constraints("finance_transactions")
+        },
+        "movement_uniques": {
+            constraint["name"]
+            for constraint in schema_inspector.get_unique_constraints("finance_account_movements")
+        },
+        "allocation_uniques": {
+            constraint["name"]
+            for constraint in schema_inspector.get_unique_constraints(
+                "finance_category_allocations"
+            )
+        },
+        "account_uniques": {
+            constraint["name"]
+            for constraint in schema_inspector.get_unique_constraints("finance_accounts")
+        },
+        "category_uniques": {
+            constraint["name"]
+            for constraint in schema_inspector.get_unique_constraints("finance_categories")
+        },
+        "constraint_triggers": set(
+            sync_connection.execute(
+                text(
+                    "SELECT tgname FROM pg_trigger "
+                    "WHERE NOT tgisinternal AND tgrelid IN ("
+                    "'finance_accounts'::regclass, "
+                    "'finance_transactions'::regclass, "
+                    "'finance_account_movements'::regclass, "
+                    "'finance_category_allocations'::regclass)"
+                )
+            ).scalars()
+        ),
     }
 
 
@@ -196,7 +302,8 @@ async def test_migrations_add_only_durable_ledger_owned_category_state(
         for key in schema["foreign_keys"]
     } == {(("ledger_id",), "finance_ledgers", ("id",))}
     assert {tuple(constraint["column_names"]) for constraint in schema["unique_constraints"]} == {
-        ("ledger_id", "name_key")
+        ("ledger_id", "name_key"),
+        ("id", "ledger_id"),
     }
     assert {constraint["name"] for constraint in schema["check_constraints"]} == {
         "ck_finance_categories_name_not_blank",
@@ -210,6 +317,80 @@ async def test_migrations_add_only_durable_ledger_owned_category_state(
             "ix_finance_categories_ledger_status_name_key_id",
             ("ledger_id", "status", "name_key", "id"),
         )
+    }
+
+
+async def test_migration_adds_atomic_transaction_movement_and_allocation_integrity(
+    postgres_engine: AsyncEngine,
+) -> None:
+    async with postgres_engine.connect() as connection:
+        schema = await connection.run_sync(inspect_finance_transactions)
+
+    assert {
+        "finance_transactions",
+        "finance_account_movements",
+        "finance_category_allocations",
+    } <= schema["tables"]
+    assert schema["transaction_columns"] == {
+        "id",
+        "ledger_id",
+        "kind",
+        "transaction_date",
+        "note",
+        "created_at",
+        "updated_at",
+    }
+    assert schema["movement_columns"] == {
+        "id",
+        "transaction_id",
+        "ledger_id",
+        "account_id",
+        "amount",
+        "currency",
+    }
+    assert schema["allocation_columns"] == {
+        "id",
+        "transaction_id",
+        "ledger_id",
+        "category_id",
+        "amount",
+        "currency",
+    }
+    assert schema["transaction_checks"] == {
+        "ck_finance_transactions_kind",
+        "ck_finance_transactions_note",
+    }
+    assert schema["movement_checks"] == {
+        "ck_finance_account_movements_amount_finite",
+        "ck_finance_account_movements_amount_nonzero",
+        "ck_finance_account_movements_currency",
+        "ck_finance_account_movements_amount_scale",
+    }
+    assert schema["allocation_checks"] == {
+        "ck_finance_category_allocations_amount_finite",
+        "ck_finance_category_allocations_amount_positive",
+        "ck_finance_category_allocations_currency",
+        "ck_finance_category_allocations_amount_scale",
+    }
+    assert schema["movement_foreign_keys"] == {
+        "fk_finance_account_movements_transaction_ledger",
+        "fk_finance_account_movements_account_ledger",
+    }
+    assert schema["allocation_foreign_keys"] == {
+        "fk_finance_category_allocations_transaction_ledger",
+        "fk_finance_category_allocations_category_ledger",
+    }
+    assert schema["transaction_uniques"] == {"uq_finance_transactions_id_ledger_id"}
+    assert schema["movement_uniques"] == set()
+    assert schema["allocation_uniques"] == {"uq_finance_category_allocations_transaction_id"}
+    assert "uq_finance_accounts_id_ledger_id" in schema["account_uniques"]
+    assert "uq_finance_categories_id_ledger_id" in schema["category_uniques"]
+    assert schema["constraint_triggers"] == {
+        "ck_finance_accounts_semantics_lock",
+        "ck_finance_accounts_tracking_start_integrity",
+        "ck_finance_transactions_ordinary_integrity",
+        "ck_finance_account_movements_ordinary_integrity",
+        "ck_finance_category_allocations_ordinary_integrity",
     }
 
 
@@ -449,6 +630,553 @@ async def test_finance_category_rejects_invalid_persisted_state(
 
     with pytest.raises(IntegrityError):
         await postgres_session.commit()
+
+
+async def test_transaction_projection_failure_rolls_back_complete_atomic_write(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("transaction-projection-failure")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    def fail_projection(_: FinanceTransactionDetail) -> None:
+        raise RuntimeError("response projection failed")
+
+    with pytest.raises(RuntimeError, match="response projection failed"):
+        await create_finance_transaction(
+            postgres_session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            kind="income",
+            account_id=account.id,
+            transaction_date=date(2026, 8, 21),
+            economic_amount=Money.parse(amount="10.00", currency="CNY"),
+            allocation_amount=Money.parse(amount="10.00", currency="CNY"),
+            category_id=None,
+            note=None,
+            project=fail_projection,
+        )
+
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (
+            FinanceTransaction,
+            FinanceAccountMovement,
+            FinanceCategoryAllocation,
+        )
+    ]
+    assert counts == [0, 0, 0]
+
+
+async def test_database_rejects_an_incomplete_income_transaction(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("incomplete-transaction")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    postgres_session.add(
+        FinanceTransaction(
+            ledger_id=ledger.id,
+            kind="income",
+            transaction_date=date(2026, 8, 21),
+            note=None,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_database_rejects_incoherent_income_movement_direction(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("incoherent-income")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.flush()
+    transaction = FinanceTransaction(
+        ledger_id=ledger.id,
+        kind="income",
+        transaction_date=date(2026, 8, 21),
+        note=None,
+    )
+    postgres_session.add(transaction)
+    await postgres_session.flush()
+    postgres_session.add_all(
+        [
+            FinanceAccountMovement(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                amount=Decimal("-10.00"),
+                currency="CNY",
+            ),
+            FinanceCategoryAllocation(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                category_id=None,
+                amount=Decimal("10.00"),
+                currency="CNY",
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_database_rejects_movement_currency_that_differs_from_account(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("cross-currency-movement")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.flush()
+    transaction = FinanceTransaction(
+        ledger_id=ledger.id,
+        kind="income",
+        transaction_date=date(2026, 8, 21),
+        note=None,
+    )
+    postgres_session.add(transaction)
+    await postgres_session.flush()
+    postgres_session.add_all(
+        [
+            FinanceAccountMovement(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                amount=Decimal("10.00"),
+                currency="USD",
+            ),
+            FinanceCategoryAllocation(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                category_id=None,
+                amount=Decimal("10.00"),
+                currency="USD",
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_database_rejects_transaction_before_account_tracking_start(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("transaction-before-tracking")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.flush()
+    transaction = FinanceTransaction(
+        ledger_id=ledger.id,
+        kind="income",
+        transaction_date=date(2026, 7, 31),
+        note=None,
+    )
+    postgres_session.add(transaction)
+    await postgres_session.flush()
+    postgres_session.add_all(
+        [
+            FinanceAccountMovement(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                amount=Decimal("10.00"),
+                currency="CNY",
+            ),
+            FinanceCategoryAllocation(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                category_id=None,
+                amount=Decimal("10.00"),
+                currency="CNY",
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_database_rejects_reparenting_an_account_movement(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("movement-reparenting")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    def transaction_id(detail: FinanceTransactionDetail) -> UUID:
+        return detail.transaction.id
+
+    first_transaction_id = await create_finance_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        kind="income",
+        account_id=account.id,
+        transaction_date=date(2026, 8, 21),
+        economic_amount=Money.parse(amount="10.00", currency="CNY"),
+        allocation_amount=Money.parse(amount="10.00", currency="CNY"),
+        category_id=None,
+        note=None,
+        project=transaction_id,
+    )
+    movement = await postgres_session.scalar(
+        select(FinanceAccountMovement).where(
+            FinanceAccountMovement.transaction_id == first_transaction_id
+        )
+    )
+    assert movement is not None
+    second_transaction = FinanceTransaction(
+        ledger_id=ledger.id,
+        kind="income",
+        transaction_date=date(2026, 8, 22),
+        note=None,
+    )
+    postgres_session.add(second_transaction)
+    await postgres_session.flush()
+    postgres_session.add(
+        FinanceCategoryAllocation(
+            transaction_id=second_transaction.id,
+            ledger_id=ledger.id,
+            category_id=None,
+            amount=Decimal("10.00"),
+            currency="CNY",
+        )
+    )
+    movement.transaction_id = second_transaction.id
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_database_rejects_tracking_start_edit_that_excludes_history(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("tracking-start-persistence")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+    await create_finance_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        kind="income",
+        account_id=account.id,
+        transaction_date=date(2026, 8, 21),
+        economic_amount=Money.parse(amount="10.00", currency="CNY"),
+        allocation_amount=Money.parse(amount="10.00", currency="CNY"),
+        category_id=None,
+        note=None,
+        project=lambda detail: detail.transaction.id,
+    )
+    account.tracking_start_date = date(2026, 8, 22)
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+@pytest.mark.parametrize("semantic_change", ("nature", "currency"))
+async def test_database_rejects_account_semantic_change_with_durable_history(
+    postgres_session: AsyncSession,
+    semantic_change: str,
+) -> None:
+    owner = _user(f"account-history-{semantic_change}")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+    await create_finance_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        kind="income",
+        account_id=account.id,
+        transaction_date=date(2026, 8, 21),
+        economic_amount=Money.parse(amount="10.00", currency="CNY"),
+        allocation_amount=Money.parse(amount="10.00", currency="CNY"),
+        category_id=None,
+        note=None,
+        project=lambda detail: detail.transaction.id,
+    )
+
+    if semantic_change == "nature":
+        account.nature = "liability"
+    else:
+        account.currency = "USD"
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+@pytest.mark.parametrize("semantic_change", ("nature", "currency"))
+async def test_database_rejects_account_semantic_change_with_opening_balance(
+    postgres_session: AsyncSession,
+    semantic_change: str,
+) -> None:
+    owner = _user(f"account-opening-{semantic_change}")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("25.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    if semantic_change == "nature":
+        account.nature = "liability"
+    else:
+        account.currency = "USD"
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_database_allows_account_semantic_change_while_unlocked(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("account-semantics-unlocked")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    account.nature = "liability"
+    account.currency = "USD"
+    await postgres_session.commit()
+    await postgres_session.refresh(account)
+
+    assert (account.nature, account.currency) == ("liability", "USD")
+
+
+async def test_database_serializes_transaction_commit_with_tracking_start_change(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("tracking-start-concurrency")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as transaction_session,
+        session_factory() as account_session,
+        session_factory() as observer_session,
+    ):
+        transaction = FinanceTransaction(
+            ledger_id=ledger.id,
+            kind="income",
+            transaction_date=date(2026, 8, 1),
+            note=None,
+        )
+        transaction_session.add(transaction)
+        await transaction_session.flush()
+        transaction_session.add_all(
+            [
+                FinanceAccountMovement(
+                    transaction_id=transaction.id,
+                    ledger_id=ledger.id,
+                    account_id=account.id,
+                    amount=Decimal("10.00"),
+                    currency="CNY",
+                ),
+                FinanceCategoryAllocation(
+                    transaction_id=transaction.id,
+                    ledger_id=ledger.id,
+                    category_id=None,
+                    amount=Decimal("10.00"),
+                    currency="CNY",
+                ),
+            ]
+        )
+        await transaction_session.flush()
+        transaction_backend_pid = await transaction_session.scalar(select(func.pg_backend_pid()))
+        assert transaction_backend_pid is not None
+
+        competing_account = await account_session.get(FinanceAccount, account.id)
+        assert competing_account is not None
+        competing_account.tracking_start_date = date(2026, 8, 2)
+        await account_session.flush()
+
+        transaction_commit = asyncio.create_task(transaction_session.commit())
+        transaction_waited_for_account = False
+        for _ in range(100):
+            wait_event_type = await observer_session.scalar(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :backend_pid"),
+                {"backend_pid": transaction_backend_pid},
+            )
+            if wait_event_type == "Lock":
+                transaction_waited_for_account = True
+                break
+            if transaction_commit.done():
+                break
+            await asyncio.sleep(0.01)
+
+        assert transaction_waited_for_account
+        await account_session.commit()
+        with pytest.raises(IntegrityError):
+            await transaction_commit
+        await transaction_session.rollback()
+
+        persisted_account = await observer_session.get(FinanceAccount, account.id)
+        persisted_transaction_count = await observer_session.scalar(
+            select(func.count())
+            .select_from(FinanceAccountMovement)
+            .where(FinanceAccountMovement.account_id == account.id)
+        )
+
+    assert persisted_account is not None
+    assert persisted_account.tracking_start_date == date(2026, 8, 2)
+    assert persisted_transaction_count == 0
+
+
+async def test_database_allows_transaction_on_tracking_start_boundary(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("tracking-start-boundary")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    transaction_id = await create_finance_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        kind="income",
+        account_id=account.id,
+        transaction_date=account.tracking_start_date,
+        economic_amount=Money.parse(amount="10.00", currency="CNY"),
+        allocation_amount=Money.parse(amount="10.00", currency="CNY"),
+        category_id=None,
+        note=None,
+        project=lambda detail: detail.transaction.id,
+    )
+
+    assert await postgres_session.get(FinanceTransaction, transaction_id) is not None
 
 
 def _user(subject: str) -> User:

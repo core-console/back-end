@@ -329,6 +329,92 @@ def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> 
             )
 
 
+def test_openapi_describes_income_and_expense_create_and_detail_contract(
+    app: FastAPI,
+) -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    collection_path = paths["/finance/ledgers/{ledgerId}/transactions"]
+    detail_path = paths["/finance/ledgers/{ledgerId}/transactions/{transactionId}"]
+    create_operation = collection_path["post"]
+    detail_operation = detail_path["get"]
+
+    assert set(collection_path) == {"post"}
+    assert set(detail_path) == {"get"}
+    assert create_operation["operationId"] == "createFinanceTransaction"
+    assert detail_operation["operationId"] == "getFinanceTransaction"
+    assert create_operation["security"] == []
+    assert detail_operation["security"] == []
+
+    request_union = create_operation["requestBody"]["content"]["application/json"]["schema"]
+    assert request_union["discriminator"] == {
+        "propertyName": "kind",
+        "mapping": {
+            "income": "#/components/schemas/CreateIncomeTransactionRequest",
+            "expense": "#/components/schemas/CreateExpenseTransactionRequest",
+        },
+    }
+    assert request_union["oneOf"] == [
+        {"$ref": "#/components/schemas/CreateIncomeTransactionRequest"},
+        {"$ref": "#/components/schemas/CreateExpenseTransactionRequest"},
+    ]
+
+    transaction_union = schema["components"]["schemas"]["FinanceTransactionResponse"]
+    assert transaction_union["discriminator"]["propertyName"] == "kind"
+    assert set(transaction_union["discriminator"]["mapping"]) == {"income", "expense"}
+    assert transaction_union["oneOf"] == [
+        {"$ref": "#/components/schemas/IncomeTransactionResponse"},
+        {"$ref": "#/components/schemas/ExpenseTransactionResponse"},
+    ]
+
+    expected_transaction_fields = {
+        "id",
+        "ledgerId",
+        "kind",
+        "transactionDate",
+        "note",
+        "account",
+        "economicAmount",
+        "categoryAllocations",
+    }
+    expected_request_fields = {
+        "kind",
+        "accountId",
+        "transactionDate",
+        "economicAmount",
+        "categoryAllocations",
+        "note",
+    }
+    for kind in ("Income", "Expense"):
+        request_schema = schema["components"]["schemas"][f"Create{kind}TransactionRequest"]
+        response_schema = schema["components"]["schemas"][f"{kind}TransactionResponse"]
+        assert request_schema["additionalProperties"] is False
+        assert response_schema["additionalProperties"] is False
+        assert set(request_schema["properties"]) == expected_request_fields
+        assert set(response_schema["properties"]) == expected_transaction_fields
+        allocation_array = request_schema["properties"]["categoryAllocations"]
+        assert allocation_array["minItems"] == 1
+        assert allocation_array["maxItems"] == 1
+        response_allocations = response_schema["properties"]["categoryAllocations"]
+        assert response_allocations["minItems"] == 1
+        assert response_allocations["maxItems"] == 1
+        assert request_schema["properties"]["note"]["maxLength"] == 500
+        assert response_schema["properties"]["note"]["anyOf"][0]["maxLength"] == 500
+
+    for operation in (create_operation, detail_operation):
+        for status, response in operation["responses"].items():
+            if status.startswith("2"):
+                assert response["content"]["application/json"]["schema"] == {
+                    "$ref": "#/components/schemas/FinanceTransactionResponse"
+                }
+                continue
+            assert set(response["content"]) == {"application/problem+json"}
+            assert (
+                response["content"]["application/problem+json"]["schema"]["$ref"]
+                == "#/components/schemas/ProblemDetails"
+            )
+
+
 def test_openapi_converts_problem_details_for_any_operation(app: FastAPI) -> None:
     @app.get(
         "/api/__test_problem",

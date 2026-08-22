@@ -5,7 +5,14 @@ from re import fullmatch
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import PydanticCustomError
 
 from core_console.modules.finance.money import CurrencyCode, InvalidMoneyError, Money
@@ -77,6 +84,71 @@ class CategoryResponse(BaseModel):
     id: UUID
     name: str
     status: Literal["active", "archived"]
+
+
+class AccountReferenceResponse(BaseModel):
+    """Current lightweight Account reference embedded in a Transaction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    name: str
+    status: Literal["active", "archived"]
+
+
+class CategoryReferenceResponse(BaseModel):
+    """Current lightweight Category reference embedded in an Allocation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    name: str
+    status: Literal["active", "archived"]
+
+
+class CategoryAllocationResponse(BaseModel):
+    """One exact classified or Uncategorized Economic Amount portion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    amount: MoneyResponse
+    category: CategoryReferenceResponse | None
+
+
+class _OrdinaryTransactionResponse(BaseModel):
+    """Closed common projection for Income and Expense."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    transaction_date: date = Field(alias="transactionDate")
+    note: str | None = Field(max_length=500)
+    account: AccountReferenceResponse
+    economic_amount: MoneyResponse = Field(alias="economicAmount")
+    category_allocations: list[CategoryAllocationResponse] = Field(
+        alias="categoryAllocations",
+        min_length=1,
+        max_length=1,
+    )
+
+
+class IncomeTransactionResponse(_OrdinaryTransactionResponse):
+    """Closed public Income projection."""
+
+    kind: Literal["income"]
+
+
+class ExpenseTransactionResponse(_OrdinaryTransactionResponse):
+    """Closed public Expense projection."""
+
+    kind: Literal["expense"]
+
+
+type FinanceTransactionResponse = Annotated[
+    IncomeTransactionResponse | ExpenseTransactionResponse,
+    Field(discriminator="kind"),
+]
 
 
 class _RequestModel(BaseModel):
@@ -170,3 +242,79 @@ class UpdateAccountRequest(_RequestModel):
         default_factory=lambda: date.min,
         alias="trackingStartDate",
     )
+
+
+class CategoryAllocationRequest(_RequestModel):
+    """One complete v1 allocation, optionally Uncategorized."""
+
+    amount: MoneyRequest
+    category_id: UUID | None = Field(default=None, alias="categoryId")
+
+
+class _CreateOrdinaryTransactionRequest(_RequestModel):
+    """Common command fields for the first two Finance Transaction kinds."""
+
+    account_id: UUID = Field(alias="accountId")
+    transaction_date: FinanceRequestDate = Field(alias="transactionDate")
+    economic_amount: MoneyRequest = Field(alias="economicAmount")
+    category_allocations: list[CategoryAllocationRequest] = Field(
+        alias="categoryAllocations",
+        min_length=1,
+        max_length=1,
+    )
+    note: str | None = Field(
+        default=None,
+        strict=True,
+        json_schema_extra={"maxLength": 500},
+    )
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        """Trim optional plain text, normalize blank to null, and enforce length."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 500:
+            raise PydanticCustomError(
+                "value_error",
+                "Transaction note must not exceed 500 characters.",
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_complete_allocation(self) -> Self:
+        economic_amount = self.economic_amount.to_money()
+        allocation_amount = self.category_allocations[0].amount.to_money()
+        if economic_amount.amount <= 0 or allocation_amount.amount <= 0:
+            raise PydanticCustomError(
+                "value_error",
+                "Economic Amount and Category Allocation amount must be positive.",
+            )
+        if allocation_amount != economic_amount:
+            raise PydanticCustomError(
+                "value_error",
+                "The Category Allocation must equal the complete Economic Amount.",
+            )
+        return self
+
+
+class CreateIncomeTransactionRequest(_CreateOrdinaryTransactionRequest):
+    """Record value received from outside the Finance Ledger."""
+
+    kind: Literal["income"]
+
+
+class CreateExpenseTransactionRequest(_CreateOrdinaryTransactionRequest):
+    """Record value spent outside the Finance Ledger."""
+
+    kind: Literal["expense"]
+
+
+type CreateFinanceTransactionRequest = Annotated[
+    CreateIncomeTransactionRequest | CreateExpenseTransactionRequest,
+    Field(discriminator="kind"),
+]
