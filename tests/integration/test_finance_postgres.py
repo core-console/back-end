@@ -36,12 +36,354 @@ from core_console.modules.finance.service import (
     FinanceAccountSemanticsLockedError,
     correct_finance_account_semantics,
     create_finance_transaction,
+    create_internal_transfer_transaction,
 )
 from core_console.modules.users.models import User
 
 pytestmark = pytest.mark.anyio
 
 ALEMBIC_CONFIG_PATH = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+
+@pytest.mark.parametrize(
+    ("source_nature", "destination_nature", "expected_source", "expected_destination"),
+    [
+        ("asset", "asset", Decimal("-10.00"), Decimal("10.00")),
+        ("asset", "liability", Decimal("-10.00"), Decimal("-10.00")),
+        ("liability", "asset", Decimal("10.00"), Decimal("10.00")),
+        ("liability", "liability", Decimal("10.00"), Decimal("-10.00")),
+    ],
+)
+async def test_internal_transfer_persists_exact_role_aware_nature_matrix(
+    postgres_session: AsyncSession,
+    source_nature: str,
+    destination_nature: str,
+    expected_source: Decimal,
+    expected_destination: Decimal,
+) -> None:
+    owner = _user(f"transfer-{source_nature}-{destination_nature}")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    source = _account(
+        ledger.id,
+        name="Source",
+        name_key="source",
+        nature=source_nature,
+        currency="CNY",
+        opening_balance=Decimal("5.00"),
+        status="active",
+    )
+    destination = _account(
+        ledger.id,
+        name="Destination",
+        name_key="destination",
+        nature=destination_nature,
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([source, destination])
+    await postgres_session.commit()
+
+    transaction_id = await create_internal_transfer_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        source_account_id=source.id,
+        destination_account_id=destination.id,
+        transaction_date=date(2030, 8, 1),
+        amount=Money.parse(amount="10.00", currency="CNY"),
+        note=" transfer ",
+        project=lambda detail: detail.transaction.id,
+    )
+
+    movements = (
+        await postgres_session.scalars(
+            select(FinanceAccountMovement)
+            .where(FinanceAccountMovement.transaction_id == transaction_id)
+            .order_by(FinanceAccountMovement.role)
+        )
+    ).all()
+    allocations = await postgres_session.scalar(
+        select(func.count())
+        .select_from(FinanceCategoryAllocation)
+        .where(FinanceCategoryAllocation.transaction_id == transaction_id)
+    )
+    assert [(movement.role, movement.amount) for movement in movements] == [
+        ("destination", expected_destination),
+        ("source", expected_source),
+    ]
+    assert allocations == 0
+
+
+@pytest.mark.parametrize(
+    ("destination_amount", "destination_currency", "add_allocation", "late_tracking"),
+    [
+        (None, "CNY", False, False),
+        (Decimal("9.00"), "CNY", False, False),
+        (Decimal("10.00"), "USD", False, False),
+        (Decimal("10.00"), "CNY", True, False),
+        (Decimal("10.00"), "CNY", False, True),
+    ],
+)
+async def test_database_rejects_malformed_internal_transfer_aggregates(
+    postgres_session: AsyncSession,
+    destination_amount: Decimal | None,
+    destination_currency: str,
+    add_allocation: bool,
+    late_tracking: bool,
+) -> None:
+    owner = _user(uuid4().hex)
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    source = _account(
+        ledger.id,
+        name="Source",
+        name_key="source",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    destination = _account(
+        ledger.id,
+        name="Destination",
+        name_key="destination",
+        nature="asset",
+        currency=destination_currency,
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    if late_tracking:
+        destination.tracking_start_date = date(2026, 8, 2)
+    postgres_session.add_all([source, destination])
+    await postgres_session.flush()
+    transaction = FinanceTransaction(
+        ledger_id=ledger.id,
+        kind="internal_transfer",
+        transaction_date=date(2026, 8, 1),
+        note=None,
+    )
+    postgres_session.add(transaction)
+    await postgres_session.flush()
+    children: list[FinanceAccountMovement | FinanceCategoryAllocation] = [
+        FinanceAccountMovement(
+            transaction_id=transaction.id,
+            ledger_id=ledger.id,
+            account_id=source.id,
+            amount=Decimal("-10.00"),
+            currency="CNY",
+            role="source",
+        )
+    ]
+    if destination_amount is not None:
+        children.append(
+            FinanceAccountMovement(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                account_id=destination.id,
+                amount=destination_amount,
+                currency=destination_currency,
+                role="destination",
+            )
+        )
+    if add_allocation:
+        children.append(
+            FinanceCategoryAllocation(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                category_id=None,
+                amount=Decimal("10.00"),
+                currency="CNY",
+            )
+        )
+    postgres_session.add_all(children)
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
+
+
+async def test_internal_transfer_projection_failure_rolls_back_all_rows(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("transfer-projection-failure")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    source = _account(
+        ledger.id,
+        name="Source",
+        name_key="source",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    destination = _account(
+        ledger.id,
+        name="Destination",
+        name_key="destination",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([source, destination])
+    await postgres_session.commit()
+
+    def fail_projection(_: FinanceTransactionDetail) -> None:
+        raise RuntimeError("response projection failed")
+
+    with pytest.raises(RuntimeError, match="response projection failed"):
+        await create_internal_transfer_transaction(
+            postgres_session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            source_account_id=source.id,
+            destination_account_id=destination.id,
+            transaction_date=date(2026, 8, 1),
+            amount=Money.parse(amount="10.00", currency="CNY"),
+            note=None,
+            project=fail_projection,
+        )
+
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (FinanceTransaction, FinanceAccountMovement, FinanceCategoryAllocation)
+    ]
+    assert counts == [0, 0, 0]
+
+
+async def test_internal_transfer_history_locks_both_account_semantics(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("transfer-semantics-lock")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    source = _account(
+        ledger.id,
+        name="Source",
+        name_key="source",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    destination = _account(
+        ledger.id,
+        name="Destination",
+        name_key="destination",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([source, destination])
+    await postgres_session.commit()
+    await create_internal_transfer_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        source_account_id=source.id,
+        destination_account_id=destination.id,
+        transaction_date=date(2026, 8, 1),
+        amount=Money.parse(amount="1.00", currency="CNY"),
+        note=None,
+        project=lambda detail: detail.transaction.id,
+    )
+
+    owner_id = owner.id
+    ledger_id = ledger.id
+    account_ids = (source.id, destination.id)
+    for account_id in account_ids:
+        with pytest.raises(FinanceAccountSemanticsLockedError):
+            await correct_finance_account_semantics(
+                postgres_session,
+                owner_id=owner_id,
+                ledger_id=ledger_id,
+                account_id=account_id,
+                nature="liability",
+                currency=None,
+            )
+        await postgres_session.rollback()
+
+
+async def test_opposing_internal_transfers_use_compatible_account_lock_order(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("opposing-transfer-locks")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    first = _account(
+        ledger.id,
+        name="First",
+        name_key="first",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    second = _account(
+        ledger.id,
+        name="Second",
+        name_key="second",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([first, second])
+    await postgres_session.commit()
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with session_factory() as forward_session, session_factory() as reverse_session:
+        await asyncio.wait_for(
+            asyncio.gather(
+                create_internal_transfer_transaction(
+                    forward_session,
+                    owner_id=owner.id,
+                    ledger_id=ledger.id,
+                    source_account_id=first.id,
+                    destination_account_id=second.id,
+                    transaction_date=date(2026, 8, 1),
+                    amount=Money.parse(amount="3.00", currency="CNY"),
+                    note=None,
+                    project=lambda detail: detail.transaction.id,
+                ),
+                create_internal_transfer_transaction(
+                    reverse_session,
+                    owner_id=owner.id,
+                    ledger_id=ledger.id,
+                    source_account_id=second.id,
+                    destination_account_id=first.id,
+                    transaction_date=date(2026, 8, 1),
+                    amount=Money.parse(amount="2.00", currency="CNY"),
+                    note=None,
+                    project=lambda detail: detail.transaction.id,
+                ),
+            ),
+            timeout=5,
+        )
+
+    movement_count = await postgres_session.scalar(
+        select(func.count()).select_from(FinanceAccountMovement)
+    )
+    assert movement_count == 4
 
 
 async def _wait_for_postgres_backend_lock(
@@ -369,6 +711,7 @@ async def test_migration_adds_atomic_transaction_movement_and_allocation_integri
         "account_id",
         "amount",
         "currency",
+        "role",
     }
     assert schema["allocation_columns"] == {
         "id",
@@ -387,6 +730,7 @@ async def test_migration_adds_atomic_transaction_movement_and_allocation_integri
         "ck_finance_account_movements_amount_nonzero",
         "ck_finance_account_movements_currency",
         "ck_finance_account_movements_amount_scale",
+        "ck_finance_account_movements_role",
     }
     assert schema["allocation_checks"] == {
         "ck_finance_category_allocations_amount_finite",
@@ -403,7 +747,7 @@ async def test_migration_adds_atomic_transaction_movement_and_allocation_integri
         "fk_finance_category_allocations_category_ledger",
     }
     assert schema["transaction_uniques"] == {"uq_finance_transactions_id_ledger_id"}
-    assert schema["movement_uniques"] == set()
+    assert schema["movement_uniques"] == {"uq_finance_account_movements_transaction_role"}
     assert schema["allocation_uniques"] == {"uq_finance_category_allocations_transaction_id"}
     assert "uq_finance_accounts_id_ledger_id" in schema["account_uniques"]
     assert "uq_finance_categories_id_ledger_id" in schema["category_uniques"]

@@ -255,7 +255,7 @@ class FinanceTransaction(Base):
     __tablename__ = "finance_transactions"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('income', 'expense')",
+            "kind IN ('income', 'expense', 'internal_transfer')",
             name="ck_finance_transactions_kind",
         ),
         CheckConstraint(
@@ -328,6 +328,10 @@ class FinanceAccountMovement(Base):
             "(currency IN ('CNY', 'USD') AND scale(amount) <= 2)",
             name="ck_finance_account_movements_amount_scale",
         ),
+        CheckConstraint(
+            "role IN ('primary', 'source', 'destination')",
+            name="ck_finance_account_movements_role",
+        ),
         ForeignKeyConstraint(
             ["transaction_id", "ledger_id"],
             ["finance_transactions.id", "finance_transactions.ledger_id"],
@@ -344,6 +348,11 @@ class FinanceAccountMovement(Base):
             "account_id",
             "transaction_id",
         ),
+        UniqueConstraint(
+            "transaction_id",
+            "role",
+            name="uq_finance_account_movements_transaction_role",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -356,6 +365,7 @@ class FinanceAccountMovement(Base):
     account_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(), nullable=False)
     currency: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False, default="primary")
 
 
 class FinanceCategoryAllocation(Base):

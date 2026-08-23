@@ -23,6 +23,7 @@ from core_console.modules.finance.queries import (
     FinanceTransactionDetail,
     get_earliest_finance_account_transaction_date,
     get_finance_account_balance,
+    get_finance_account_balances_for_update,
     get_finance_category,
     get_finance_ledger,
     get_finance_transaction_detail,
@@ -93,7 +94,7 @@ class FinanceTransactionNotFoundError(Exception):
 
 
 class InvalidFinanceTransactionError(ValueError):
-    """An Income or Expense violates the closed Finance contract."""
+    """A Finance Transaction violates the closed Finance contract."""
 
 
 def normalize_ledger_name(name: str) -> tuple[str, str]:
@@ -157,6 +158,24 @@ def derive_account_movement_amount(
     return Money(
         amount=economic_amount.amount * account_direction,
         currency=economic_amount.currency,
+    )
+
+
+def derive_internal_transfer_movement_amounts(
+    *,
+    source_nature: Literal["asset", "liability"],
+    destination_nature: Literal["asset", "liability"],
+    amount: Money,
+) -> tuple[Money, Money]:
+    """Derive source and destination changes from normalized economic effects."""
+
+    if not amount.amount.is_finite() or amount.amount <= 0:
+        raise InvalidFinanceTransactionError("Transfer amount must be finite and positive.")
+    source_direction = -1 if source_nature == "asset" else 1
+    destination_direction = 1 if destination_nature == "asset" else -1
+    return (
+        Money(amount=amount.amount * source_direction, currency=amount.currency),
+        Money(amount=amount.amount * destination_direction, currency=amount.currency),
     )
 
 
@@ -486,6 +505,7 @@ async def create_finance_transaction[Result](
         account_id=account.id,
         amount=movement_amount.amount,
         currency=movement_amount.currency,
+        role="primary",
     )
     allocation = FinanceCategoryAllocation(
         transaction_id=transaction_id,
@@ -494,23 +514,99 @@ async def create_finance_transaction[Result](
         amount=allocation_amount.amount,
         currency=allocation_amount.currency,
     )
-    session.add(transaction)
+    return await _persist_and_project_finance_transaction(
+        session,
+        transaction=transaction,
+        children=(movement, allocation),
+        project=project,
+    )
 
-    try:
-        await session.flush()
-        session.add_all([movement, allocation])
-        await session.flush()
-        detail = await _require_finance_transaction_detail(
-            session,
-            ledger_id=ledger_id,
-            transaction_id=transaction_id,
+
+async def create_internal_transfer_transaction[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    source_account_id: UUID,
+    destination_account_id: UUID,
+    transaction_date: date,
+    amount: Money,
+    note: str | None,
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Atomically persist and project one same-currency Internal Transfer."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    if source_account_id == destination_account_id:
+        raise InvalidFinanceTransactionError("Source and Destination Accounts must be distinct.")
+    balances = await get_finance_account_balances_for_update(
+        session,
+        ledger_id=ledger_id,
+        account_ids=frozenset((source_account_id, destination_account_id)),
+    )
+    if len(balances) != 2:
+        raise FinanceAccountNotFoundError
+    by_id = {balance.account.id: balance.account for balance in balances}
+    source = by_id[source_account_id]
+    destination = by_id[destination_account_id]
+    if source.status != "active" or destination.status != "active":
+        raise FinanceAccountArchivedError
+    if transaction_date < source.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Source Account Tracking Start Date."
         )
-        projected = project(detail)
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
-    return projected
+    if transaction_date < destination.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Destination Account Tracking Start Date."
+        )
+    if source.currency != destination.currency or amount.currency != source.currency:
+        raise InvalidFinanceTransactionError(
+            "Transfer Accounts and amount must use the same currency."
+        )
+
+    source_nature: Literal["asset", "liability"] = (
+        "asset" if source.nature == "asset" else "liability"
+    )
+    destination_nature: Literal["asset", "liability"] = (
+        "asset" if destination.nature == "asset" else "liability"
+    )
+    source_amount, destination_amount = derive_internal_transfer_movement_amounts(
+        source_nature=source_nature,
+        destination_nature=destination_nature,
+        amount=amount,
+    )
+    transaction_id = uuid4()
+    transaction = FinanceTransaction(
+        id=transaction_id,
+        ledger_id=ledger_id,
+        kind="internal_transfer",
+        transaction_date=transaction_date,
+        note=normalize_transaction_note(note),
+    )
+    movements = [
+        FinanceAccountMovement(
+            transaction_id=transaction_id,
+            ledger_id=ledger_id,
+            account_id=source.id,
+            amount=source_amount.amount,
+            currency=source_amount.currency,
+            role="source",
+        ),
+        FinanceAccountMovement(
+            transaction_id=transaction_id,
+            ledger_id=ledger_id,
+            account_id=destination.id,
+            amount=destination_amount.amount,
+            currency=destination_amount.currency,
+            role="destination",
+        ),
+    ]
+    return await _persist_and_project_finance_transaction(
+        session,
+        transaction=transaction,
+        children=movements,
+        project=project,
+    )
 
 
 async def get_finance_transaction(
@@ -528,6 +624,33 @@ async def get_finance_transaction(
         ledger_id=ledger_id,
         transaction_id=transaction_id,
     )
+
+
+async def _persist_and_project_finance_transaction[Result](
+    session: AsyncSession,
+    *,
+    transaction: FinanceTransaction,
+    children: Sequence[FinanceAccountMovement | FinanceCategoryAllocation],
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Commit only after the complete aggregate can produce its public result."""
+
+    session.add(transaction)
+    try:
+        await session.flush()
+        session.add_all(children)
+        await session.flush()
+        detail = await _require_finance_transaction_detail(
+            session,
+            ledger_id=transaction.ledger_id,
+            transaction_id=transaction.id,
+        )
+        projected = project(detail)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return projected
 
 
 async def update_finance_category(

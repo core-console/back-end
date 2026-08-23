@@ -34,6 +34,7 @@ from core_console.modules.finance.schemas import (
     ExpenseTransactionResponse,
     FinanceTransactionResponse,
     IncomeTransactionResponse,
+    InternalTransferTransactionResponse,
     LedgerResponse,
     MoneyResponse,
     UpdateCategoryRequest,
@@ -63,6 +64,7 @@ from core_console.modules.finance.service import (
     create_finance_category,
     create_finance_ledger,
     create_finance_transaction,
+    create_internal_transfer_transaction,
     get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
@@ -142,6 +144,33 @@ def _to_transaction_response(
     """Build the complete closed projection before a create commit."""
 
     transaction = detail.transaction
+    if transaction.kind == "internal_transfer":
+        movement_accounts = {
+            item.movement.role: (item.movement, item.account) for item in detail.movement_details
+        }
+        source_movement, source_account = movement_accounts["source"]
+        destination_movement, destination_account = movement_accounts["destination"]
+        return InternalTransferTransactionResponse(
+            id=transaction.id,
+            ledgerId=transaction.ledger_id,
+            kind="internalTransfer",
+            transactionDate=transaction.transaction_date,
+            note=transaction.note,
+            sourceAccount=AccountReferenceResponse(
+                id=source_account.id,
+                name=source_account.name,
+                status=cast(Literal["active", "archived"], source_account.status),
+            ),
+            sourceAmount=_to_money_response(abs(source_movement.amount), source_movement.currency),
+            destinationAccount=AccountReferenceResponse(
+                id=destination_account.id,
+                name=destination_account.name,
+                status=cast(Literal["active", "archived"], destination_account.status),
+            ),
+            destinationAmount=_to_money_response(
+                abs(destination_movement.amount), destination_movement.currency
+            ),
+        )
     account = detail.account
     allocation = detail.allocation
     account_reference = AccountReferenceResponse(
@@ -858,8 +887,22 @@ async def post_transaction(
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> FinanceTransactionResponse:
-    """Create one Income or Expense transaction."""
+    """Create one supported Finance Transaction."""
 
+    if request.kind == "internalTransfer":
+        return await _run_finance_workflow(
+            create_internal_transfer_transaction(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                source_account_id=request.source_account_id,
+                destination_account_id=request.destination_account_id,
+                transaction_date=request.transaction_date,
+                amount=request.amount.to_money(),
+                note=request.note,
+                project=_to_transaction_response,
+            )
+        )
     allocation = request.category_allocations[0]
     return await _run_finance_workflow(
         create_finance_transaction(
@@ -898,7 +941,7 @@ async def get_transaction(
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> FinanceTransactionResponse:
-    """Read one Income or Expense in an owned Ledger."""
+    """Read one supported Finance Transaction in an owned Ledger."""
 
     detail = await _run_finance_workflow(
         get_finance_transaction(

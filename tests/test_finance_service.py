@@ -1,5 +1,6 @@
 """Finance application behavior independent of external infrastructure."""
 
+from decimal import Decimal
 from typing import Literal
 
 import pytest
@@ -11,6 +12,7 @@ from core_console.modules.finance.service import (
     InvalidFinanceLedgerNameError,
     InvalidFinanceTransactionError,
     derive_account_movement_amount,
+    derive_internal_transfer_movement_amounts,
     normalize_account_name,
     normalize_category_name,
     normalize_ledger_name,
@@ -91,6 +93,31 @@ def test_income_and_expense_derive_account_relative_movement_direction(
     )
 
     assert movement.canonical_amount == expected
+
+
+@pytest.mark.parametrize(
+    ("source_nature", "destination_nature", "source_amount", "destination_amount"),
+    [
+        ("asset", "asset", Decimal("-10.00"), Decimal("10.00")),
+        ("asset", "liability", Decimal("-10.00"), Decimal("-10.00")),
+        ("liability", "asset", Decimal("10.00"), Decimal("10.00")),
+        ("liability", "liability", Decimal("10.00"), Decimal("-10.00")),
+    ],
+)
+def test_internal_transfer_derives_each_account_relative_movement(
+    source_nature: Literal["asset", "liability"],
+    destination_nature: Literal["asset", "liability"],
+    source_amount: Decimal,
+    destination_amount: Decimal,
+) -> None:
+    source, destination = derive_internal_transfer_movement_amounts(
+        source_nature=source_nature,
+        destination_nature=destination_nature,
+        amount=Money.parse(amount="10.00", currency="CNY"),
+    )
+
+    assert source == Money(amount=source_amount, currency="CNY")
+    assert destination == Money(amount=destination_amount, currency="CNY")
 
 
 def test_transaction_note_trims_and_normalizes_blank_to_null() -> None:

@@ -352,7 +352,7 @@ def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> 
             )
 
 
-def test_openapi_describes_income_and_expense_create_and_detail_contract(
+def test_openapi_describes_transaction_create_and_detail_contract(
     app: FastAPI,
 ) -> None:
     schema = app.openapi()
@@ -375,19 +375,26 @@ def test_openapi_describes_income_and_expense_create_and_detail_contract(
         "mapping": {
             "income": "#/components/schemas/CreateIncomeTransactionRequest",
             "expense": "#/components/schemas/CreateExpenseTransactionRequest",
+            "internalTransfer": ("#/components/schemas/CreateInternalTransferTransactionRequest"),
         },
     }
     assert request_union["oneOf"] == [
         {"$ref": "#/components/schemas/CreateIncomeTransactionRequest"},
         {"$ref": "#/components/schemas/CreateExpenseTransactionRequest"},
+        {"$ref": "#/components/schemas/CreateInternalTransferTransactionRequest"},
     ]
 
     transaction_union = schema["components"]["schemas"]["FinanceTransactionResponse"]
     assert transaction_union["discriminator"]["propertyName"] == "kind"
-    assert set(transaction_union["discriminator"]["mapping"]) == {"income", "expense"}
+    assert set(transaction_union["discriminator"]["mapping"]) == {
+        "income",
+        "expense",
+        "internalTransfer",
+    }
     assert transaction_union["oneOf"] == [
         {"$ref": "#/components/schemas/IncomeTransactionResponse"},
         {"$ref": "#/components/schemas/ExpenseTransactionResponse"},
+        {"$ref": "#/components/schemas/InternalTransferTransactionResponse"},
     ]
 
     expected_transaction_fields = {
@@ -423,6 +430,30 @@ def test_openapi_describes_income_and_expense_create_and_detail_contract(
         assert response_allocations["maxItems"] == 1
         assert request_schema["properties"]["note"]["maxLength"] == 500
         assert response_schema["properties"]["note"]["anyOf"][0]["maxLength"] == 500
+
+    transfer_request = schema["components"]["schemas"]["CreateInternalTransferTransactionRequest"]
+    transfer_response = schema["components"]["schemas"]["InternalTransferTransactionResponse"]
+    assert transfer_request["additionalProperties"] is False
+    assert set(transfer_request["properties"]) == {
+        "kind",
+        "sourceAccountId",
+        "destinationAccountId",
+        "amount",
+        "transactionDate",
+        "note",
+    }
+    assert transfer_response["additionalProperties"] is False
+    assert set(transfer_response["properties"]) == {
+        "id",
+        "ledgerId",
+        "kind",
+        "transactionDate",
+        "note",
+        "sourceAccount",
+        "sourceAmount",
+        "destinationAccount",
+        "destinationAmount",
+    }
 
     for operation in (create_operation, detail_operation):
         for status, response in operation["responses"].items():

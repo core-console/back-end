@@ -387,6 +387,54 @@
         "title": "CreateIncomeTransactionRequest",
         "type": "object"
       },
+      "CreateInternalTransferTransactionRequest": {
+        "additionalProperties": false,
+        "description": "Record one atomic same-currency Transfer between two Accounts.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "destinationAccountId": {
+            "format": "uuid",
+            "title": "Destinationaccountid",
+            "type": "string"
+          },
+          "kind": {
+            "const": "internalTransfer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "sourceAccountId": {
+            "format": "uuid",
+            "title": "Sourceaccountid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "kind",
+          "sourceAccountId",
+          "destinationAccountId",
+          "amount",
+          "transactionDate"
+        ],
+        "title": "CreateInternalTransferTransactionRequest",
+        "type": "object"
+      },
       "CreateLedgerRequest": {
         "additionalProperties": false,
         "description": "Explicit first or additional Ledger creation.",
@@ -560,7 +608,8 @@
         "discriminator": {
           "mapping": {
             "expense": "#/components/schemas/ExpenseTransactionResponse",
-            "income": "#/components/schemas/IncomeTransactionResponse"
+            "income": "#/components/schemas/IncomeTransactionResponse",
+            "internalTransfer": "#/components/schemas/InternalTransferTransactionResponse"
           },
           "propertyName": "kind"
         },
@@ -570,6 +619,9 @@
           },
           {
             "$ref": "#/components/schemas/ExpenseTransactionResponse"
+          },
+          {
+            "$ref": "#/components/schemas/InternalTransferTransactionResponse"
           }
         ]
       },
@@ -655,6 +707,69 @@
           "kind"
         ],
         "title": "IncomeTransactionResponse",
+        "type": "object"
+      },
+      "InternalTransferTransactionResponse": {
+        "additionalProperties": false,
+        "description": "Closed public same-currency Internal Transfer projection.",
+        "properties": {
+          "destinationAccount": {
+            "$ref": "#/components/schemas/AccountReferenceResponse"
+          },
+          "destinationAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "internalTransfer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "sourceAccount": {
+            "$ref": "#/components/schemas/AccountReferenceResponse"
+          },
+          "sourceAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ledgerId",
+          "kind",
+          "transactionDate",
+          "note",
+          "sourceAccount",
+          "sourceAmount",
+          "destinationAccount",
+          "destinationAmount"
+        ],
+        "title": "InternalTransferTransactionResponse",
         "type": "object"
       },
       "LedgerResponse": {
@@ -2303,7 +2418,7 @@
     },
     "/finance/ledgers/{ledgerId}/transactions": {
       "post": {
-        "description": "Create one Income or Expense transaction.",
+        "description": "Create one supported Finance Transaction.",
         "operationId": "createFinanceTransaction",
         "parameters": [
           {
@@ -2324,7 +2439,8 @@
                 "discriminator": {
                   "mapping": {
                     "expense": "#/components/schemas/CreateExpenseTransactionRequest",
-                    "income": "#/components/schemas/CreateIncomeTransactionRequest"
+                    "income": "#/components/schemas/CreateIncomeTransactionRequest",
+                    "internalTransfer": "#/components/schemas/CreateInternalTransferTransactionRequest"
                   },
                   "propertyName": "kind"
                 },
@@ -2334,6 +2450,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/CreateExpenseTransactionRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateInternalTransferTransactionRequest"
                   }
                 ],
                 "title": "Request"
@@ -2423,7 +2542,7 @@
     },
     "/finance/ledgers/{ledgerId}/transactions/{transactionId}": {
       "get": {
-        "description": "Read one Income or Expense in an owned Ledger.",
+        "description": "Read one supported Finance Transaction in an owned Ledger.",
         "operationId": "getFinanceTransaction",
         "parameters": [
           {

@@ -878,6 +878,157 @@ async def test_future_transactions_apply_immediately_and_bound_tracking_start_ed
     assert accounts.json()[0]["currentBalance"] == {"amount": "120", "currency": "JPY"}
 
 
+async def test_internal_transfer_create_detail_balances_and_validation(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("internal-transfer-http")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Transfers"})
+        ledger_id = ledger.json()["id"]
+        source = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Checking",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "5.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        destination = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Card",
+                "nature": "liability",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-10",
+            },
+        )
+        command = {
+            "kind": "internalTransfer",
+            "sourceAccountId": source.json()["id"],
+            "destinationAccountId": destination.json()["id"],
+            "amount": {"amount": "10", "currency": "CNY"},
+            "transactionDate": "2030-01-01",
+            "note": "  pay card  ",
+        }
+        created = await client.post(f"/api/finance/ledgers/{ledger_id}/transactions", json=command)
+        detail = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}"
+        )
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+        identical = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={**command, "destinationAccountId": source.json()["id"]},
+        )
+        before_source = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={**command, "transactionDate": "2026-07-31"},
+        )
+        before_destination = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={**command, "transactionDate": "2026-08-09"},
+        )
+        await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{destination.json()['id']}/archive"
+        )
+        archived_destination = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions", json=command
+        )
+
+    assert created.status_code == HTTPStatus.CREATED
+    assert created.json() == detail.json()
+    assert created.json() == {
+        "id": created.json()["id"],
+        "ledgerId": ledger_id,
+        "kind": "internalTransfer",
+        "transactionDate": "2030-01-01",
+        "note": "pay card",
+        "sourceAccount": {
+            "id": source.json()["id"],
+            "name": "Checking",
+            "status": "active",
+        },
+        "sourceAmount": {"amount": "10.00", "currency": "CNY"},
+        "destinationAccount": {
+            "id": destination.json()["id"],
+            "name": "Card",
+            "status": "active",
+        },
+        "destinationAmount": {"amount": "10.00", "currency": "CNY"},
+    }
+    balances = {account["name"]: account["currentBalance"] for account in accounts.json()}
+    assert balances == {
+        "Checking": {"amount": "-5.00", "currency": "CNY"},
+        "Card": {"amount": "-10.00", "currency": "CNY"},
+    }
+    for invalid in (identical, before_source, before_destination):
+        assert invalid.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert invalid.json()["code"] == "validation_error"
+    assert archived_destination.status_code == HTTPStatus.CONFLICT
+    assert archived_destination.json()["code"] == "finance_account_archived"
+
+
+async def test_internal_transfer_enforces_currency_archive_and_account_scope(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("internal-transfer-scope")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        first = await client.post("/api/finance/ledgers", json={"name": "First"})
+        second = await client.post("/api/finance/ledgers", json={"name": "Second"})
+        first_id = first.json()["id"]
+        source = await _create_account(client, first_id, "Source", "CNY")
+        destination = await _create_account(client, first_id, "Destination", "CNY")
+        usd = await _create_account(client, first_id, "USD", "USD")
+        out_of_scope = await _create_account(client, second.json()["id"], "Private", "CNY")
+        command = {
+            "kind": "internalTransfer",
+            "sourceAccountId": source["id"],
+            "destinationAccountId": destination["id"],
+            "amount": {"amount": "1.00", "currency": "CNY"},
+            "transactionDate": "2026-08-01",
+        }
+        mismatched_accounts = await client.post(
+            f"/api/finance/ledgers/{first_id}/transactions",
+            json={**command, "destinationAccountId": usd["id"]},
+        )
+        mismatched_amount = await client.post(
+            f"/api/finance/ledgers/{first_id}/transactions",
+            json={**command, "amount": {"amount": "1.00", "currency": "USD"}},
+        )
+        wrong_source = await client.post(
+            f"/api/finance/ledgers/{first_id}/transactions",
+            json={**command, "sourceAccountId": out_of_scope["id"]},
+        )
+        wrong_destination = await client.post(
+            f"/api/finance/ledgers/{first_id}/transactions",
+            json={**command, "destinationAccountId": out_of_scope["id"]},
+        )
+        await client.post(f"/api/finance/ledgers/{first_id}/accounts/{source['id']}/archive")
+        archived_source = await client.post(
+            f"/api/finance/ledgers/{first_id}/transactions", json=command
+        )
+
+    for invalid in (mismatched_accounts, mismatched_amount):
+        assert invalid.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert invalid.json()["code"] == "validation_error"
+    for hidden in (wrong_source, wrong_destination):
+        assert hidden.status_code == HTTPStatus.NOT_FOUND
+        assert hidden.json()["code"] == "finance_account_not_found"
+    assert archived_source.status_code == HTTPStatus.CONFLICT
+    assert archived_source.json()["code"] == "finance_account_archived"
+
+
 async def test_user_can_manage_the_complete_category_lifecycle(
     postgres_database_url: str,
     postgres_session: AsyncSession,
@@ -1073,6 +1224,27 @@ async def _post_transaction(
             ],
         },
     )
+
+
+async def _create_account(
+    client: AsyncClient,
+    ledger_id: str,
+    name: str,
+    currency: str,
+) -> dict[str, object]:
+    response = await client.post(
+        f"/api/finance/ledgers/{ledger_id}/accounts",
+        json={
+            "name": name,
+            "nature": "asset",
+            "currency": currency,
+            "openingBalance": {"amount": "0", "currency": currency},
+            "trackingStartDate": "2026-08-01",
+        },
+    )
+    assert response.status_code == HTTPStatus.CREATED
+    payload: dict[str, object] = response.json()
+    return payload
 
 
 def _user(subject: str) -> User:

@@ -145,8 +145,24 @@ class ExpenseTransactionResponse(_OrdinaryTransactionResponse):
     kind: Literal["expense"]
 
 
+class InternalTransferTransactionResponse(BaseModel):
+    """Closed public same-currency Internal Transfer projection."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    kind: Literal["internalTransfer"]
+    transaction_date: date = Field(alias="transactionDate")
+    note: str | None = Field(max_length=500)
+    source_account: AccountReferenceResponse = Field(alias="sourceAccount")
+    source_amount: MoneyResponse = Field(alias="sourceAmount")
+    destination_account: AccountReferenceResponse = Field(alias="destinationAccount")
+    destination_amount: MoneyResponse = Field(alias="destinationAmount")
+
+
 type FinanceTransactionResponse = Annotated[
-    IncomeTransactionResponse | ExpenseTransactionResponse,
+    IncomeTransactionResponse | ExpenseTransactionResponse | InternalTransferTransactionResponse,
     Field(discriminator="kind"),
 ]
 
@@ -353,7 +369,55 @@ class CreateExpenseTransactionRequest(_CreateOrdinaryTransactionRequest):
     kind: Literal["expense"]
 
 
+class CreateInternalTransferTransactionRequest(_RequestModel):
+    """Record one atomic same-currency Transfer between two Accounts."""
+
+    kind: Literal["internalTransfer"]
+    source_account_id: UUID = Field(alias="sourceAccountId")
+    destination_account_id: UUID = Field(alias="destinationAccountId")
+    amount: MoneyRequest
+    transaction_date: FinanceRequestDate = Field(alias="transactionDate")
+    note: str | None = Field(
+        default=None,
+        strict=True,
+        json_schema_extra={"maxLength": 500},
+    )
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        """Apply the common Transaction note contract."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 500:
+            raise PydanticCustomError(
+                "value_error",
+                "Transaction note must not exceed 500 characters.",
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_transfer(self) -> Self:
+        if self.source_account_id == self.destination_account_id:
+            raise PydanticCustomError(
+                "value_error",
+                "Source and Destination Accounts must be distinct.",
+            )
+        if self.amount.to_money().amount <= 0:
+            raise PydanticCustomError(
+                "value_error",
+                "Transfer amount must be positive.",
+            )
+        return self
+
+
 type CreateFinanceTransactionRequest = Annotated[
-    CreateIncomeTransactionRequest | CreateExpenseTransactionRequest,
+    CreateIncomeTransactionRequest
+    | CreateExpenseTransactionRequest
+    | CreateInternalTransferTransactionRequest,
     Field(discriminator="kind"),
 ]

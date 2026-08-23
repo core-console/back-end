@@ -30,14 +30,45 @@ class FinanceAccountBalance:
 
 
 @dataclass(frozen=True, slots=True)
-class FinanceTransactionDetail:
-    """Complete Income or Expense state with current embedded references."""
+class FinanceMovementDetail:
+    """One durable Movement paired with its current Account reference."""
 
-    transaction: FinanceTransaction
     movement: FinanceAccountMovement
     account: FinanceAccount
-    allocation: FinanceCategoryAllocation
-    category: FinanceCategory | None
+
+
+@dataclass(frozen=True, slots=True)
+class FinanceTransactionDetail:
+    """Complete Transaction aggregate with current embedded references."""
+
+    transaction: FinanceTransaction
+    movement_details: tuple[FinanceMovementDetail, ...]
+    allocations: tuple[FinanceCategoryAllocation, ...]
+    categories: tuple[FinanceCategory | None, ...]
+
+    @property
+    def movement(self) -> FinanceAccountMovement:
+        """Return the single ordinary-Transaction Movement."""
+
+        return self.movement_details[0].movement
+
+    @property
+    def account(self) -> FinanceAccount:
+        """Return the single ordinary-Transaction Account."""
+
+        return self.movement_details[0].account
+
+    @property
+    def allocation(self) -> FinanceCategoryAllocation:
+        """Return the single ordinary-Transaction Allocation."""
+
+        return self.allocations[0]
+
+    @property
+    def category(self) -> FinanceCategory | None:
+        """Return the single ordinary-Transaction Category reference."""
+
+        return self.categories[0]
 
 
 def _current_balance_expression() -> ColumnElement[Decimal]:
@@ -136,6 +167,33 @@ async def get_finance_account_balance(
     return FinanceAccountBalance(account=account, current_balance=current_balance)
 
 
+async def get_finance_account_balances_for_update(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    account_ids: frozenset[UUID],
+) -> Sequence[FinanceAccountBalance]:
+    """Lock and return participating Accounts in deterministic UUID order."""
+
+    statement = (
+        select(
+            FinanceAccount,
+            _current_balance_expression().label("current_balance"),
+        )
+        .where(
+            FinanceAccount.ledger_id == ledger_id,
+            FinanceAccount.id.in_(account_ids),
+        )
+        .order_by(FinanceAccount.id)
+        .with_for_update(of=FinanceAccount)
+    )
+    result = await session.execute(statement)
+    return [
+        FinanceAccountBalance(account=account, current_balance=current_balance)
+        for account, current_balance in result.all()
+    ]
+
+
 async def has_finance_account_history(
     session: AsyncSession,
     *,
@@ -218,7 +276,7 @@ async def get_finance_transaction_detail(
                 FinanceAccount.ledger_id == FinanceAccountMovement.ledger_id,
             ),
         )
-        .join(
+        .outerjoin(
             FinanceCategoryAllocation,
             and_(
                 FinanceCategoryAllocation.transaction_id == FinanceTransaction.id,
@@ -236,18 +294,28 @@ async def get_finance_transaction_detail(
             FinanceTransaction.id == transaction_id,
             FinanceTransaction.ledger_id == ledger_id,
         )
+        .order_by(FinanceAccountMovement.role)
     )
     result = await session.execute(statement)
-    row = result.one_or_none()
-    if row is None:
+    rows = result.all()
+    if not rows:
         return None
-    transaction, movement, account, allocation, category = row
+    transaction = rows[0][0]
+    movement_details: list[FinanceMovementDetail] = []
+    allocations: list[FinanceCategoryAllocation] = []
+    categories: list[FinanceCategory | None] = []
+    seen_allocations: set[UUID] = set()
+    for _, movement, account, allocation, category in rows:
+        movement_details.append(FinanceMovementDetail(movement=movement, account=account))
+        if allocation is not None and allocation.id not in seen_allocations:
+            allocations.append(allocation)
+            categories.append(category)
+            seen_allocations.add(allocation.id)
     return FinanceTransactionDetail(
         transaction=transaction,
-        movement=movement,
-        account=account,
-        allocation=allocation,
-        category=category,
+        movement_details=tuple(movement_details),
+        allocations=tuple(allocations),
+        categories=tuple(categories),
     )
 
 
