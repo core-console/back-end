@@ -136,6 +136,19 @@ async def get_finance_account_balance(
     return FinanceAccountBalance(account=account, current_balance=current_balance)
 
 
+async def has_finance_account_history(
+    session: AsyncSession,
+    *,
+    account_id: UUID,
+) -> bool:
+    """Return whether durable Account Movement history references an Account."""
+
+    statement = select(FinanceAccountMovement.id).where(
+        FinanceAccountMovement.account_id == account_id
+    )
+    return await session.scalar(statement.limit(1)) is not None
+
+
 async def list_finance_categories(
     session: AsyncSession,
     *,

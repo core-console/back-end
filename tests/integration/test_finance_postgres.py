@@ -32,12 +32,34 @@ from core_console.modules.finance.models import (
 )
 from core_console.modules.finance.money import Money
 from core_console.modules.finance.queries import FinanceTransactionDetail
-from core_console.modules.finance.service import create_finance_transaction
+from core_console.modules.finance.service import (
+    FinanceAccountSemanticsLockedError,
+    correct_finance_account_semantics,
+    create_finance_transaction,
+)
 from core_console.modules.users.models import User
 
 pytestmark = pytest.mark.anyio
 
 ALEMBIC_CONFIG_PATH = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+
+async def _wait_for_postgres_backend_lock(
+    observer_session: AsyncSession,
+    *,
+    backend_pid: int,
+) -> bool:
+    """Wait briefly for one PostgreSQL backend to report a row-lock wait."""
+
+    for _ in range(100):
+        wait_event_type = await observer_session.scalar(
+            text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :backend_pid"),
+            {"backend_pid": backend_pid},
+        )
+        if wait_event_type == "Lock":
+            return True
+        await asyncio.sleep(0.01)
+    return False
 
 
 class FinanceLedgerSchemaInspection(TypedDict):
@@ -1112,19 +1134,10 @@ async def test_database_serializes_transaction_commit_with_tracking_start_change
         await account_session.flush()
 
         transaction_commit = asyncio.create_task(transaction_session.commit())
-        transaction_waited_for_account = False
-        for _ in range(100):
-            wait_event_type = await observer_session.scalar(
-                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :backend_pid"),
-                {"backend_pid": transaction_backend_pid},
-            )
-            if wait_event_type == "Lock":
-                transaction_waited_for_account = True
-                break
-            if transaction_commit.done():
-                break
-            await asyncio.sleep(0.01)
-
+        transaction_waited_for_account = await _wait_for_postgres_backend_lock(
+            observer_session,
+            backend_pid=transaction_backend_pid,
+        )
         assert transaction_waited_for_account
         await account_session.commit()
         with pytest.raises(IntegrityError):
@@ -1141,6 +1154,100 @@ async def test_database_serializes_transaction_commit_with_tracking_start_change
     assert persisted_account is not None
     assert persisted_account.tracking_start_date == date(2026, 8, 2)
     assert persisted_transaction_count == 0
+
+
+async def test_database_serializes_semantic_correction_after_concurrent_history_creation(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("semantic-correction-concurrency")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as transaction_session,
+        session_factory() as correction_session,
+        session_factory() as observer_session,
+    ):
+        transaction_account = await transaction_session.get(
+            FinanceAccount,
+            account.id,
+            with_for_update=True,
+        )
+        assert transaction_account is not None
+        transaction = FinanceTransaction(
+            ledger_id=ledger.id,
+            kind="income",
+            transaction_date=date(2026, 8, 1),
+            note=None,
+        )
+        transaction_session.add(transaction)
+        await transaction_session.flush()
+        transaction_session.add_all(
+            [
+                FinanceAccountMovement(
+                    transaction_id=transaction.id,
+                    ledger_id=ledger.id,
+                    account_id=account.id,
+                    amount=Decimal("10.00"),
+                    currency="CNY",
+                ),
+                FinanceCategoryAllocation(
+                    transaction_id=transaction.id,
+                    ledger_id=ledger.id,
+                    category_id=None,
+                    amount=Decimal("10.00"),
+                    currency="CNY",
+                ),
+            ]
+        )
+        await transaction_session.flush()
+
+        correction_backend_pid = await correction_session.scalar(select(func.pg_backend_pid()))
+        assert correction_backend_pid is not None
+        correction_task = asyncio.create_task(
+            correct_finance_account_semantics(
+                correction_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                nature="liability",
+                currency=None,
+            )
+        )
+        correction_waited_for_account = await _wait_for_postgres_backend_lock(
+            observer_session,
+            backend_pid=correction_backend_pid,
+        )
+        assert correction_waited_for_account
+        await transaction_session.commit()
+        with pytest.raises(FinanceAccountSemanticsLockedError):
+            await correction_task
+        await correction_session.rollback()
+
+        persisted_account = await observer_session.get(FinanceAccount, account.id)
+        persisted_movement_count = await observer_session.scalar(
+            select(func.count())
+            .select_from(FinanceAccountMovement)
+            .where(FinanceAccountMovement.account_id == account.id)
+        )
+
+    assert persisted_account is not None
+    assert (persisted_account.nature, persisted_account.currency) == ("asset", "CNY")
+    assert persisted_movement_count == 1
 
 
 async def test_database_allows_transaction_on_tracking_start_boundary(

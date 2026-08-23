@@ -26,6 +26,7 @@ from core_console.modules.finance.queries import (
     get_finance_category,
     get_finance_ledger,
     get_finance_transaction_detail,
+    has_finance_account_history,
     list_finance_account_balances,
     list_finance_categories,
 )
@@ -57,6 +58,10 @@ class InvalidFinanceAccountMoneyError(ValueError):
 
 class FinanceAccountNotFoundError(Exception):
     """The addressed Account is missing from the owned addressed Ledger."""
+
+
+class FinanceAccountSemanticsLockedError(Exception):
+    """Account Nature and Currency cannot change after the Account is locked."""
 
 
 class FinanceAccountArchivedError(Exception):
@@ -286,6 +291,45 @@ async def update_finance_account(
         account.tracking_start_date = tracking_start_date
     if name is None and opening_balance is None and tracking_start_date is None:
         return balance
+    await session.flush()
+    updated_balance = await _require_finance_account_balance(
+        session,
+        ledger_id=ledger_id,
+        account_id=account_id,
+    )
+    await session.commit()
+    return updated_balance
+
+
+async def correct_finance_account_semantics(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    account_id: UUID,
+    nature: Literal["asset", "liability"] | None,
+    currency: CurrencyCode | None,
+) -> FinanceAccountBalance:
+    """Correct Nature or Currency only while one Account remains semantically unlocked."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    balance = await _require_finance_account_balance(
+        session,
+        ledger_id=ledger_id,
+        account_id=account_id,
+        for_update=True,
+    )
+    account = balance.account
+    if account.opening_balance != 0 or await has_finance_account_history(
+        session,
+        account_id=account.id,
+    ):
+        raise FinanceAccountSemanticsLockedError
+
+    if nature is not None:
+        account.nature = nature
+    if currency is not None:
+        account.currency = currency
     await session.flush()
     updated_balance = await _require_finance_account_balance(
         session,

@@ -25,6 +25,7 @@ from core_console.modules.finance.schemas import (
     CategoryAllocationResponse,
     CategoryReferenceResponse,
     CategoryResponse,
+    CorrectAccountSemanticsRequest,
     CreateAccountRequest,
     CreateCategoryRequest,
     CreateFinanceTransactionRequest,
@@ -35,13 +36,14 @@ from core_console.modules.finance.schemas import (
     IncomeTransactionResponse,
     LedgerResponse,
     MoneyResponse,
-    UpdateAccountRequest,
     UpdateCategoryRequest,
+    UpdateFinanceAccountRequest,
     UpdateLedgerRequest,
 )
 from core_console.modules.finance.service import (
     FinanceAccountArchivedError,
     FinanceAccountNotFoundError,
+    FinanceAccountSemanticsLockedError,
     FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
     FinanceCategoryNotFoundError,
@@ -56,6 +58,7 @@ from core_console.modules.finance.service import (
     InvalidFinanceTransactionError,
     archive_finance_account,
     archive_finance_category,
+    correct_finance_account_semantics,
     create_finance_account,
     create_finance_category,
     create_finance_ledger,
@@ -78,6 +81,7 @@ router = APIRouter(prefix="/api/finance", tags=["Finance"])
 type _FinanceApplicationError = (
     FinanceAccountArchivedError
     | FinanceAccountNotFoundError
+    | FinanceAccountSemanticsLockedError
     | FinanceCategoryArchivedError
     | FinanceCategoryNameConflictError
     | FinanceCategoryNotFoundError
@@ -201,6 +205,7 @@ async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
     except (
         FinanceAccountArchivedError,
         FinanceAccountNotFoundError,
+        FinanceAccountSemanticsLockedError,
         FinanceCategoryArchivedError,
         FinanceCategoryNameConflictError,
         FinanceCategoryNotFoundError,
@@ -250,6 +255,16 @@ def _finance_problem_for(error: _FinanceApplicationError) -> ApplicationProblem:
             title="Not Found",
             detail="The requested Finance Account does not exist.",
             code="finance_account_not_found",
+        )
+    if isinstance(error, FinanceAccountSemanticsLockedError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail=(
+                "Account Nature or Currency cannot change because Opening Balance is "
+                "non-zero or Transaction history exists."
+            ),
+            code="finance_account_semantics_locked",
         )
     if isinstance(error, FinanceCategoryNotFoundError):
         return ApplicationProblem(
@@ -450,11 +465,15 @@ async def post_account(
     "/ledgers/{ledgerId}/accounts/{accountId}",
     operation_id="updateFinanceAccount",
     summary="Update a Finance Account",
-    description="Updates only ordinary mutable properties of one owned Account.",
+    description=(
+        "Updates ordinary mutable properties or corrects unlocked Nature and Currency "
+        "of one owned Account."
+    ),
     response_model=AccountResponse,
     responses={
         403: {"model": ProblemDetails, "description": "Access is denied."},
         404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "Account semantics are locked."},
         422: {"model": ProblemDetails, "description": "The request is invalid."},
         500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
         503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
@@ -464,27 +483,41 @@ async def post_account(
 async def patch_account(
     ledger_id: Annotated[UUID, Path(alias="ledgerId")],
     account_id: Annotated[UUID, Path(alias="accountId")],
-    request: UpdateAccountRequest,
+    request: UpdateFinanceAccountRequest,
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AccountResponse:
-    """Apply omitted-field ordinary editing to one owned Account."""
+    """Apply one closed ordinary-edit or semantic-correction Account workflow."""
 
-    fields = request.model_fields_set
-    opening_balance = request.opening_balance.to_money() if "opening_balance" in fields else None
-    balance = await _run_finance_workflow(
-        update_finance_account(
-            session,
-            owner_id=actor.id,
-            ledger_id=ledger_id,
-            account_id=account_id,
-            name=request.name if "name" in fields else None,
-            opening_balance=opening_balance,
-            tracking_start_date=(
-                request.tracking_start_date if "tracking_start_date" in fields else None
-            ),
+    if isinstance(request, CorrectAccountSemanticsRequest):
+        balance = await _run_finance_workflow(
+            correct_finance_account_semantics(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                account_id=account_id,
+                nature=request.nature,
+                currency=request.currency,
+            )
         )
-    )
+    else:
+        fields = request.model_fields_set
+        opening_balance = (
+            request.opening_balance.to_money() if "opening_balance" in fields else None
+        )
+        balance = await _run_finance_workflow(
+            update_finance_account(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                account_id=account_id,
+                name=request.name if "name" in fields else None,
+                opening_balance=opening_balance,
+                tracking_start_date=(
+                    request.tracking_start_date if "tracking_start_date" in fields else None
+                ),
+            )
+        )
     return _to_account_response(balance)
 
 

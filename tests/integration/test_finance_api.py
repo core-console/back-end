@@ -284,6 +284,221 @@ async def test_user_can_manage_account_lifecycle_with_account_relative_balances(
     assert unarchived_again.json() == unarchived.json()
 
 
+async def test_user_can_correct_nature_on_an_unlocked_zero_position_account(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("account-nature-correction")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        corrected = await client.patch(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}",
+            json={"nature": "liability"},
+        )
+
+    assert account.status_code == HTTPStatus.CREATED
+    assert corrected.status_code == HTTPStatus.OK
+    assert corrected.json() == {
+        **account.json(),
+        "nature": "liability",
+        "openingBalance": {"amount": "0.00", "currency": "CNY"},
+        "currentBalance": {"amount": "0.00", "currency": "CNY"},
+    }
+
+
+async def test_user_can_correct_currency_on_an_unlocked_zero_position_account(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("account-currency-correction")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        corrected = await client.patch(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}",
+            json={"currency": "JPY"},
+        )
+
+    assert account.status_code == HTTPStatus.CREATED
+    assert corrected.status_code == HTTPStatus.OK
+    assert corrected.json() == {
+        **account.json(),
+        "currency": "JPY",
+        "openingBalance": {"amount": "0", "currency": "JPY"},
+        "currentBalance": {"amount": "0", "currency": "JPY"},
+    }
+
+
+async def test_user_can_correct_nature_and_currency_together_on_an_unlocked_account(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("account-combined-correction")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        corrected = await client.patch(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}",
+            json={"nature": "liability", "currency": "USD"},
+        )
+
+    assert account.status_code == HTTPStatus.CREATED
+    assert corrected.status_code == HTTPStatus.OK
+    assert corrected.json() == {
+        **account.json(),
+        "nature": "liability",
+        "currency": "USD",
+        "openingBalance": {"amount": "0.00", "currency": "USD"},
+        "currentBalance": {"amount": "0.00", "currency": "USD"},
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    ({"nature": "liability"}, {"currency": "USD"}),
+)
+async def test_account_semantic_correction_rejects_nonzero_opening_balance(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+    body: dict[str, str],
+) -> None:
+    actor = _user(f"account-opening-lock-{next(iter(body))}")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "25.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        account_path = f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}"
+        rejected = await client.patch(account_path, json=body)
+        listed = await client.get(f"/api/finance/ledgers/{ledger.json()['id']}/accounts")
+
+    assert account.status_code == HTTPStatus.CREATED
+    assert rejected.status_code == HTTPStatus.CONFLICT
+    assert rejected.headers["content-type"].startswith("application/problem+json")
+    assert rejected.json() == {
+        "type": "about:blank",
+        "title": "Conflict",
+        "status": HTTPStatus.CONFLICT,
+        "detail": (
+            "Account Nature or Currency cannot change because Opening Balance is "
+            "non-zero or Transaction history exists."
+        ),
+        "instance": account_path,
+        "code": "finance_account_semantics_locked",
+    }
+    assert listed.json() == [account.json()]
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_balance"),
+    (("income", "10.00"), ("expense", "-10.00")),
+)
+async def test_account_semantic_correction_rejects_any_durable_transaction_history(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+    kind: str,
+    expected_balance: str,
+) -> None:
+    actor = _user(f"account-history-lock-{kind}")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        transaction = await client.post(
+            f"/api/finance/ledgers/{ledger.json()['id']}/transactions",
+            json={
+                "kind": kind,
+                "accountId": account.json()["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "10.00", "currency": "CNY"},
+                "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
+            },
+        )
+        account_path = f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}"
+        rejected = await client.patch(account_path, json={"nature": "liability"})
+        listed = await client.get(f"/api/finance/ledgers/{ledger.json()['id']}/accounts")
+
+    assert account.status_code == HTTPStatus.CREATED
+    assert transaction.status_code == HTTPStatus.CREATED
+    assert rejected.status_code == HTTPStatus.CONFLICT
+    assert rejected.headers["content-type"].startswith("application/problem+json")
+    assert rejected.json() == {
+        "type": "about:blank",
+        "title": "Conflict",
+        "status": HTTPStatus.CONFLICT,
+        "detail": (
+            "Account Nature or Currency cannot change because Opening Balance is "
+            "non-zero or Transaction history exists."
+        ),
+        "instance": account_path,
+        "code": "finance_account_semantics_locked",
+    }
+    assert listed.json() == [
+        {
+            **account.json(),
+            "currentBalance": {"amount": expected_balance, "currency": "CNY"},
+        }
+    ]
+
+
 async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
     postgres_database_url: str,
     postgres_session: AsyncSession,
@@ -310,24 +525,43 @@ async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
         non_owned_ledger = await client.get(
             f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts"
         )
+        non_owned_semantic = await client.patch(
+            f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts/{account.json()['id']}",
+            json={"nature": "liability"},
+        )
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         wrong_ledger = await client.patch(
             f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{account.json()['id']}",
             json={"name": "Leaked"},
         )
+        wrong_ledger_semantic = await client.patch(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{account.json()['id']}",
+            json={"nature": "liability"},
+        )
         missing_account = await client.patch(
             f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{uuid4()}",
             json={"name": "Missing"},
         )
+        missing_semantic = await client.patch(
+            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{uuid4()}",
+            json={"currency": "USD"},
+        )
 
     assert non_owned_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert non_owned_semantic.status_code == HTTPStatus.NOT_FOUND
     assert non_owned_ledger.json()["code"] == "finance_ledger_not_found"
+    assert non_owned_semantic.json()["code"] == "finance_ledger_not_found"
     assert wrong_ledger.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_ledger_semantic.status_code == HTTPStatus.NOT_FOUND
     assert missing_account.status_code == HTTPStatus.NOT_FOUND
+    assert missing_semantic.status_code == HTTPStatus.NOT_FOUND
     assert wrong_ledger.json()["code"] == "finance_account_not_found"
+    assert wrong_ledger_semantic.json()["code"] == "finance_account_not_found"
     assert missing_account.json()["code"] == "finance_account_not_found"
+    assert missing_semantic.json()["code"] == "finance_account_not_found"
     assert wrong_ledger.json()["detail"] == missing_account.json()["detail"]
+    assert wrong_ledger_semantic.json()["detail"] == missing_semantic.json()["detail"]
 
 
 async def test_account_list_order_uses_status_case_folded_name_and_identifier(

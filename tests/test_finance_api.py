@@ -18,6 +18,7 @@ from core_console.modules.finance import api as finance_api
 from core_console.modules.finance.service import (
     FinanceAccountArchivedError,
     FinanceAccountNotFoundError,
+    FinanceAccountSemanticsLockedError,
     FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
     FinanceCategoryNotFoundError,
@@ -69,6 +70,22 @@ def _active_user() -> CurrentUser:
                 "title": "Not Found",
                 "detail": "The requested Finance Ledger does not exist.",
                 "code": "finance_ledger_not_found",
+            },
+        ),
+        (
+            "PATCH",
+            f"/api/finance/ledgers/{uuid4()}/accounts/{uuid4()}",
+            {"nature": "liability"},
+            "correct_finance_account_semantics",
+            FinanceAccountSemanticsLockedError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": (
+                    "Account Nature or Currency cannot change because Opening Balance is "
+                    "non-zero or Transaction history exists."
+                ),
+                "code": "finance_account_semantics_locked",
             },
         ),
         (
@@ -318,13 +335,19 @@ async def test_create_account_rejects_invalid_money_without_database_work(
 @pytest.mark.parametrize(
     "body",
     (
-        {"nature": "liability"},
-        {"currency": "USD"},
+        {
+            "nature": "liability",
+            "openingBalance": {"amount": "0", "currency": "CNY"},
+        },
+        {"currency": "USD", "trackingStartDate": "2026-08-01"},
+        {"nature": "liability", "currency": "USD", "name": "Cash"},
+        {"nature": "equity"},
+        {"currency": "EUR"},
         {"status": "archived"},
         {"currentBalance": {"amount": "0.00", "currency": "CNY"}},
     ),
 )
-async def test_account_patch_rejects_semantics_and_managed_fields_without_database_work(
+async def test_account_patch_rejects_mixed_semantic_and_managed_fields_without_database_work(
     app: FastAPI,
     client: AsyncClient,
     body: dict[str, object],

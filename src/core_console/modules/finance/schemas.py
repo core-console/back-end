@@ -244,6 +244,45 @@ class UpdateAccountRequest(_RequestModel):
     )
 
 
+class CorrectAccountSemanticsRequest(_RequestModel):
+    """Restricted Nature and Currency correction fields."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "anyOf": [
+                {"required": ["nature"]},
+                {"required": ["currency"]},
+            ]
+        }
+    )
+
+    nature: Literal["asset", "liability"] = Field(default=None)  # type: ignore[arg-type]
+    currency: CurrencyCode = Field(default=None)  # type: ignore[arg-type]
+
+    @model_validator(mode="after")
+    def validate_correction_fields(self) -> Self:
+        fields = self.model_fields_set
+        if not fields & {"nature", "currency"}:
+            raise PydanticCustomError(
+                "value_error",
+                "Nature or Currency must be provided for semantic correction.",
+            )
+        if ("nature" in fields and self.nature is None) or (
+            "currency" in fields and self.currency is None
+        ):
+            raise PydanticCustomError(
+                "value_error",
+                "Nature and Currency cannot be null for semantic correction.",
+            )
+        return self
+
+
+type UpdateFinanceAccountRequest = Annotated[
+    UpdateAccountRequest | CorrectAccountSemanticsRequest,
+    Field(union_mode="left_to_right"),
+]
+
+
 class CategoryAllocationRequest(_RequestModel):
     """One complete v1 allocation, optionally Uncategorized."""
 

@@ -257,6 +257,29 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
     }
     assert "required" not in update_schema
 
+    patch_operation = account_path["patch"]
+    assert patch_operation["requestBody"]["required"] is True
+    assert patch_operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "anyOf": [
+            {"$ref": "#/components/schemas/UpdateAccountRequest"},
+            {"$ref": "#/components/schemas/CorrectAccountSemanticsRequest"},
+        ],
+        "title": "Request",
+    }
+    correction_schema = schema["components"]["schemas"]["CorrectAccountSemanticsRequest"]
+    assert correction_schema["additionalProperties"] is False
+    assert set(correction_schema["properties"]) == {"nature", "currency"}
+    assert "required" not in correction_schema
+    assert correction_schema["anyOf"] == [
+        {"required": ["nature"]},
+        {"required": ["currency"]},
+    ]
+    assert correction_schema["properties"]["nature"]["enum"] == ["asset", "liability"]
+    assert correction_schema["properties"]["currency"] == {
+        "$ref": "#/components/schemas/CurrencyCode"
+    }
+    assert "409" in patch_operation["responses"]
+
     for operation in operations:
         assert operation["security"] == []
         assert {parameter["name"] for parameter in operation["parameters"]} <= {
