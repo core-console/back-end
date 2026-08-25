@@ -390,11 +390,13 @@ def test_openapi_describes_transaction_create_and_detail_contract(
         "income",
         "expense",
         "internalTransfer",
+        "balanceAdjustment",
     }
     assert transaction_union["oneOf"] == [
         {"$ref": "#/components/schemas/IncomeTransactionResponse"},
         {"$ref": "#/components/schemas/ExpenseTransactionResponse"},
         {"$ref": "#/components/schemas/InternalTransferTransactionResponse"},
+        {"$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"},
     ]
 
     expected_transaction_fields = {
@@ -461,6 +463,99 @@ def test_openapi_describes_transaction_create_and_detail_contract(
                 assert response["content"]["application/json"]["schema"] == {
                     "$ref": "#/components/schemas/FinanceTransactionResponse"
                 }
+                continue
+            assert set(response["content"]) == {"application/problem+json"}
+            assert (
+                response["content"]["application/problem+json"]["schema"]["$ref"]
+                == "#/components/schemas/ProblemDetails"
+            )
+
+
+def test_openapi_describes_balance_adjustment_context_and_create_contract(
+    app: FastAPI,
+) -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    context = paths["/finance/ledgers/{ledgerId}/accounts/{accountId}/balance-adjustment-context"][
+        "get"
+    ]
+    create = paths["/finance/ledgers/{ledgerId}/balance-adjustments"]["post"]
+
+    assert context["operationId"] == "getBalanceAdjustmentContext"
+    assert create["operationId"] == "createBalanceAdjustment"
+    assert context["security"] == []
+    assert create["security"] == []
+    assert [(item["name"], item["in"], item["required"]) for item in context["parameters"]] == [
+        ("ledgerId", "path", True),
+        ("accountId", "path", True),
+        ("transactionDate", "query", True),
+        ("replacingTransactionId", "query", False),
+    ]
+    context_schema = schema["components"]["schemas"]["BalanceAdjustmentContextResponse"]
+    assert context_schema["additionalProperties"] is False
+    assert set(context_schema["properties"]) == {
+        "account",
+        "transactionDate",
+        "derivedComparisonBalance",
+        "accountNature",
+    }
+    request_schema = schema["components"]["schemas"]["CreateBalanceAdjustmentRequest"]
+    assert request_schema["additionalProperties"] is False
+    assert set(request_schema["properties"]) == {
+        "accountId",
+        "transactionDate",
+        "expectedDerivedBalance",
+        "expectedAccountNature",
+        "targetBalance",
+        "note",
+    }
+    assert set(request_schema["required"]) == {
+        "accountId",
+        "transactionDate",
+        "expectedDerivedBalance",
+        "expectedAccountNature",
+        "targetBalance",
+    }
+    transaction_schema = schema["components"]["schemas"]["BalanceAdjustmentTransactionResponse"]
+    assert transaction_schema["additionalProperties"] is False
+    assert set(transaction_schema["properties"]) == {
+        "id",
+        "ledgerId",
+        "kind",
+        "transactionDate",
+        "note",
+        "account",
+        "correctionDelta",
+    }
+    result_schema = schema["components"]["schemas"]["BalanceAdjustmentResultResponse"]
+    assert result_schema["discriminator"] == {
+        "propertyName": "outcome",
+        "mapping": {
+            "created": "#/components/schemas/BalanceAdjustmentCreatedResultResponse",
+            "noChange": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse",
+        },
+    }
+    assert result_schema["oneOf"] == [
+        {"$ref": "#/components/schemas/BalanceAdjustmentCreatedResultResponse"},
+        {"$ref": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse"},
+    ]
+    created_result = schema["components"]["schemas"]["BalanceAdjustmentCreatedResultResponse"]
+    no_change_result = schema["components"]["schemas"]["BalanceAdjustmentNoChangeResultResponse"]
+    assert created_result["required"] == ["outcome", "transaction"]
+    assert no_change_result["required"] == ["outcome", "transaction"]
+    assert created_result["properties"]["transaction"] == {
+        "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
+    }
+    assert no_change_result["properties"]["transaction"]["type"] == "null"
+    assert context["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/BalanceAdjustmentContextResponse"
+    }
+    assert create["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/BalanceAdjustmentResultResponse"
+    }
+    for operation in (context, create):
+        for status, response in operation["responses"].items():
+            if status.startswith("2"):
                 continue
             assert set(response["content"]) == {"application/problem+json"}
             assert (

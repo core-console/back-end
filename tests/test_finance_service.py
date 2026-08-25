@@ -1,11 +1,15 @@
 """Finance application behavior independent of external infrastructure."""
 
-from decimal import Decimal
+from decimal import MAX_EMAX, MIN_ETINY, Decimal, DefaultContext, Overflow, getcontext
 from typing import Literal
 
 import pytest
 
-from core_console.modules.finance.money import InvalidMoneyError, Money
+from core_console.modules.finance.money import (
+    InvalidMoneyError,
+    Money,
+    subtract_money_amounts_exact,
+)
 from core_console.modules.finance.service import (
     InvalidFinanceAccountNameError,
     InvalidFinanceCategoryNameError,
@@ -40,6 +44,88 @@ def test_money_canonicalizes_signed_zero_without_a_negative_position() -> None:
     money = Money.parse(amount="-0", currency="USD")
 
     assert money.canonical_amount == "0.00"
+
+
+def test_money_subtraction_is_exact_beyond_default_decimal_emax() -> None:
+    ambient = getcontext()
+    before = (
+        ambient.prec,
+        ambient.Emin,
+        ambient.Emax,
+        ambient.rounding,
+        ambient.clamp,
+        ambient.flags.copy(),
+        ambient.traps.copy(),
+    )
+    exponent = DefaultContext.Emax + 1
+
+    result = subtract_money_amounts_exact(
+        Decimal((0, (2,), exponent)),
+        Decimal((0, (1,), exponent)),
+    )
+
+    assert result.as_tuple() == Decimal((0, (1,), exponent)).as_tuple()
+    assert (
+        ambient.prec,
+        ambient.Emin,
+        ambient.Emax,
+        ambient.rounding,
+        ambient.clamp,
+        ambient.flags.copy(),
+        ambient.traps.copy(),
+    ) == before
+
+
+def test_money_subtraction_is_exact_at_decimal_max_emax() -> None:
+    result = subtract_money_amounts_exact(
+        Decimal((0, (2,), MAX_EMAX)),
+        Decimal((0, (1,), MAX_EMAX)),
+    )
+
+    assert result.as_tuple() == Decimal((0, (1,), MAX_EMAX)).as_tuple()
+
+
+def test_money_subtraction_is_exact_at_decimal_min_etiny() -> None:
+    result = subtract_money_amounts_exact(
+        Decimal((0, (2,), MIN_ETINY)),
+        Decimal((0, (1,), MIN_ETINY)),
+    )
+
+    assert result.as_tuple() == Decimal((0, (1,), MIN_ETINY)).as_tuple()
+
+
+def test_money_subtraction_signals_a_genuinely_unrepresentable_result() -> None:
+    with pytest.raises(Overflow):
+        subtract_money_amounts_exact(
+            Decimal((0, (9,), MAX_EMAX)),
+            Decimal((1, (9,), MAX_EMAX)),
+        )
+
+
+@pytest.mark.parametrize(
+    ("target", "derived", "currency", "expected"),
+    (
+        ("10.00", "3.25", "CNY", "6.75"),
+        ("3.25", "10.00", "USD", "-6.75"),
+        ("-5.00", "-2.75", "CNY", "-2.25"),
+        ("1.20", "1.2", "USD", "0.00"),
+        ("9.99", "-0.01", "CNY", "10.00"),
+        ("1.2", "0.03", "USD", "1.17"),
+        ("100", "1", "JPY", "99"),
+    ),
+)
+def test_money_subtraction_preserves_exact_account_currency_scale(
+    target: str,
+    derived: str,
+    currency: Literal["CNY", "JPY", "USD"],
+    expected: str,
+) -> None:
+    target_money = Money.parse(amount=target, currency=currency)
+    derived_money = Money.parse(amount=derived, currency=currency)
+
+    result = subtract_money_amounts_exact(target_money.amount, derived_money.amount)
+
+    assert str(result) == expected
 
 
 def test_ledger_name_normalization_trims_and_uses_unicode_case_folding() -> None:

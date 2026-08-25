@@ -8,6 +8,7 @@ from typing import TypedDict
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, func, inspect, select, text
@@ -33,8 +34,10 @@ from core_console.modules.finance.models import (
 from core_console.modules.finance.money import Money
 from core_console.modules.finance.queries import FinanceTransactionDetail
 from core_console.modules.finance.service import (
+    FinanceAccountBalanceChangedError,
     FinanceAccountSemanticsLockedError,
     correct_finance_account_semantics,
+    create_balance_adjustment,
     create_finance_transaction,
     create_internal_transfer_transaction,
 )
@@ -384,6 +387,246 @@ async def test_opposing_internal_transfers_use_compatible_account_lock_order(
         select(func.count()).select_from(FinanceAccountMovement)
     )
     assert movement_count == 4
+
+
+@pytest.mark.parametrize(
+    "intervening_writer",
+    ("income", "expense", "transfer", "adjustment"),
+)
+async def test_balance_adjustment_recomputes_after_concurrent_account_writer(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+    intervening_writer: str,
+) -> None:
+    owner = _user(f"adjustment-concurrency-{intervening_writer}")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        name="Primary",
+        name_key="primary",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    other = _account(
+        ledger.id,
+        name="Other",
+        name_key="other",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([account, other])
+    await postgres_session.commit()
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as writer_session,
+        session_factory() as adjustment_session,
+        session_factory() as observer_session,
+    ):
+        locked_account = await writer_session.get(
+            FinanceAccount,
+            account.id,
+            with_for_update=True,
+        )
+        assert locked_account is not None
+        adjustment_backend_pid = await adjustment_session.scalar(select(func.pg_backend_pid()))
+        assert adjustment_backend_pid is not None
+        adjustment_task = asyncio.create_task(
+            create_balance_adjustment(
+                adjustment_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount="5.00", currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(
+            observer_session,
+            backend_pid=adjustment_backend_pid,
+        )
+        if intervening_writer == "transfer":
+            await create_internal_transfer_transaction(
+                writer_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                source_account_id=account.id,
+                destination_account_id=other.id,
+                transaction_date=date(2026, 8, 1),
+                amount=Money.parse(amount="1.00", currency="CNY"),
+                note=None,
+                project=lambda detail: detail.transaction.id,
+            )
+        elif intervening_writer in {"income", "expense"}:
+            await create_finance_transaction(
+                writer_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                kind=intervening_writer,  # type: ignore[arg-type]
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                economic_amount=Money.parse(amount="1.00", currency="CNY"),
+                allocation_amount=Money.parse(amount="1.00", currency="CNY"),
+                category_id=None,
+                note=None,
+                project=lambda detail: detail.transaction.id,
+            )
+        else:
+            await create_balance_adjustment(
+                writer_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount="1.00", currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+        with pytest.raises(FinanceAccountBalanceChangedError):
+            await adjustment_task
+        await adjustment_session.rollback()
+
+    assert await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction)) == 1
+
+
+async def test_balance_adjustment_no_change_does_not_lock_semantics_but_created_history_does(
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("adjustment-semantics-lock")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+
+    no_change = await create_balance_adjustment(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        transaction_date=account.tracking_start_date,
+        expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+        expected_account_nature="asset",
+        target_balance=Money.parse(amount="0.00", currency="CNY"),
+        note="not stored",
+        project=lambda result: result,
+    )
+    assert no_change.outcome == "noChange"
+    await correct_finance_account_semantics(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        nature="liability",
+        currency=None,
+    )
+    created = await create_balance_adjustment(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        transaction_date=account.tracking_start_date,
+        expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+        expected_account_nature="liability",
+        target_balance=Money.parse(amount="1.00", currency="CNY"),
+        note=None,
+        project=lambda result: result,
+    )
+    assert created.outcome == "created"
+    with pytest.raises(FinanceAccountSemanticsLockedError):
+        await correct_finance_account_semantics(
+            postgres_session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            account_id=account.id,
+            nature="asset",
+            currency=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("role", "currency", "add_allocation"),
+    [
+        ("primary", "CNY", False),
+        ("adjustment", "USD", False),
+        ("adjustment", "CNY", True),
+    ],
+)
+async def test_database_rejects_malformed_balance_adjustment_aggregates(
+    postgres_session: AsyncSession,
+    role: str,
+    currency: str,
+    add_allocation: bool,
+) -> None:
+    owner = _user(uuid4().hex)
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.flush()
+    transaction = FinanceTransaction(
+        ledger_id=ledger.id,
+        kind="balance_adjustment",
+        transaction_date=account.tracking_start_date,
+        note=None,
+    )
+    postgres_session.add(transaction)
+    await postgres_session.flush()
+    postgres_session.add(
+        FinanceAccountMovement(
+            transaction_id=transaction.id,
+            ledger_id=ledger.id,
+            account_id=account.id,
+            amount=Decimal("1.00"),
+            currency=currency,
+            role=role,
+        )
+    )
+    if add_allocation:
+        postgres_session.add(
+            FinanceCategoryAllocation(
+                transaction_id=transaction.id,
+                ledger_id=ledger.id,
+                category_id=None,
+                amount=Decimal("1.00"),
+                currency="CNY",
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        await postgres_session.commit()
 
 
 async def _wait_for_postgres_backend_lock(
@@ -758,6 +1001,26 @@ async def test_migration_adds_atomic_transaction_movement_and_allocation_integri
         "ck_finance_account_movements_ordinary_integrity",
         "ck_finance_category_allocations_ordinary_integrity",
     }
+
+
+async def test_balance_adjustment_migration_downgrades_and_upgrades_clean_database(
+    postgres_engine: AsyncEngine,
+) -> None:
+    async with postgres_engine.begin() as connection:
+
+        def round_trip(sync_connection: Connection) -> tuple[str, str]:
+            config = Config(str(ALEMBIC_CONFIG_PATH))
+            config.attributes["connection"] = sync_connection
+            command.downgrade(config, "20260823_01")
+            downgraded = sync_connection.scalar(text("SELECT version_num FROM alembic_version"))
+            command.upgrade(config, "head")
+            upgraded = sync_connection.scalar(text("SELECT version_num FROM alembic_version"))
+            return str(downgraded), str(upgraded)
+
+        downgraded, upgraded = await connection.run_sync(round_trip)
+
+    assert downgraded == "20260823_01"
+    assert upgraded == "20260825_01"
 
 
 async def test_finance_ledger_requires_a_real_owner(

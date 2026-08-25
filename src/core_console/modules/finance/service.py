@@ -1,8 +1,9 @@
 """Finance Ledger application workflows."""
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from psycopg.errors import UniqueViolation
@@ -17,13 +18,15 @@ from core_console.modules.finance.models import (
     FinanceLedger,
     FinanceTransaction,
 )
-from core_console.modules.finance.money import CurrencyCode, Money
+from core_console.modules.finance.money import CurrencyCode, Money, subtract_money_amounts_exact
 from core_console.modules.finance.queries import (
     FinanceAccountBalance,
     FinanceTransactionDetail,
     get_earliest_finance_account_transaction_date,
     get_finance_account_balance,
+    get_finance_account_balance_at_date,
     get_finance_account_balances_for_update,
+    get_finance_account_for_update,
     get_finance_category,
     get_finance_ledger,
     get_finance_transaction_detail,
@@ -95,6 +98,22 @@ class FinanceTransactionNotFoundError(Exception):
 
 class InvalidFinanceTransactionError(ValueError):
     """A Finance Transaction violates the closed Finance contract."""
+
+
+class FinanceAccountBalanceChangedError(Exception):
+    """The expected Balance Adjustment comparison balance became stale."""
+
+
+class FinanceAccountSemanticsChangedError(Exception):
+    """The expected Balance Adjustment Account Nature became stale."""
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceAdjustmentResult[Result]:
+    """Created or write-free result from a target-balance command."""
+
+    outcome: Literal["created", "noChange"]
+    transaction: Result | None
 
 
 def normalize_ledger_name(name: str) -> tuple[str, str]:
@@ -606,6 +625,136 @@ async def create_internal_transfer_transaction[Result](
         transaction=transaction,
         children=movements,
         project=project,
+    )
+
+
+async def get_balance_adjustment_context(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    account_id: UUID,
+    transaction_date: date,
+    replacing_transaction_id: UUID | None,
+) -> FinanceAccountBalance:
+    """Read one active Account's date-bounded target-command context."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    replacing_detail = None
+    if replacing_transaction_id is not None:
+        replacing_detail = await _require_finance_transaction_detail(
+            session,
+            ledger_id=ledger_id,
+            transaction_id=replacing_transaction_id,
+        )
+        if replacing_detail.transaction.kind != "balance_adjustment":
+            raise InvalidFinanceTransactionError(
+                "replacingTransactionId must identify a Balance Adjustment."
+            )
+    balance = await get_finance_account_balance_at_date(
+        session,
+        ledger_id=ledger_id,
+        account_id=account_id,
+        transaction_date=transaction_date,
+        excluded_transaction_id=replacing_transaction_id,
+    )
+    if balance is None:
+        raise FinanceAccountNotFoundError
+    account = balance.account
+    may_retain_archived = replacing_detail is not None and replacing_detail.account.id == account.id
+    if account.status != "active" and not may_retain_archived:
+        raise FinanceAccountArchivedError
+    if transaction_date < account.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Account Tracking Start Date."
+        )
+    return balance
+
+
+async def create_balance_adjustment[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    account_id: UUID,
+    transaction_date: date,
+    expected_derived_balance: Money,
+    expected_account_nature: Literal["asset", "liability"],
+    target_balance: Money,
+    note: str | None,
+    project: Callable[[BalanceAdjustmentResult[FinanceTransactionDetail]], Result],
+) -> Result:
+    """Atomically create only the non-zero correction to a stale-safe target."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    account = await get_finance_account_for_update(
+        session,
+        ledger_id=ledger_id,
+        account_id=account_id,
+    )
+    if account is None:
+        raise FinanceAccountNotFoundError
+    if account.status != "active":
+        raise FinanceAccountArchivedError
+    if transaction_date < account.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Account Tracking Start Date."
+        )
+    balance = await get_finance_account_balance_at_date(
+        session,
+        ledger_id=ledger_id,
+        account_id=account_id,
+        transaction_date=transaction_date,
+    )
+    if balance is None:
+        raise FinanceAccountNotFoundError
+    authoritative = Money(
+        amount=balance.current_balance, currency=cast(CurrencyCode, account.currency)
+    )
+    if expected_derived_balance != authoritative:
+        raise FinanceAccountBalanceChangedError
+    if expected_account_nature != account.nature:
+        raise FinanceAccountSemanticsChangedError
+    if target_balance.currency != account.currency:
+        raise InvalidFinanceTransactionError(
+            "Target Balance currency must match the Account currency."
+        )
+    correction_delta = Money(
+        amount=subtract_money_amounts_exact(target_balance.amount, authoritative.amount),
+        currency=target_balance.currency,
+    )
+    if correction_delta.amount == 0:
+        try:
+            projected = project(BalanceAdjustmentResult(outcome="noChange", transaction=None))
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        return projected
+
+    transaction_id = uuid4()
+    transaction = FinanceTransaction(
+        id=transaction_id,
+        ledger_id=ledger_id,
+        kind="balance_adjustment",
+        transaction_date=transaction_date,
+        note=normalize_transaction_note(note),
+    )
+    movement = FinanceAccountMovement(
+        transaction_id=transaction_id,
+        ledger_id=ledger_id,
+        account_id=account.id,
+        amount=correction_delta.amount,
+        currency=correction_delta.currency,
+        role="adjustment",
+    )
+    return await _persist_and_project_finance_transaction(
+        session,
+        transaction=transaction,
+        children=(movement,),
+        project=lambda detail: project(
+            BalanceAdjustmentResult(outcome="created", transaction=detail)
+        ),
     )
 
 

@@ -88,6 +88,154 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "BalanceAdjustmentContextResponse": {
+        "additionalProperties": false,
+        "description": "Authoritative inputs for one stale-safe target-balance command.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountReferenceResponse"
+          },
+          "accountNature": {
+            "enum": [
+              "asset",
+              "liability"
+            ],
+            "title": "Accountnature",
+            "type": "string"
+          },
+          "derivedComparisonBalance": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "transactionDate",
+          "derivedComparisonBalance",
+          "accountNature"
+        ],
+        "title": "BalanceAdjustmentContextResponse",
+        "type": "object"
+      },
+      "BalanceAdjustmentCreatedResultResponse": {
+        "additionalProperties": false,
+        "description": "A command result containing the newly created Adjustment.",
+        "properties": {
+          "outcome": {
+            "const": "created",
+            "title": "Outcome",
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
+          }
+        },
+        "required": [
+          "outcome",
+          "transaction"
+        ],
+        "title": "BalanceAdjustmentCreatedResultResponse",
+        "type": "object"
+      },
+      "BalanceAdjustmentNoChangeResultResponse": {
+        "additionalProperties": false,
+        "description": "A write-free command result with no durable Transaction.",
+        "properties": {
+          "outcome": {
+            "const": "noChange",
+            "title": "Outcome",
+            "type": "string"
+          },
+          "transaction": {
+            "title": "Transaction",
+            "type": "null"
+          }
+        },
+        "required": [
+          "outcome",
+          "transaction"
+        ],
+        "title": "BalanceAdjustmentNoChangeResultResponse",
+        "type": "object"
+      },
+      "BalanceAdjustmentResultResponse": {
+        "description": "Exact outcome-discriminated Balance Adjustment command result.",
+        "discriminator": {
+          "mapping": {
+            "created": "#/components/schemas/BalanceAdjustmentCreatedResultResponse",
+            "noChange": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse"
+          },
+          "propertyName": "outcome"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BalanceAdjustmentCreatedResultResponse"
+          },
+          {
+            "$ref": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse"
+          }
+        ],
+        "title": "BalanceAdjustmentResultResponse"
+      },
+      "BalanceAdjustmentTransactionResponse": {
+        "additionalProperties": false,
+        "description": "Closed public Balance Adjustment correction projection.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountReferenceResponse"
+          },
+          "correctionDelta": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "balanceAdjustment",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ledgerId",
+          "kind",
+          "transactionDate",
+          "note",
+          "account",
+          "correctionDelta"
+        ],
+        "title": "BalanceAdjustmentTransactionResponse",
+        "type": "object"
+      },
       "CategoryAllocationRequest": {
         "additionalProperties": false,
         "description": "One complete v1 allocation, optionally Uncategorized.",
@@ -265,6 +413,55 @@
           "trackingStartDate"
         ],
         "title": "CreateAccountRequest",
+        "type": "object"
+      },
+      "CreateBalanceAdjustmentRequest": {
+        "additionalProperties": false,
+        "description": "Stale-safe target-balance command for one active Account.",
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "title": "Accountid",
+            "type": "string"
+          },
+          "expectedAccountNature": {
+            "enum": [
+              "asset",
+              "liability"
+            ],
+            "title": "Expectedaccountnature",
+            "type": "string"
+          },
+          "expectedDerivedBalance": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "targetBalance": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "accountId",
+          "transactionDate",
+          "expectedDerivedBalance",
+          "expectedAccountNature",
+          "targetBalance"
+        ],
+        "title": "CreateBalanceAdjustmentRequest",
         "type": "object"
       },
       "CreateCategoryRequest": {
@@ -607,6 +804,7 @@
       "FinanceTransactionResponse": {
         "discriminator": {
           "mapping": {
+            "balanceAdjustment": "#/components/schemas/BalanceAdjustmentTransactionResponse",
             "expense": "#/components/schemas/ExpenseTransactionResponse",
             "income": "#/components/schemas/IncomeTransactionResponse",
             "internalTransfer": "#/components/schemas/InternalTransferTransactionResponse"
@@ -622,6 +820,9 @@
           },
           {
             "$ref": "#/components/schemas/InternalTransferTransactionResponse"
+          },
+          {
+            "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
           }
         ]
       },
@@ -1814,6 +2015,136 @@
         ]
       }
     },
+    "/finance/ledgers/{ledgerId}/accounts/{accountId}/balance-adjustment-context": {
+      "get": {
+        "description": "Return authoritative date-bounded Balance Adjustment command inputs.",
+        "operationId": "getBalanceAdjustmentContext",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Accountid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transactionDate",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FinanceRequestDate"
+            }
+          },
+          {
+            "in": "query",
+            "name": "replacingTransactionId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Replacingtransactionid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceAdjustmentContextResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Account is archived."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Get Balance Adjustment context",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/finance/ledgers/{ledgerId}/accounts/{accountId}/unarchive": {
       "post": {
         "description": "Idempotently restores one owned Account to active status.",
@@ -1904,6 +2235,111 @@
         },
         "security": [],
         "summary": "Unarchive a Finance Account",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/balance-adjustments": {
+      "post": {
+        "description": "Create only the required non-zero account-relative correction delta.",
+        "operationId": "createBalanceAdjustment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBalanceAdjustmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceAdjustmentResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The context is stale or archived."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Create a Balance Adjustment",
         "tags": [
           "Finance"
         ]

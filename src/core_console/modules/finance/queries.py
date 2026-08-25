@@ -83,6 +83,32 @@ def _current_balance_expression() -> ColumnElement[Decimal]:
     return FinanceAccount.opening_balance + movement_total
 
 
+def _dated_balance_expression(
+    *,
+    transaction_date: date,
+    excluded_transaction_id: UUID | None,
+) -> ColumnElement[Decimal]:
+    """Return an Account-correlated end-of-day balance expression."""
+
+    movement_total = (
+        select(func.coalesce(func.sum(FinanceAccountMovement.amount), Decimal(0)))
+        .join(
+            FinanceTransaction,
+            FinanceTransaction.id == FinanceAccountMovement.transaction_id,
+        )
+        .where(
+            FinanceAccountMovement.account_id == FinanceAccount.id,
+            FinanceTransaction.transaction_date <= transaction_date,
+        )
+        .correlate(FinanceAccount)
+    )
+    if excluded_transaction_id is not None:
+        movement_total = movement_total.where(
+            FinanceAccountMovement.transaction_id != excluded_transaction_id
+        )
+    return FinanceAccount.opening_balance + movement_total.scalar_subquery()
+
+
 async def list_finance_ledgers(
     session: AsyncSession,
     *,
@@ -161,6 +187,52 @@ async def get_finance_account_balance(
         statement = statement.with_for_update(of=FinanceAccount)
     result = await session.execute(statement)
     row = result.one_or_none()
+    if row is None:
+        return None
+    account, current_balance = row
+    return FinanceAccountBalance(account=account, current_balance=current_balance)
+
+
+async def get_finance_account_for_update(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    account_id: UUID,
+) -> FinanceAccount | None:
+    """Lock one Account inside its addressed Ledger without a stale balance snapshot."""
+
+    statement = (
+        select(FinanceAccount)
+        .where(
+            FinanceAccount.id == account_id,
+            FinanceAccount.ledger_id == ledger_id,
+        )
+        .with_for_update(of=FinanceAccount)
+    )
+    return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def get_finance_account_balance_at_date(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    account_id: UUID,
+    transaction_date: date,
+    excluded_transaction_id: UUID | None = None,
+) -> FinanceAccountBalance | None:
+    """Return one Account's durable end-of-day balance through the requested date."""
+
+    statement = select(
+        FinanceAccount,
+        _dated_balance_expression(
+            transaction_date=transaction_date,
+            excluded_transaction_id=excluded_transaction_id,
+        ).label("current_balance"),
+    ).where(
+        FinanceAccount.id == account_id,
+        FinanceAccount.ledger_id == ledger_id,
+    )
+    row = (await session.execute(statement)).one_or_none()
     if row is None:
         return None
     account, current_balance = row

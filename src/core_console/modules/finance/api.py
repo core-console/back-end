@@ -6,7 +6,7 @@ from http import HTTPStatus
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,16 +22,23 @@ from core_console.modules.finance.queries import (
 from core_console.modules.finance.schemas import (
     AccountReferenceResponse,
     AccountResponse,
+    BalanceAdjustmentContextResponse,
+    BalanceAdjustmentCreatedResultResponse,
+    BalanceAdjustmentNoChangeResultResponse,
+    BalanceAdjustmentResultResponse,
+    BalanceAdjustmentTransactionResponse,
     CategoryAllocationResponse,
     CategoryReferenceResponse,
     CategoryResponse,
     CorrectAccountSemanticsRequest,
     CreateAccountRequest,
+    CreateBalanceAdjustmentRequest,
     CreateCategoryRequest,
     CreateFinanceTransactionRequest,
     CreateLedgerRequest,
     CurrencyResponse,
     ExpenseTransactionResponse,
+    FinanceRequestDate,
     FinanceTransactionResponse,
     IncomeTransactionResponse,
     InternalTransferTransactionResponse,
@@ -42,8 +49,11 @@ from core_console.modules.finance.schemas import (
     UpdateLedgerRequest,
 )
 from core_console.modules.finance.service import (
+    BalanceAdjustmentResult,
     FinanceAccountArchivedError,
+    FinanceAccountBalanceChangedError,
     FinanceAccountNotFoundError,
+    FinanceAccountSemanticsChangedError,
     FinanceAccountSemanticsLockedError,
     FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
@@ -60,11 +70,13 @@ from core_console.modules.finance.service import (
     archive_finance_account,
     archive_finance_category,
     correct_finance_account_semantics,
+    create_balance_adjustment,
     create_finance_account,
     create_finance_category,
     create_finance_ledger,
     create_finance_transaction,
     create_internal_transfer_transaction,
+    get_balance_adjustment_context,
     get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
@@ -82,8 +94,10 @@ router = APIRouter(prefix="/api/finance", tags=["Finance"])
 
 type _FinanceApplicationError = (
     FinanceAccountArchivedError
+    | FinanceAccountBalanceChangedError
     | FinanceAccountNotFoundError
     | FinanceAccountSemanticsLockedError
+    | FinanceAccountSemanticsChangedError
     | FinanceCategoryArchivedError
     | FinanceCategoryNameConflictError
     | FinanceCategoryNotFoundError
@@ -144,6 +158,21 @@ def _to_transaction_response(
     """Build the complete closed projection before a create commit."""
 
     transaction = detail.transaction
+    if transaction.kind == "balance_adjustment":
+        account = detail.account
+        return BalanceAdjustmentTransactionResponse(
+            id=transaction.id,
+            ledgerId=transaction.ledger_id,
+            kind="balanceAdjustment",
+            transactionDate=transaction.transaction_date,
+            note=transaction.note,
+            account=AccountReferenceResponse(
+                id=account.id,
+                name=account.name,
+                status=cast(Literal["active", "archived"], account.status),
+            ),
+            correctionDelta=_to_money_response(detail.movement.amount, detail.movement.currency),
+        )
     if transaction.kind == "internal_transfer":
         movement_accounts = {
             item.movement.role: (item.movement, item.account) for item in detail.movement_details
@@ -217,6 +246,31 @@ def _to_transaction_response(
     )
 
 
+def _to_balance_adjustment_result_response(
+    result: BalanceAdjustmentResult[FinanceTransactionDetail],
+) -> BalanceAdjustmentResultResponse:
+    """Validate the complete Adjustment command result before commit."""
+
+    detail = result.transaction
+    if result.outcome == "noChange":
+        if detail is not None:
+            raise RuntimeError("A no-change Balance Adjustment cannot contain a Transaction.")
+        return BalanceAdjustmentResultResponse(
+            BalanceAdjustmentNoChangeResultResponse(outcome="noChange", transaction=None)
+        )
+    if detail is None:
+        raise RuntimeError("A created Balance Adjustment must contain a Transaction.")
+    transaction = _to_transaction_response(detail)
+    if not isinstance(transaction, BalanceAdjustmentTransactionResponse):
+        raise RuntimeError("Balance Adjustment projection returned the wrong Transaction kind.")
+    return BalanceAdjustmentResultResponse(
+        BalanceAdjustmentCreatedResultResponse(
+            outcome="created",
+            transaction=transaction,
+        )
+    )
+
+
 async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
     """Translate known Finance failures at the Finance HTTP boundary."""
 
@@ -233,8 +287,10 @@ async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
         ) from None
     except (
         FinanceAccountArchivedError,
+        FinanceAccountBalanceChangedError,
         FinanceAccountNotFoundError,
         FinanceAccountSemanticsLockedError,
+        FinanceAccountSemanticsChangedError,
         FinanceCategoryArchivedError,
         FinanceCategoryNameConflictError,
         FinanceCategoryNotFoundError,
@@ -294,6 +350,20 @@ def _finance_problem_for(error: _FinanceApplicationError) -> ApplicationProblem:
                 "non-zero or Transaction history exists."
             ),
             code="finance_account_semantics_locked",
+        )
+    if isinstance(error, FinanceAccountBalanceChangedError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="The Finance Account balance changed; refresh the adjustment context.",
+            code="account_balance_changed",
+        )
+    if isinstance(error, FinanceAccountSemanticsChangedError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="The Finance Account Nature changed; refresh the adjustment context.",
+            code="finance_account_semantics_changed",
         )
     if isinstance(error, FinanceCategoryNotFoundError):
         return ApplicationProblem(
@@ -863,6 +933,96 @@ async def patch_ledger(
         )
     )
     return _to_ledger_response(ledger)
+
+
+@router.get(
+    "/ledgers/{ledgerId}/accounts/{accountId}/balance-adjustment-context",
+    operation_id="getBalanceAdjustmentContext",
+    summary="Get Balance Adjustment context",
+    response_model=BalanceAdjustmentContextResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The Account is archived."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def get_adjustment_context(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    account_id: Annotated[UUID, Path(alias="accountId")],
+    transaction_date: Annotated[FinanceRequestDate, Query(alias="transactionDate")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    replacing_transaction_id: Annotated[
+        UUID | None,
+        Query(alias="replacingTransactionId"),
+    ] = None,
+) -> BalanceAdjustmentContextResponse:
+    """Return authoritative date-bounded Balance Adjustment command inputs."""
+
+    balance = await _run_finance_workflow(
+        get_balance_adjustment_context(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            account_id=account_id,
+            transaction_date=transaction_date,
+            replacing_transaction_id=replacing_transaction_id,
+        )
+    )
+    account = balance.account
+    return BalanceAdjustmentContextResponse(
+        account=AccountReferenceResponse(
+            id=account.id,
+            name=account.name,
+            status=cast(Literal["active", "archived"], account.status),
+        ),
+        transactionDate=transaction_date,
+        derivedComparisonBalance=_to_money_response(balance.current_balance, account.currency),
+        accountNature=cast(Literal["asset", "liability"], account.nature),
+    )
+
+
+@router.post(
+    "/ledgers/{ledgerId}/balance-adjustments",
+    operation_id="createBalanceAdjustment",
+    summary="Create a Balance Adjustment",
+    response_model=BalanceAdjustmentResultResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The context is stale or archived."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_balance_adjustment(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    request: CreateBalanceAdjustmentRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> BalanceAdjustmentResultResponse:
+    """Create only the required non-zero account-relative correction delta."""
+
+    return await _run_finance_workflow(
+        create_balance_adjustment(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            account_id=request.account_id,
+            transaction_date=request.transaction_date,
+            expected_derived_balance=request.expected_derived_balance.to_money(),
+            expected_account_nature=request.expected_account_nature,
+            target_balance=request.target_balance.to_money(),
+            note=request.note,
+            project=_to_balance_adjustment_result_response,
+        )
+    )
 
 
 @router.post(

@@ -1,7 +1,16 @@
 """Exact currency-aware Money values for Finance workflows."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import (
+    MAX_EMAX,
+    MAX_PREC,
+    MIN_EMIN,
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    Inexact,
+    Overflow,
+)
 from re import fullmatch
 from typing import Literal
 
@@ -43,3 +52,29 @@ class Money:
         scale = SUPPORTED_CURRENCY_MINOR_UNITS[self.currency]
         canonical_value = Decimal(0) if self.amount == 0 else self.amount
         return f"{canonical_value:.{scale}f}"
+
+
+def subtract_money_amounts_exact(minuend: Decimal, subtrahend: Decimal) -> Decimal:
+    """Subtract finite Money amounts without depending on ambient precision."""
+
+    if not minuend.is_finite() or not subtrahend.is_finite():
+        raise InvalidMoneyError("Money subtraction requires finite amounts.")
+    minuend_tuple = minuend.as_tuple()
+    subtrahend_tuple = subtrahend.as_tuple()
+    minuend_exponent = int(minuend_tuple.exponent)
+    subtrahend_exponent = int(subtrahend_tuple.exponent)
+    common_exponent = min(minuend_exponent, subtrahend_exponent)
+    minuend_digits = len(minuend_tuple.digits) + minuend_exponent - common_exponent
+    subtrahend_digits = len(subtrahend_tuple.digits) + subtrahend_exponent - common_exponent
+    aligned_precision = max(minuend_digits, subtrahend_digits) + 1
+    etiny_precision = max(1, MIN_EMIN - common_exponent + 1)
+    context = Context(
+        prec=min(MAX_PREC, max(aligned_precision, etiny_precision)),
+        rounding=ROUND_HALF_EVEN,
+        Emin=MIN_EMIN,
+        Emax=MAX_EMAX,
+        capitals=1,
+        clamp=0,
+        traps=[Inexact, Overflow],
+    )
+    return context.subtract(minuend, subtrahend)

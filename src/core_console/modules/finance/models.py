@@ -255,7 +255,7 @@ class FinanceTransaction(Base):
     __tablename__ = "finance_transactions"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('income', 'expense', 'internal_transfer')",
+            "kind IN ('income', 'expense', 'internal_transfer', 'balance_adjustment')",
             name="ck_finance_transactions_kind",
         ),
         CheckConstraint(
@@ -329,7 +329,7 @@ class FinanceAccountMovement(Base):
             name="ck_finance_account_movements_amount_scale",
         ),
         CheckConstraint(
-            "role IN ('primary', 'source', 'destination')",
+            "role IN ('primary', 'source', 'destination', 'adjustment')",
             name="ck_finance_account_movements_role",
         ),
         ForeignKeyConstraint(

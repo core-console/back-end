@@ -10,6 +10,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    RootModel,
     field_validator,
     model_validator,
 )
@@ -161,10 +162,47 @@ class InternalTransferTransactionResponse(BaseModel):
     destination_amount: MoneyResponse = Field(alias="destinationAmount")
 
 
+class BalanceAdjustmentTransactionResponse(BaseModel):
+    """Closed public Balance Adjustment correction projection."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    kind: Literal["balanceAdjustment"]
+    transaction_date: date = Field(alias="transactionDate")
+    note: str | None = Field(max_length=500)
+    account: AccountReferenceResponse
+    correction_delta: MoneyResponse = Field(alias="correctionDelta")
+
+
 type FinanceTransactionResponse = Annotated[
-    IncomeTransactionResponse | ExpenseTransactionResponse | InternalTransferTransactionResponse,
+    IncomeTransactionResponse
+    | ExpenseTransactionResponse
+    | InternalTransferTransactionResponse
+    | BalanceAdjustmentTransactionResponse,
     Field(discriminator="kind"),
 ]
+
+
+class BalanceAdjustmentContextResponse(BaseModel):
+    """Authoritative inputs for one stale-safe target-balance command."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    account: AccountReferenceResponse
+    transaction_date: date = Field(alias="transactionDate")
+    derived_comparison_balance: MoneyResponse = Field(alias="derivedComparisonBalance")
+    account_nature: Literal["asset", "liability"] = Field(alias="accountNature")
+
+
+class BalanceAdjustmentCreatedResultResponse(BaseModel):
+    """A command result containing the newly created Adjustment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["created"]
+    transaction: BalanceAdjustmentTransactionResponse
 
 
 class _RequestModel(BaseModel):
@@ -175,6 +213,26 @@ class _RequestModel(BaseModel):
         validate_by_alias=True,
         validate_by_name=False,
     )
+
+
+class BalanceAdjustmentNoChangeResultResponse(BaseModel):
+    """A write-free command result with no durable Transaction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["noChange"]
+    transaction: None
+
+
+class BalanceAdjustmentResultResponse(
+    RootModel[
+        Annotated[
+            BalanceAdjustmentCreatedResultResponse | BalanceAdjustmentNoChangeResultResponse,
+            Field(discriminator="outcome"),
+        ]
+    ]
+):
+    """Exact outcome-discriminated Balance Adjustment command result."""
 
 
 class CreateLedgerRequest(_RequestModel):
@@ -306,17 +364,9 @@ class CategoryAllocationRequest(_RequestModel):
     category_id: UUID | None = Field(default=None, alias="categoryId")
 
 
-class _CreateOrdinaryTransactionRequest(_RequestModel):
-    """Common command fields for the first two Finance Transaction kinds."""
+class _TransactionNoteRequest(_RequestModel):
+    """Shared optional plain-text note contract for Transaction commands."""
 
-    account_id: UUID = Field(alias="accountId")
-    transaction_date: FinanceRequestDate = Field(alias="transactionDate")
-    economic_amount: MoneyRequest = Field(alias="economicAmount")
-    category_allocations: list[CategoryAllocationRequest] = Field(
-        alias="categoryAllocations",
-        min_length=1,
-        max_length=1,
-    )
     note: str | None = Field(
         default=None,
         strict=True,
@@ -339,6 +389,19 @@ class _CreateOrdinaryTransactionRequest(_RequestModel):
                 "Transaction note must not exceed 500 characters.",
             )
         return normalized
+
+
+class _CreateOrdinaryTransactionRequest(_TransactionNoteRequest):
+    """Common command fields for the first two Finance Transaction kinds."""
+
+    account_id: UUID = Field(alias="accountId")
+    transaction_date: FinanceRequestDate = Field(alias="transactionDate")
+    economic_amount: MoneyRequest = Field(alias="economicAmount")
+    category_allocations: list[CategoryAllocationRequest] = Field(
+        alias="categoryAllocations",
+        min_length=1,
+        max_length=1,
+    )
 
     @model_validator(mode="after")
     def validate_complete_allocation(self) -> Self:
@@ -369,7 +432,7 @@ class CreateExpenseTransactionRequest(_CreateOrdinaryTransactionRequest):
     kind: Literal["expense"]
 
 
-class CreateInternalTransferTransactionRequest(_RequestModel):
+class CreateInternalTransferTransactionRequest(_TransactionNoteRequest):
     """Record one atomic same-currency Transfer between two Accounts."""
 
     kind: Literal["internalTransfer"]
@@ -377,28 +440,6 @@ class CreateInternalTransferTransactionRequest(_RequestModel):
     destination_account_id: UUID = Field(alias="destinationAccountId")
     amount: MoneyRequest
     transaction_date: FinanceRequestDate = Field(alias="transactionDate")
-    note: str | None = Field(
-        default=None,
-        strict=True,
-        json_schema_extra={"maxLength": 500},
-    )
-
-    @field_validator("note")
-    @classmethod
-    def normalize_note(cls, value: str | None) -> str | None:
-        """Apply the common Transaction note contract."""
-
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            return None
-        if len(normalized) > 500:
-            raise PydanticCustomError(
-                "value_error",
-                "Transaction note must not exceed 500 characters.",
-            )
-        return normalized
 
     @model_validator(mode="after")
     def validate_transfer(self) -> Self:
@@ -413,6 +454,16 @@ class CreateInternalTransferTransactionRequest(_RequestModel):
                 "Transfer amount must be positive.",
             )
         return self
+
+
+class CreateBalanceAdjustmentRequest(_TransactionNoteRequest):
+    """Stale-safe target-balance command for one active Account."""
+
+    account_id: UUID = Field(alias="accountId")
+    transaction_date: FinanceRequestDate = Field(alias="transactionDate")
+    expected_derived_balance: MoneyRequest = Field(alias="expectedDerivedBalance")
+    expected_account_nature: Literal["asset", "liability"] = Field(alias="expectedAccountNature")
+    target_balance: MoneyRequest = Field(alias="targetBalance")
 
 
 type CreateFinanceTransactionRequest = Annotated[

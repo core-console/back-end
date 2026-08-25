@@ -17,7 +17,9 @@ from core_console.database.dependencies import get_session
 from core_console.modules.finance import api as finance_api
 from core_console.modules.finance.service import (
     FinanceAccountArchivedError,
+    FinanceAccountBalanceChangedError,
     FinanceAccountNotFoundError,
+    FinanceAccountSemanticsChangedError,
     FinanceAccountSemanticsLockedError,
     FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
@@ -57,6 +59,44 @@ def _active_user() -> CurrentUser:
                 "title": "Unprocessable Entity",
                 "detail": "Ledger name must not be blank.",
                 "code": "validation_error",
+            },
+        ),
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
+            {
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "expectedDerivedBalance": {"amount": "10.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "12.00", "currency": "CNY"},
+            },
+            "create_balance_adjustment",
+            FinanceAccountBalanceChangedError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": "The Finance Account balance changed; refresh the adjustment context.",
+                "code": "account_balance_changed",
+            },
+        ),
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
+            {
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "expectedDerivedBalance": {"amount": "10.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "12.00", "currency": "CNY"},
+            },
+            "create_balance_adjustment",
+            FinanceAccountSemanticsChangedError(),
+            {
+                "status": HTTPStatus.CONFLICT,
+                "title": "Conflict",
+                "detail": "The Finance Account Nature changed; refresh the adjustment context.",
+                "code": "finance_account_semantics_changed",
             },
         ),
         (
@@ -550,6 +590,78 @@ async def test_create_transaction_rejects_invalid_public_contract_without_databa
 
     response = await client.post(
         f"/api/finance/ledgers/{uuid4()}/transactions",
+        json=body,
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21T00:00:00",
+            "expectedDerivedBalance": {"amount": "10.00", "currency": "CNY"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "12.00", "currency": "CNY"},
+        },
+        {
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "expectedDerivedBalance": {"amount": 10, "currency": "CNY"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "12.00", "currency": "CNY"},
+        },
+        {
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "expectedDerivedBalance": {"amount": "1e1", "currency": "CNY"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "12.00", "currency": "CNY"},
+        },
+        {
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "expectedDerivedBalance": {"amount": "10", "currency": "JPY"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "12.1", "currency": "JPY"},
+        },
+        {
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "expectedDerivedBalance": {"amount": "10.00", "currency": "CNY"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "12.00", "currency": "CNY"},
+            "target": "12.00",
+        },
+        {
+            "accountId": str(uuid4()),
+            "transactionDate": "2026-08-21",
+            "expectedDerivedBalance": {"amount": "10.00", "currency": "CNY"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "12.00", "currency": "CNY"},
+            "note": "界" * 501,
+        },
+    ),
+)
+async def test_create_balance_adjustment_rejects_invalid_contract_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    body: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.post(
+        f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
         json=body,
     )
 

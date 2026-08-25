@@ -8,10 +8,17 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.app import create_app
 from core_console.config import AuthMode, Environment, Settings
+from core_console.modules.finance import api as finance_api
+from core_console.modules.finance.models import (
+    FinanceAccountMovement,
+    FinanceCategoryAllocation,
+    FinanceTransaction,
+)
 from core_console.modules.users.models import User
 
 pytestmark = pytest.mark.anyio
@@ -1195,6 +1202,404 @@ async def test_category_list_order_uses_status_case_folded_name_and_identifier(
         listed = await client.get(f"/api/finance/ledgers/{ledger_id}/categories")
 
     assert listed.json() == [created[1], created[2], created[3], archived.json()]
+
+
+async def test_balance_adjustment_context_create_and_no_change_use_historical_account_balances(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("balance-adjustment-http")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Adjustments"})
+        ledger_id = ledger.json()["id"]
+        asset = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "100.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        liability = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Card",
+                "nature": "liability",
+                "currency": "CNY",
+                "openingBalance": {"amount": "200.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=asset.json()["id"],
+            transaction_date="2026-08-10",
+            amount="25.00",
+            currency="CNY",
+        )
+        await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=asset.json()["id"],
+            transaction_date="2026-08-20",
+            amount="50.00",
+            currency="CNY",
+        )
+        await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "expense",
+                "accountId": liability.json()["id"],
+                "transactionDate": "2026-08-10",
+                "economicAmount": {"amount": "30.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "30.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+
+        asset_context = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{asset.json()['id']}"
+            "/balance-adjustment-context",
+            params={"transactionDate": "2026-08-15"},
+        )
+        liability_context = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}"
+            "/balance-adjustment-context",
+            params={"transactionDate": "2030-01-01"},
+        )
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": asset.json()["id"],
+                "transactionDate": "2026-08-15",
+                "expectedDerivedBalance": {"amount": "125.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "130.00", "currency": "CNY"},
+                "note": "  count correction  ",
+            },
+        )
+        liability_created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": liability.json()["id"],
+                "transactionDate": "2030-01-01",
+                "expectedDerivedBalance": {"amount": "230.00", "currency": "CNY"},
+                "expectedAccountNature": "liability",
+                "targetBalance": {"amount": "210.00", "currency": "CNY"},
+            },
+        )
+        detail = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['transaction']['id']}"
+        )
+        no_change = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": asset.json()["id"],
+                "transactionDate": "2026-08-15",
+                "expectedDerivedBalance": {"amount": "130.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "130", "currency": "CNY"},
+                "note": "must not persist",
+            },
+        )
+
+    assert asset_context.json() == {
+        "account": {"id": asset.json()["id"], "name": "Cash", "status": "active"},
+        "transactionDate": "2026-08-15",
+        "derivedComparisonBalance": {"amount": "125.00", "currency": "CNY"},
+        "accountNature": "asset",
+    }
+    assert liability_context.json()["derivedComparisonBalance"] == {
+        "amount": "230.00",
+        "currency": "CNY",
+    }
+    assert liability_context.json()["accountNature"] == "liability"
+    assert created.status_code == HTTPStatus.OK
+    assert created.json()["outcome"] == "created"
+    assert created.json()["transaction"]["correctionDelta"] == {
+        "amount": "5.00",
+        "currency": "CNY",
+    }
+    assert created.json()["transaction"]["note"] == "count correction"
+    assert liability_created.json()["transaction"]["correctionDelta"] == {
+        "amount": "-20.00",
+        "currency": "CNY",
+    }
+    assert detail.json() == created.json()["transaction"]
+    assert no_change.json() == {"outcome": "noChange", "transaction": None}
+    created_id = created.json()["transaction"]["id"]
+    movement = await postgres_session.scalar(
+        select(FinanceAccountMovement).where(FinanceAccountMovement.transaction_id == created_id)
+    )
+    assert movement is not None
+    assert (movement.role, str(movement.amount), movement.currency) == (
+        "adjustment",
+        "5.00",
+        "CNY",
+    )
+    assert (
+        await postgres_session.scalar(
+            select(func.count())
+            .select_from(FinanceCategoryAllocation)
+            .where(FinanceCategoryAllocation.transaction_id == created_id)
+        )
+        == 0
+    )
+    assert await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction)) == 5
+
+
+async def test_balance_adjustment_stale_order_scope_archive_and_replacement_context(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("balance-adjustment-rules")
+    other = _user("balance-adjustment-rules-other")
+    postgres_session.add_all([actor, other])
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Owned"})
+        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        ledger_id = ledger.json()["id"]
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "USD",
+                "openingBalance": {"amount": "10.00", "currency": "USD"},
+                "trackingStartDate": "2026-08-10",
+            },
+        )
+        archived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Unused",
+                "nature": "asset",
+                "currency": "USD",
+                "openingBalance": {"amount": "0", "currency": "USD"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        archived = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{archived.json()['id']}/archive"
+        )
+        other_account = await client.post(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/accounts",
+            json={
+                "name": "Elsewhere",
+                "nature": "asset",
+                "currency": "USD",
+                "openingBalance": {"amount": "0", "currency": "USD"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        ordinary = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=account.json()["id"],
+            transaction_date="2026-08-10",
+            amount="2.00",
+            currency="USD",
+        )
+        command = {
+            "accountId": account.json()["id"],
+            "transactionDate": "2026-08-10",
+            "expectedDerivedBalance": {"amount": "12.00", "currency": "USD"},
+            "expectedAccountNature": "asset",
+            "targetBalance": {"amount": "15.00", "currency": "USD"},
+            "note": None,
+        }
+        balance_first = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                **command,
+                "expectedDerivedBalance": {"amount": "11.00", "currency": "USD"},
+                "expectedAccountNature": "liability",
+            },
+        )
+        nature_second = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={**command, "expectedAccountNature": "liability"},
+        )
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments", json=command
+        )
+        normal_context = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
+            "/balance-adjustment-context",
+            params={"transactionDate": "2026-08-10"},
+        )
+        replacement_context = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
+            "/balance-adjustment-context",
+            params={
+                "transactionDate": "2026-08-10",
+                "replacingTransactionId": created.json()["transaction"]["id"],
+            },
+        )
+        non_adjustment_context = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
+            "/balance-adjustment-context",
+            params={
+                "transactionDate": "2026-08-10",
+                "replacingTransactionId": ordinary.json()["id"],
+            },
+        )
+        missing_replacement = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
+            "/balance-adjustment-context",
+            params={"transactionDate": "2026-08-10", "replacingTransactionId": str(uuid4())},
+        )
+        archived_context = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{archived.json()['id']}"
+            "/balance-adjustment-context",
+            params={"transactionDate": "2026-08-10"},
+        )
+        archived_create = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={**command, "accountId": archived.json()["id"]},
+        )
+        before_tracking = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={**command, "transactionDate": "2026-08-09"},
+        )
+        wrong_scope = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{other_account.json()['id']}"
+            "/balance-adjustment-context",
+            params={"transactionDate": "2026-08-10"},
+        )
+
+    assert balance_first.status_code == HTTPStatus.CONFLICT
+    assert balance_first.json()["code"] == "account_balance_changed"
+    assert nature_second.status_code == HTTPStatus.CONFLICT
+    assert nature_second.json()["code"] == "finance_account_semantics_changed"
+    assert normal_context.json()["derivedComparisonBalance"]["amount"] == "15.00"
+    assert replacement_context.json()["derivedComparisonBalance"]["amount"] == "12.00"
+    assert non_adjustment_context.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert non_adjustment_context.json()["code"] == "validation_error"
+    assert missing_replacement.status_code == HTTPStatus.NOT_FOUND
+    assert missing_replacement.json()["code"] == "finance_transaction_not_found"
+    for response in (archived_context, archived_create):
+        assert response.status_code == HTTPStatus.CONFLICT
+        assert response.json()["code"] == "finance_account_archived"
+    assert before_tracking.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert before_tracking.json()["code"] == "validation_error"
+    assert wrong_scope.status_code == HTTPStatus.NOT_FOUND
+    assert wrong_scope.json()["code"] == "finance_account_not_found"
+
+
+async def test_complete_balance_adjustment_result_projection_failure_rolls_back_history(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _user("balance-adjustment-result-projection")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Projection"})
+        ledger_id = ledger.json()["id"]
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+
+        monkeypatch.setattr(finance_api, "_to_transaction_response", lambda _detail: object())
+        failed = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": account.json()["id"],
+                "transactionDate": "2026-08-01",
+                "expectedDerivedBalance": {"amount": "0.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "1.00", "currency": "CNY"},
+            },
+        )
+        semantics_correction = await client.patch(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}",
+            json={"nature": "liability"},
+        )
+
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (
+            FinanceTransaction,
+            FinanceAccountMovement,
+            FinanceCategoryAllocation,
+        )
+    ]
+    assert failed.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert counts == [0, 0, 0]
+    assert semantics_correction.status_code == HTTPStatus.OK
+    assert semantics_correction.json()["nature"] == "liability"
+
+
+async def test_balance_adjustment_persists_exact_delta_above_decimal_context_precision(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("balance-adjustment-large-decimal")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+    target = "1000000000000000000000000000000.00"
+    expected_delta = "999999999999999999999999999999.99"
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Exact"})
+        ledger_id = ledger.json()["id"]
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Large",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0.01", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": account.json()["id"],
+                "transactionDate": "2026-08-01",
+                "expectedDerivedBalance": {"amount": "0.01", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": target, "currency": "CNY"},
+            },
+        )
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    transaction_id = created.json()["transaction"]["id"]
+    movement = await postgres_session.scalar(
+        select(FinanceAccountMovement).where(
+            FinanceAccountMovement.transaction_id == transaction_id
+        )
+    )
+    assert movement is not None
+    assert created.json()["transaction"]["correctionDelta"] == {
+        "amount": expected_delta,
+        "currency": "CNY",
+    }
+    assert str(movement.amount) == expected_delta
+    assert accounts.json()[0]["currentBalance"] == {
+        "amount": target,
+        "currency": "CNY",
+    }
 
 
 async def _post_transaction(
