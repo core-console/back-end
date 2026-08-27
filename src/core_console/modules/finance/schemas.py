@@ -262,7 +262,15 @@ class UpdateCategoryRequest(_RequestModel):
 class MoneyRequest(_RequestModel):
     """Exact decimal-string Money supplied by a Finance caller."""
 
-    amount: str = Field(strict=True)
+    amount: str = Field(
+        strict=True,
+        description=(
+            "Plain base-10 decimal string. After sign and insignificant leading zeros are "
+            "normalized, a non-zero value may have at most 131,072 integer digits; currency "
+            "minor-unit precision applies separately. Values outside this durable PostgreSQL "
+            "numeric range return 422 validation_error."
+        ),
+    )
     currency: CurrencyCode
 
     @model_validator(mode="after")

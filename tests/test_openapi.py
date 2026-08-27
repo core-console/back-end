@@ -238,6 +238,14 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
         assert money_schema["properties"]["currency"]["$ref"] == (
             "#/components/schemas/CurrencyCode"
         )
+    amount_schema = money_request_schema["properties"]["amount"]
+    assert amount_schema["description"] == (
+        "Plain base-10 decimal string. After sign and insignificant leading zeros are "
+        "normalized, a non-zero value may have at most 131,072 integer digits; currency "
+        "minor-unit precision applies separately. Values outside this durable PostgreSQL "
+        "numeric range return 422 validation_error."
+    )
+    assert not {"maximum", "maxLength", "pattern"} & amount_schema.keys()
 
     create_schema = schema["components"]["schemas"]["CreateAccountRequest"]
     assert set(create_schema["properties"]) == {

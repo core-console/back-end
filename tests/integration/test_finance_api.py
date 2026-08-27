@@ -19,6 +19,7 @@ from core_console.modules.finance.models import (
     FinanceCategoryAllocation,
     FinanceTransaction,
 )
+from core_console.modules.finance.money import POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS
 from core_console.modules.users.models import User
 
 pytestmark = pytest.mark.anyio
@@ -1600,6 +1601,64 @@ async def test_balance_adjustment_persists_exact_delta_above_decimal_context_pre
         "amount": target,
         "currency": "CNY",
     }
+
+
+async def test_postgresql_boundary_persists_and_derived_overflow_returns_validation_error(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("money-durable-boundary")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+    boundary = f"{'9' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.99"
+    outside = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.00"
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Boundary"})
+        ledger_id = ledger.json()["id"]
+        account = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Durable",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": f"-{boundary}", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        rejected_account = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Outside",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": outside, "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        adjustment = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": account.json()["id"],
+                "transactionDate": "2026-08-01",
+                "expectedDerivedBalance": {"amount": f"-{boundary}", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": boundary, "currency": "CNY"},
+            },
+        )
+
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (FinanceTransaction, FinanceAccountMovement)
+    ]
+    assert account.status_code == HTTPStatus.CREATED
+    assert account.json()["openingBalance"] == {"amount": f"-{boundary}", "currency": "CNY"}
+    assert rejected_account.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert rejected_account.json()["code"] == "validation_error"
+    assert adjustment.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert adjustment.headers["content-type"].startswith("application/problem+json")
+    assert adjustment.json()["code"] == "validation_error"
+    assert counts == [0, 0]
 
 
 async def _post_transaction(

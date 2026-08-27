@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance import api as finance_api
+from core_console.modules.finance.money import POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS
 from core_console.modules.finance.service import (
     FinanceAccountArchivedError,
     FinanceAccountBalanceChangedError,
@@ -43,6 +44,126 @@ def _active_user() -> CurrentUser:
         email=None,
         status="active",
     )
+
+
+_OUTSIDE_DURABLE_MONEY_AMOUNT = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.00"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    (
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/accounts",
+            {
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {
+                    "amount": _OUTSIDE_DURABLE_MONEY_AMOUNT,
+                    "currency": "CNY",
+                },
+                "trackingStartDate": "2026-08-01",
+            },
+        ),
+        (
+            "PATCH",
+            f"/api/finance/ledgers/{uuid4()}/accounts/{uuid4()}",
+            {
+                "openingBalance": {
+                    "amount": _OUTSIDE_DURABLE_MONEY_AMOUNT,
+                    "currency": "CNY",
+                }
+            },
+        ),
+        *(
+            (
+                "POST",
+                f"/api/finance/ledgers/{uuid4()}/transactions",
+                {
+                    "kind": kind,
+                    "accountId": str(uuid4()),
+                    "transactionDate": "2026-08-21",
+                    "economicAmount": {
+                        "amount": _OUTSIDE_DURABLE_MONEY_AMOUNT,
+                        "currency": "CNY",
+                    },
+                    "categoryAllocations": [
+                        {
+                            "amount": {
+                                "amount": _OUTSIDE_DURABLE_MONEY_AMOUNT,
+                                "currency": "CNY",
+                            }
+                        }
+                    ],
+                },
+            )
+            for kind in ("income", "expense")
+        ),
+        (
+            "POST",
+            f"/api/finance/ledgers/{uuid4()}/transactions",
+            {
+                "kind": "internalTransfer",
+                "sourceAccountId": str(uuid4()),
+                "destinationAccountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "amount": {
+                    "amount": _OUTSIDE_DURABLE_MONEY_AMOUNT,
+                    "currency": "CNY",
+                },
+            },
+        ),
+        *(
+            (
+                "POST",
+                f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
+                {
+                    "accountId": str(uuid4()),
+                    "transactionDate": "2026-08-21",
+                    "expectedDerivedBalance": {
+                        "amount": (
+                            _OUTSIDE_DURABLE_MONEY_AMOUNT
+                            if field == "expectedDerivedBalance"
+                            else "0.00"
+                        ),
+                        "currency": "CNY",
+                    },
+                    "expectedAccountNature": "asset",
+                    "targetBalance": {
+                        "amount": (
+                            _OUTSIDE_DURABLE_MONEY_AMOUNT if field == "targetBalance" else "0.00"
+                        ),
+                        "currency": "CNY",
+                    },
+                },
+            )
+            for field in ("targetBalance", "expectedDerivedBalance")
+        ),
+    ),
+)
+async def test_finance_money_outside_durable_range_returns_422_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    method: str,
+    path: str,
+    body: dict[str, object],
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.request(method, path, json=body)
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.flush).assert_not_awaited()
+    cast(AsyncMock, session.commit).assert_not_awaited()
 
 
 @pytest.mark.parametrize(

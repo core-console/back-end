@@ -18,7 +18,12 @@ from core_console.modules.finance.models import (
     FinanceLedger,
     FinanceTransaction,
 )
-from core_console.modules.finance.money import CurrencyCode, Money, subtract_money_amounts_exact
+from core_console.modules.finance.money import (
+    CurrencyCode,
+    InvalidMoneyError,
+    Money,
+    subtract_money_amounts_exact,
+)
 from core_console.modules.finance.queries import (
     FinanceAccountBalance,
     FinanceTransactionDetail,
@@ -719,10 +724,13 @@ async def create_balance_adjustment[Result](
         raise InvalidFinanceTransactionError(
             "Target Balance currency must match the Account currency."
         )
-    correction_delta = Money(
-        amount=subtract_money_amounts_exact(target_balance.amount, authoritative.amount),
-        currency=target_balance.currency,
-    )
+    try:
+        correction_delta = Money(
+            amount=subtract_money_amounts_exact(target_balance.amount, authoritative.amount),
+            currency=target_balance.currency,
+        )
+    except InvalidMoneyError as exc:
+        raise InvalidFinanceTransactionError(str(exc)) from None
     if correction_delta.amount == 0:
         try:
             projected = project(BalanceAdjustmentResult(outcome="noChange", transaction=None))

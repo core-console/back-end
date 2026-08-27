@@ -424,6 +424,14 @@ Rules:
 - Request values may use fewer fractional digits than the supported scale.
 - Responses are canonicalized to the supported currency's `minorUnit` scale.
 - `currency` must be present in the backend-owned supported-currency catalog.
+- After sign and insignificant leading zeros are normalized, a non-zero amount
+  may require at most 131,072 base-10 integer digits. The greatest positive
+  value at currency scale `s` is `10^131072 - 10^-s`; the signed boundary is
+  symmetric, and zero remains valid.
+- The magnitude boundary reflects backend PostgreSQL `numeric` persistence
+  representability. It applies independently of Currency minor-unit precision,
+  is not a business balance or credit limit, and violations return
+  `422 validation_error` before persistence.
 - Economic Amounts, Category Allocation amounts, and v1 Transfer command amount
   are strictly positive.
 - Opening Balance, Account Balance, target balance, and other account-relative

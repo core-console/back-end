@@ -22,6 +22,8 @@ SUPPORTED_CURRENCY_MINOR_UNITS: dict[CurrencyCode, int] = {
     "USD": 2,
 }
 
+POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS = 131_072
+
 
 class InvalidMoneyError(ValueError):
     """A Money value violates the exact public Finance contract."""
@@ -33,6 +35,13 @@ class Money:
 
     amount: Decimal
     currency: CurrencyCode
+
+    def __post_init__(self) -> None:
+        if not is_money_amount_durable(self.amount):
+            raise InvalidMoneyError(
+                "Money amount exceeds the PostgreSQL durable range of "
+                f"{POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS} integer digits."
+            )
 
     @classmethod
     def parse(cls, *, amount: str, currency: CurrencyCode) -> Money:
@@ -52,6 +61,17 @@ class Money:
         scale = SUPPORTED_CURRENCY_MINOR_UNITS[self.currency]
         canonical_value = Decimal(0) if self.amount == 0 else self.amount
         return f"{canonical_value:.{scale}f}"
+
+
+def is_money_amount_durable(amount: Decimal) -> bool:
+    """Return whether a finite amount fits PostgreSQL numeric's integer range."""
+
+    if not amount.is_finite():
+        return False
+    if amount.is_zero():
+        return True
+    integer_digits = max(amount.adjusted() + 1, 0)
+    return integer_digits <= POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS
 
 
 def subtract_money_amounts_exact(minuend: Decimal, subtrahend: Decimal) -> Decimal:

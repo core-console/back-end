@@ -6,8 +6,10 @@ from typing import Literal
 import pytest
 
 from core_console.modules.finance.money import (
+    POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS,
     InvalidMoneyError,
     Money,
+    is_money_amount_durable,
     subtract_money_amounts_exact,
 )
 from core_console.modules.finance.service import (
@@ -44,6 +46,62 @@ def test_money_canonicalizes_signed_zero_without_a_negative_position() -> None:
     money = Money.parse(amount="-0", currency="USD")
 
     assert money.canonical_amount == "0.00"
+
+
+@pytest.mark.parametrize(
+    ("currency", "fraction"),
+    (("CNY", ".99"), ("USD", ".99"), ("JPY", "")),
+)
+def test_money_accepts_the_postgresql_durable_integer_digit_boundary(
+    currency: Literal["CNY", "JPY", "USD"],
+    fraction: str,
+) -> None:
+    amount = f"{'9' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}{fraction}"
+
+    money = Money.parse(amount=amount, currency=currency)
+
+    assert money.amount == Decimal(amount)
+
+
+def test_money_rejects_the_next_postgresql_integer_digit_magnitude() -> None:
+    amount = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.00"
+
+    with pytest.raises(InvalidMoneyError, match="PostgreSQL durable range"):
+        Money.parse(amount=amount, currency="CNY")
+
+
+@pytest.mark.parametrize(
+    ("amount", "expected"),
+    (
+        (Decimal(0), True),
+        (Decimal("-0.00"), True),
+        (Decimal("0.01"), True),
+        (Decimal((0, (1,), POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS - 1)), True),
+        (Decimal((1, (1,), POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS - 1)), True),
+        (Decimal((0, (1,), POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS)), False),
+    ),
+)
+def test_money_durable_range_uses_numeric_magnitude(
+    amount: Decimal,
+    expected: bool,
+) -> None:
+    assert is_money_amount_durable(amount) is expected
+
+
+def test_money_durable_range_ignores_sign_and_insignificant_leading_zeros() -> None:
+    boundary_digits = "9" * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS
+
+    positive = Money.parse(amount=f"000{boundary_digits}.00", currency="CNY")
+    negative = Money.parse(amount=f"-000{boundary_digits}.00", currency="CNY")
+
+    assert positive.amount == negative.amount.copy_abs()
+
+
+def test_direct_money_construction_cannot_bypass_the_durable_range() -> None:
+    outside_range = Decimal((0, (1,), POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS))
+
+    with pytest.raises(InvalidMoneyError, match="PostgreSQL durable range"):
+        Money(amount=outside_range, currency="JPY")
 
 
 def test_money_subtraction_is_exact_beyond_default_decimal_emax() -> None:
