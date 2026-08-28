@@ -25,8 +25,10 @@ from core_console.modules.finance.schemas import (
     BalanceAdjustmentContextResponse,
     BalanceAdjustmentCreatedResultResponse,
     BalanceAdjustmentNoChangeResultResponse,
+    BalanceAdjustmentRemovedResultResponse,
     BalanceAdjustmentResultResponse,
     BalanceAdjustmentTransactionResponse,
+    BalanceAdjustmentUpdatedResultResponse,
     CategoryAllocationResponse,
     CategoryReferenceResponse,
     CategoryResponse,
@@ -44,6 +46,8 @@ from core_console.modules.finance.schemas import (
     InternalTransferTransactionResponse,
     LedgerResponse,
     MoneyResponse,
+    ReplaceBalanceAdjustmentRequest,
+    ReplaceBalanceAdjustmentResultResponse,
     UpdateCategoryRequest,
     UpdateFinanceAccountRequest,
     UpdateLedgerRequest,
@@ -60,6 +64,7 @@ from core_console.modules.finance.service import (
     FinanceCategoryNotFoundError,
     FinanceLedgerNameConflictError,
     FinanceLedgerNotFoundError,
+    FinanceTransactionKindImmutableError,
     FinanceTransactionNotFoundError,
     InvalidFinanceAccountMoneyError,
     InvalidFinanceAccountNameError,
@@ -80,6 +85,7 @@ from core_console.modules.finance.service import (
     get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
+    replace_balance_adjustment,
     unarchive_finance_account,
     unarchive_finance_category,
     update_finance_account,
@@ -104,6 +110,7 @@ type _FinanceApplicationError = (
     | FinanceLedgerNameConflictError
     | FinanceLedgerNotFoundError
     | FinanceTransactionNotFoundError
+    | FinanceTransactionKindImmutableError
     | InvalidFinanceAccountMoneyError
     | InvalidFinanceAccountNameError
     | InvalidFinanceAccountTrackingStartDateError
@@ -258,16 +265,39 @@ def _to_balance_adjustment_result_response(
         return BalanceAdjustmentResultResponse(
             BalanceAdjustmentNoChangeResultResponse(outcome="noChange", transaction=None)
         )
+    if result.outcome != "created":
+        raise RuntimeError("Create Balance Adjustment returned an invalid outcome.")
     if detail is None:
         raise RuntimeError("A created Balance Adjustment must contain a Transaction.")
     transaction = _to_transaction_response(detail)
     if not isinstance(transaction, BalanceAdjustmentTransactionResponse):
         raise RuntimeError("Balance Adjustment projection returned the wrong Transaction kind.")
     return BalanceAdjustmentResultResponse(
-        BalanceAdjustmentCreatedResultResponse(
-            outcome="created",
-            transaction=transaction,
+        BalanceAdjustmentCreatedResultResponse(outcome="created", transaction=transaction)
+    )
+
+
+def _to_replace_balance_adjustment_result_response(
+    result: BalanceAdjustmentResult[FinanceTransactionDetail],
+) -> ReplaceBalanceAdjustmentResultResponse:
+    """Validate the complete replacement result before commit."""
+
+    detail = result.transaction
+    if result.outcome == "removed":
+        if detail is not None:
+            raise RuntimeError("A removed Balance Adjustment cannot contain a Transaction.")
+        return ReplaceBalanceAdjustmentResultResponse(
+            BalanceAdjustmentRemovedResultResponse(outcome="removed", transaction=None)
         )
+    if result.outcome != "updated":
+        raise RuntimeError("Replace Balance Adjustment returned an invalid outcome.")
+    if detail is None:
+        raise RuntimeError("An updated Balance Adjustment must contain a Transaction.")
+    transaction = _to_transaction_response(detail)
+    if not isinstance(transaction, BalanceAdjustmentTransactionResponse):
+        raise RuntimeError("Balance Adjustment projection returned the wrong Transaction kind.")
+    return ReplaceBalanceAdjustmentResultResponse(
+        BalanceAdjustmentUpdatedResultResponse(outcome="updated", transaction=transaction)
     )
 
 
@@ -297,6 +327,7 @@ async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
         FinanceLedgerNameConflictError,
         FinanceLedgerNotFoundError,
         FinanceTransactionNotFoundError,
+        FinanceTransactionKindImmutableError,
         InvalidFinanceAccountMoneyError,
         InvalidFinanceAccountNameError,
         InvalidFinanceAccountTrackingStartDateError,
@@ -378,6 +409,13 @@ def _finance_problem_for(error: _FinanceApplicationError) -> ApplicationProblem:
             title="Not Found",
             detail="The requested Finance Transaction does not exist.",
             code="finance_transaction_not_found",
+        )
+    if isinstance(error, FinanceTransactionKindImmutableError):
+        return ApplicationProblem(
+            status=HTTPStatus.CONFLICT,
+            title="Conflict",
+            detail="The Finance Transaction kind cannot be changed by this operation.",
+            code="finance_transaction_kind_immutable",
         )
     if isinstance(error, FinanceLedgerNameConflictError):
         return ApplicationProblem(
@@ -1021,6 +1059,47 @@ async def post_balance_adjustment(
             target_balance=request.target_balance.to_money(),
             note=request.note,
             project=_to_balance_adjustment_result_response,
+        )
+    )
+
+
+@router.put(
+    "/ledgers/{ledgerId}/balance-adjustments/{transactionId}",
+    operation_id="replaceBalanceAdjustment",
+    summary="Replace or remove a Balance Adjustment",
+    response_model=ReplaceBalanceAdjustmentResultResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The context is stale or immutable."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def put_balance_adjustment(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    transaction_id: Annotated[UUID, Path(alias="transactionId")],
+    request: ReplaceBalanceAdjustmentRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ReplaceBalanceAdjustmentResultResponse:
+    """Replace an Adjustment from a fresh target, or remove it at zero delta."""
+
+    return await _run_finance_workflow(
+        replace_balance_adjustment(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
+            account_id=request.account_id,
+            transaction_date=request.transaction_date,
+            expected_derived_balance=request.expected_derived_balance.to_money(),
+            expected_account_nature=request.expected_account_nature,
+            target_balance=request.target_balance.to_money(),
+            note=request.note,
+            project=_to_replace_balance_adjustment_result_response,
         )
     )
 

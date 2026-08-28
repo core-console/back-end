@@ -34,12 +34,15 @@ from core_console.modules.finance.models import (
 from core_console.modules.finance.money import Money
 from core_console.modules.finance.queries import FinanceTransactionDetail
 from core_console.modules.finance.service import (
+    BalanceAdjustmentResult,
     FinanceAccountBalanceChangedError,
     FinanceAccountSemanticsLockedError,
+    FinanceTransactionNotFoundError,
     correct_finance_account_semantics,
     create_balance_adjustment,
     create_finance_transaction,
     create_internal_transfer_transaction,
+    replace_balance_adjustment,
 )
 from core_console.modules.users.models import User
 
@@ -501,6 +504,326 @@ async def test_balance_adjustment_recomputes_after_concurrent_account_writer(
         await adjustment_session.rollback()
 
     assert await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction)) == 1
+
+
+@pytest.mark.parametrize(
+    "intervening_writer",
+    ("income", "expense", "transfer", "adjustment"),
+)
+async def test_balance_adjustment_replacement_recomputes_after_concurrent_account_writer(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+    intervening_writer: str,
+) -> None:
+    owner = _user(f"replacement-concurrency-{intervening_writer}")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        name="Primary",
+        name_key="primary",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    other = _account(
+        ledger.id,
+        name="Other",
+        name_key="other",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([account, other])
+    await postgres_session.commit()
+    old = await create_balance_adjustment(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        transaction_date=date(2026, 8, 1),
+        expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+        expected_account_nature="asset",
+        target_balance=Money.parse(amount="1.00", currency="CNY"),
+        note=None,
+        project=lambda result: result,
+    )
+    assert old.transaction is not None
+    old_id = old.transaction.transaction.id
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as writer_session,
+        session_factory() as replacement_session,
+        session_factory() as observer_session,
+    ):
+        assert await writer_session.get(FinanceAccount, account.id, with_for_update=True)
+        replacement_pid = await replacement_session.scalar(select(func.pg_backend_pid()))
+        assert replacement_pid is not None
+        replacement_task = asyncio.create_task(
+            replace_balance_adjustment(
+                replacement_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=old_id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount="3.00", currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(observer_session, backend_pid=replacement_pid)
+        if intervening_writer == "transfer":
+            await create_internal_transfer_transaction(
+                writer_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                source_account_id=account.id,
+                destination_account_id=other.id,
+                transaction_date=date(2026, 8, 1),
+                amount=Money.parse(amount="1.00", currency="CNY"),
+                note=None,
+                project=lambda detail: detail.transaction.id,
+            )
+        elif intervening_writer in {"income", "expense"}:
+            await create_finance_transaction(
+                writer_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                kind=intervening_writer,  # type: ignore[arg-type]
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                economic_amount=Money.parse(amount="1.00", currency="CNY"),
+                allocation_amount=Money.parse(amount="1.00", currency="CNY"),
+                category_id=None,
+                note=None,
+                project=lambda detail: detail.transaction.id,
+            )
+        else:
+            await create_balance_adjustment(
+                writer_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="1.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount="2.00", currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+        with pytest.raises(FinanceAccountBalanceChangedError):
+            await replacement_task
+        await replacement_session.rollback()
+
+    assert await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction)) == 2
+
+
+async def test_changed_account_replacements_lock_overlapping_accounts_in_uuid_order(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("changed-account-lock-order")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    first = _account(
+        ledger.id,
+        name="First",
+        name_key="first",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    second = _account(
+        ledger.id,
+        name="Second",
+        name_key="second",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add_all([first, second])
+    await postgres_session.commit()
+
+    async def create_old(account: FinanceAccount, target: str) -> UUID:
+        result = await create_balance_adjustment(
+            postgres_session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            account_id=account.id,
+            transaction_date=date(2026, 8, 1),
+            expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+            expected_account_nature="asset",
+            target_balance=Money.parse(amount=target, currency="CNY"),
+            note=None,
+            project=lambda item: item,
+        )
+        assert result.transaction is not None
+        return result.transaction.transaction.id
+
+    first_id = await create_old(first, "1.00")
+    second_id = await create_old(second, "2.00")
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+
+    async def replace(
+        session: AsyncSession,
+        *,
+        transaction_id: UUID,
+        account_id: UUID,
+        expected: str,
+        target: str,
+    ) -> object:
+        return await replace_balance_adjustment(
+            session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            transaction_id=transaction_id,
+            account_id=account_id,
+            transaction_date=date(2026, 8, 1),
+            expected_derived_balance=Money.parse(amount=expected, currency="CNY"),
+            expected_account_nature="asset",
+            target_balance=Money.parse(amount=target, currency="CNY"),
+            note=None,
+            project=lambda item: item,
+        )
+
+    async with session_factory() as forward, session_factory() as reverse:
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                replace(
+                    forward,
+                    transaction_id=first_id,
+                    account_id=second.id,
+                    expected="2.00",
+                    target="3.00",
+                ),
+                replace(
+                    reverse,
+                    transaction_id=second_id,
+                    account_id=first.id,
+                    expected="1.00",
+                    target="3.00",
+                ),
+                return_exceptions=True,
+            ),
+            timeout=5,
+        )
+
+    successes = [item for item in results if not isinstance(item, Exception)]
+    failures = [item for item in results if isinstance(item, Exception)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], FinanceAccountBalanceChangedError)
+    movements = (await postgres_session.scalars(select(FinanceAccountMovement))).all()
+    assert len(movements) == 2
+    assert len({movement.account_id for movement in movements}) == 1
+    assert sum((movement.amount for movement in movements), Decimal(0)) == Decimal("3.00")
+
+
+async def test_concurrent_replacements_of_same_adjustment_have_one_winner(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("same-adjustment-concurrency")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+    old = await create_balance_adjustment(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        transaction_date=date(2026, 8, 1),
+        expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+        expected_account_nature="asset",
+        target_balance=Money.parse(amount="1.00", currency="CNY"),
+        note=None,
+        project=lambda result: result,
+    )
+    assert old.transaction is not None
+    old_id = old.transaction.transaction.id
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as blocker,
+        session_factory() as update_session,
+        session_factory() as remove_session,
+        session_factory() as observer,
+    ):
+        assert await blocker.get(FinanceTransaction, old_id, with_for_update=True)
+        update_pid = await update_session.scalar(select(func.pg_backend_pid()))
+        remove_pid = await remove_session.scalar(select(func.pg_backend_pid()))
+        assert update_pid is not None and remove_pid is not None
+
+        async def attempt(session: AsyncSession, target: str) -> object:
+            return await replace_balance_adjustment(
+                session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=old_id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount=target, currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+
+        update_task = asyncio.create_task(attempt(update_session, "2.00"))
+        assert await _wait_for_postgres_backend_lock(observer, backend_pid=update_pid)
+        remove_task = asyncio.create_task(attempt(remove_session, "0.00"))
+        assert await _wait_for_postgres_backend_lock(observer, backend_pid=remove_pid)
+        await blocker.commit()
+        results = await asyncio.gather(update_task, remove_task, return_exceptions=True)
+
+    failures = [item for item in results if isinstance(item, Exception)]
+    successes = [item for item in results if not isinstance(item, Exception)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], FinanceTransactionNotFoundError)
+    winner = successes[0]
+    assert isinstance(winner, BalanceAdjustmentResult)
+    expected_count = 1 if winner.outcome == "updated" else 0
+    assert (
+        await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction))
+        == expected_count
+    )
+    assert (
+        await postgres_session.scalar(select(func.count()).select_from(FinanceAccountMovement))
+        == expected_count
+    )
+    if winner.outcome == "updated":
+        assert winner.transaction is not None
+        assert winner.transaction.transaction.id == old_id
+        assert winner.transaction.movement.amount == Decimal("2.00")
+    else:
+        assert winner.outcome == "removed"
+        assert winner.transaction is None
 
 
 async def test_balance_adjustment_no_change_does_not_lock_semantics_but_created_history_does(

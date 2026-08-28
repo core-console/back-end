@@ -140,6 +140,32 @@ _OUTSIDE_DURABLE_MONEY_AMOUNT = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}
             )
             for field in ("targetBalance", "expectedDerivedBalance")
         ),
+        *(
+            (
+                "PUT",
+                f"/api/finance/ledgers/{uuid4()}/balance-adjustments/{uuid4()}",
+                {
+                    "accountId": str(uuid4()),
+                    "transactionDate": "2026-08-21",
+                    "expectedDerivedBalance": {
+                        "amount": (
+                            _OUTSIDE_DURABLE_MONEY_AMOUNT
+                            if field == "expectedDerivedBalance"
+                            else "0.00"
+                        ),
+                        "currency": "CNY",
+                    },
+                    "expectedAccountNature": "asset",
+                    "targetBalance": {
+                        "amount": (
+                            _OUTSIDE_DURABLE_MONEY_AMOUNT if field == "targetBalance" else "0.00"
+                        ),
+                        "currency": "CNY",
+                    },
+                },
+            )
+            for field in ("targetBalance", "expectedDerivedBalance")
+        ),
     ),
 )
 async def test_finance_money_outside_durable_range_returns_422_without_database_work(

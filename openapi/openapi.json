@@ -162,6 +162,27 @@
         "title": "BalanceAdjustmentNoChangeResultResponse",
         "type": "object"
       },
+      "BalanceAdjustmentRemovedResultResponse": {
+        "additionalProperties": false,
+        "description": "A zero-delta replacement result after removing the old Adjustment.",
+        "properties": {
+          "outcome": {
+            "const": "removed",
+            "title": "Outcome",
+            "type": "string"
+          },
+          "transaction": {
+            "title": "Transaction",
+            "type": "null"
+          }
+        },
+        "required": [
+          "outcome",
+          "transaction"
+        ],
+        "title": "BalanceAdjustmentRemovedResultResponse",
+        "type": "object"
+      },
       "BalanceAdjustmentResultResponse": {
         "description": "Exact outcome-discriminated Balance Adjustment command result.",
         "discriminator": {
@@ -234,6 +255,26 @@
           "correctionDelta"
         ],
         "title": "BalanceAdjustmentTransactionResponse",
+        "type": "object"
+      },
+      "BalanceAdjustmentUpdatedResultResponse": {
+        "additionalProperties": false,
+        "description": "A replacement result containing the updated Adjustment.",
+        "properties": {
+          "outcome": {
+            "const": "updated",
+            "title": "Outcome",
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
+          }
+        },
+        "required": [
+          "outcome",
+          "transaction"
+        ],
+        "title": "BalanceAdjustmentUpdatedResultResponse",
         "type": "object"
       },
       "CategoryAllocationRequest": {
@@ -1148,6 +1189,74 @@
         ],
         "title": "ProblemDetails",
         "type": "object"
+      },
+      "ReplaceBalanceAdjustmentRequest": {
+        "additionalProperties": false,
+        "description": "Stale-safe target command replacing one existing Adjustment.",
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "title": "Accountid",
+            "type": "string"
+          },
+          "expectedAccountNature": {
+            "enum": [
+              "asset",
+              "liability"
+            ],
+            "title": "Expectedaccountnature",
+            "type": "string"
+          },
+          "expectedDerivedBalance": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "targetBalance": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "accountId",
+          "transactionDate",
+          "expectedDerivedBalance",
+          "expectedAccountNature",
+          "targetBalance"
+        ],
+        "title": "ReplaceBalanceAdjustmentRequest",
+        "type": "object"
+      },
+      "ReplaceBalanceAdjustmentResultResponse": {
+        "description": "Exact outcome-discriminated Adjustment replacement result.",
+        "discriminator": {
+          "mapping": {
+            "removed": "#/components/schemas/BalanceAdjustmentRemovedResultResponse",
+            "updated": "#/components/schemas/BalanceAdjustmentUpdatedResultResponse"
+          },
+          "propertyName": "outcome"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BalanceAdjustmentUpdatedResultResponse"
+          },
+          {
+            "$ref": "#/components/schemas/BalanceAdjustmentRemovedResultResponse"
+          }
+        ],
+        "title": "ReplaceBalanceAdjustmentResultResponse"
       },
       "UpdateAccountRequest": {
         "additionalProperties": false,
@@ -2341,6 +2450,121 @@
         },
         "security": [],
         "summary": "Create a Balance Adjustment",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/balance-adjustments/{transactionId}": {
+      "put": {
+        "description": "Replace an Adjustment from a fresh target, or remove it at zero delta.",
+        "operationId": "replaceBalanceAdjustment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Transactionid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceBalanceAdjustmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplaceBalanceAdjustmentResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The context is stale or immutable."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Replace or remove a Balance Adjustment",
         "tags": [
           "Finance"
         ]

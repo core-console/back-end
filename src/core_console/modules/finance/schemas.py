@@ -205,6 +205,24 @@ class BalanceAdjustmentCreatedResultResponse(BaseModel):
     transaction: BalanceAdjustmentTransactionResponse
 
 
+class BalanceAdjustmentUpdatedResultResponse(BaseModel):
+    """A replacement result containing the updated Adjustment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["updated"]
+    transaction: BalanceAdjustmentTransactionResponse
+
+
+class BalanceAdjustmentRemovedResultResponse(BaseModel):
+    """A zero-delta replacement result after removing the old Adjustment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["removed"]
+    transaction: None
+
+
 class _RequestModel(BaseModel):
     """Accept only declared public Finance JSON fields."""
 
@@ -233,6 +251,17 @@ class BalanceAdjustmentResultResponse(
     ]
 ):
     """Exact outcome-discriminated Balance Adjustment command result."""
+
+
+class ReplaceBalanceAdjustmentResultResponse(
+    RootModel[
+        Annotated[
+            BalanceAdjustmentUpdatedResultResponse | BalanceAdjustmentRemovedResultResponse,
+            Field(discriminator="outcome"),
+        ]
+    ]
+):
+    """Exact outcome-discriminated Adjustment replacement result."""
 
 
 class CreateLedgerRequest(_RequestModel):
@@ -464,14 +493,22 @@ class CreateInternalTransferTransactionRequest(_TransactionNoteRequest):
         return self
 
 
-class CreateBalanceAdjustmentRequest(_TransactionNoteRequest):
-    """Stale-safe target-balance command for one active Account."""
+class _BalanceAdjustmentCommandRequest(_TransactionNoteRequest):
+    """Shared stale-safe target-balance command fields."""
 
     account_id: UUID = Field(alias="accountId")
     transaction_date: FinanceRequestDate = Field(alias="transactionDate")
     expected_derived_balance: MoneyRequest = Field(alias="expectedDerivedBalance")
     expected_account_nature: Literal["asset", "liability"] = Field(alias="expectedAccountNature")
     target_balance: MoneyRequest = Field(alias="targetBalance")
+
+
+class CreateBalanceAdjustmentRequest(_BalanceAdjustmentCommandRequest):
+    """Stale-safe target-balance command for one active Account."""
+
+
+class ReplaceBalanceAdjustmentRequest(_BalanceAdjustmentCommandRequest):
+    """Stale-safe target command replacing one existing Adjustment."""
 
 
 type CreateFinanceTransactionRequest = Annotated[

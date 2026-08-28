@@ -391,6 +391,25 @@ async def get_finance_transaction_detail(
     )
 
 
+async def get_finance_transaction_for_update(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    transaction_id: UUID,
+) -> FinanceTransaction | None:
+    """Lock one Transaction only within its addressed Ledger."""
+
+    statement = (
+        select(FinanceTransaction)
+        .where(
+            FinanceTransaction.id == transaction_id,
+            FinanceTransaction.ledger_id == ledger_id,
+        )
+        .with_for_update(of=FinanceTransaction)
+    )
+    return (await session.execute(statement)).scalar_one_or_none()
+
+
 async def get_earliest_finance_account_transaction_date(
     session: AsyncSession,
     *,
