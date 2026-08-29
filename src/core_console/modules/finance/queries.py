@@ -256,6 +256,7 @@ async def get_finance_account_balances_for_update(
             FinanceAccount.ledger_id == ledger_id,
             FinanceAccount.id.in_(account_ids),
         )
+        .execution_options(populate_existing=True)
         .order_by(FinanceAccount.id)
         .with_for_update(of=FinanceAccount)
     )
@@ -405,9 +406,25 @@ async def get_finance_transaction_for_update(
             FinanceTransaction.id == transaction_id,
             FinanceTransaction.ledger_id == ledger_id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update(of=FinanceTransaction)
     )
     return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def finance_transaction_exists(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    transaction_id: UUID,
+) -> bool:
+    """Check scoped Transaction existence using the current statement snapshot."""
+
+    statement = select(FinanceTransaction.id).where(
+        FinanceTransaction.id == transaction_id,
+        FinanceTransaction.ledger_id == ledger_id,
+    )
+    return (await session.scalar(statement)) is not None
 
 
 async def lock_finance_transaction_mutation(

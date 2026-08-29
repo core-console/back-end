@@ -35,9 +35,12 @@ from core_console.modules.finance.money import Money
 from core_console.modules.finance.queries import FinanceTransactionDetail
 from core_console.modules.finance.service import (
     BalanceAdjustmentResult,
+    FinanceAccountArchivedError,
     FinanceAccountBalanceChangedError,
     FinanceAccountSemanticsLockedError,
+    FinanceTransactionKindImmutableError,
     FinanceTransactionNotFoundError,
+    archive_finance_account,
     correct_finance_account_semantics,
     create_balance_adjustment,
     create_finance_transaction,
@@ -866,6 +869,138 @@ async def test_opposing_transfer_replacements_lock_four_account_unions_without_d
     assert {movement.account_id for movement in movements} == {account.id for account in accounts}
 
 
+async def test_transfer_replacement_rejects_role_swapped_account_archived_while_locking(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("transfer-replacement-concurrent-archive")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    source = _account(
+        ledger.id,
+        name="Source",
+        name_key="source",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    destination = _account(
+        ledger.id,
+        name="Destination",
+        name_key="destination",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    other = _account(
+        ledger.id,
+        name="Other",
+        name_key="other",
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    source.id = UUID(int=1)
+    destination.id = UUID(int=2)
+    other.id = UUID(int=3)
+    postgres_session.add_all((source, destination, other))
+    await postgres_session.commit()
+    transaction_id = await create_internal_transfer_transaction(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        source_account_id=source.id,
+        destination_account_id=destination.id,
+        transaction_date=date(2026, 8, 1),
+        amount=Money.parse(amount="5.00", currency="CNY"),
+        note="original",
+        project=lambda detail: detail.transaction.id,
+    )
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as blocker,
+        session_factory() as replacement_session,
+        session_factory() as archive_session,
+        session_factory() as observer,
+    ):
+        assert await blocker.get(FinanceAccount, source.id, with_for_update=True)
+        replacement_pid = await replacement_session.scalar(select(func.pg_backend_pid()))
+        assert replacement_pid is not None
+        replacement_task = asyncio.create_task(
+            replace_internal_transfer_transaction(
+                replacement_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=transaction_id,
+                source_account_id=destination.id,
+                destination_account_id=other.id,
+                transaction_date=date(2026, 8, 2),
+                amount=Money.parse(amount="7.00", currency="CNY"),
+                note="replacement",
+                project=lambda detail: detail.transaction.id,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(observer, backend_pid=replacement_pid)
+
+        archived = await archive_finance_account(
+            archive_session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            account_id=destination.id,
+        )
+        assert archived.account.status == "archived"
+        await blocker.commit()
+        replacement_result = (
+            await asyncio.wait_for(
+                asyncio.gather(replacement_task, return_exceptions=True),
+                timeout=5,
+            )
+        )[0]
+
+    assert isinstance(replacement_result, FinanceAccountArchivedError)
+    async with session_factory() as inspector:
+        transaction = await inspector.get(FinanceTransaction, transaction_id)
+        movements = (
+            await inspector.scalars(
+                select(FinanceAccountMovement).order_by(FinanceAccountMovement.role)
+            )
+        ).all()
+        allocations = (await inspector.scalars(select(FinanceCategoryAllocation))).all()
+        accounts = {
+            account.id: account
+            for account in (await inspector.scalars(select(FinanceAccount))).all()
+        }
+
+    assert transaction is not None
+    assert transaction.transaction_date == date(2026, 8, 1)
+    assert transaction.note == "original"
+    assert [(movement.role, movement.account_id, movement.amount) for movement in movements] == [
+        ("destination", destination.id, Decimal("5.00")),
+        ("source", source.id, Decimal("-5.00")),
+    ]
+    assert allocations == []
+    assert accounts[destination.id].status == "archived"
+    assert {
+        account_id: accounts[account_id].opening_balance
+        + sum(
+            (movement.amount for movement in movements if movement.account_id == account_id),
+            Decimal("0.00"),
+        )
+        for account_id in (source.id, destination.id, other.id)
+    } == {
+        source.id: Decimal("-5.00"),
+        destination.id: Decimal("5.00"),
+        other.id: Decimal("0.00"),
+    }
+
+
 async def test_generic_delete_serializes_with_specialized_adjustment_replacement(
     postgres_engine: AsyncEngine,
     postgres_session: AsyncSession,
@@ -934,6 +1069,210 @@ async def test_generic_delete_serializes_with_specialized_adjustment_replacement
         for result in results
     )
     assert await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction)) == 0
+
+
+async def test_generic_delete_converges_after_waiting_for_same_id_adjustment_replacement(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("delete-adjustment-epq")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+    created = await create_balance_adjustment(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        transaction_date=date(2026, 8, 1),
+        expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+        expected_account_nature="asset",
+        target_balance=Money.parse(amount="1.00", currency="CNY"),
+        note=None,
+        project=lambda result: result,
+    )
+    assert created.transaction is not None
+    transaction_id = created.transaction.transaction.id
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as blocker,
+        session_factory() as replacement_session,
+        session_factory() as delete_session,
+        session_factory() as observer,
+    ):
+        assert await blocker.get(FinanceTransaction, transaction_id, with_for_update=True)
+        replacement_pid = await replacement_session.scalar(select(func.pg_backend_pid()))
+        delete_pid = await delete_session.scalar(select(func.pg_backend_pid()))
+        assert replacement_pid is not None and delete_pid is not None
+
+        replacement_task = asyncio.create_task(
+            replace_balance_adjustment(
+                replacement_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=transaction_id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount="2.00", currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(observer, backend_pid=replacement_pid)
+
+        delete_task = asyncio.create_task(
+            delete_finance_transaction(
+                delete_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=transaction_id,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(
+            observer,
+            backend_pid=delete_pid,
+            require_owned_advisory_lock=True,
+        )
+
+        await blocker.commit()
+        replacement_result, delete_result = await asyncio.wait_for(
+            asyncio.gather(replacement_task, delete_task, return_exceptions=True),
+            timeout=5,
+        )
+
+    assert isinstance(replacement_result, BalanceAdjustmentResult)
+    assert replacement_result.outcome == "updated"
+    assert delete_result is None
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (FinanceTransaction, FinanceAccountMovement, FinanceCategoryAllocation)
+    ]
+    assert counts == [0, 0, 0]
+    movement_total = await postgres_session.scalar(
+        select(func.coalesce(func.sum(FinanceAccountMovement.amount), Decimal("0.00"))).where(
+            FinanceAccountMovement.account_id == account.id
+        )
+    )
+    assert movement_total is not None
+    assert account.opening_balance + movement_total == Decimal("0.00")
+
+
+async def test_ordinary_replacement_classifies_kind_after_same_id_adjustment_replacement(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+) -> None:
+    owner = _user("replace-adjustment-kind-epq")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    account = _account(
+        ledger.id,
+        nature="asset",
+        currency="CNY",
+        opening_balance=Decimal("0.00"),
+        status="active",
+    )
+    postgres_session.add(account)
+    await postgres_session.commit()
+    created = await create_balance_adjustment(
+        postgres_session,
+        owner_id=owner.id,
+        ledger_id=ledger.id,
+        account_id=account.id,
+        transaction_date=date(2026, 8, 1),
+        expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+        expected_account_nature="asset",
+        target_balance=Money.parse(amount="1.00", currency="CNY"),
+        note=None,
+        project=lambda result: result,
+    )
+    assert created.transaction is not None
+    transaction_id = created.transaction.transaction.id
+
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as blocker,
+        session_factory() as adjustment_session,
+        session_factory() as ordinary_session,
+        session_factory() as observer,
+    ):
+        assert await blocker.get(FinanceTransaction, transaction_id, with_for_update=True)
+        adjustment_pid = await adjustment_session.scalar(select(func.pg_backend_pid()))
+        ordinary_pid = await ordinary_session.scalar(select(func.pg_backend_pid()))
+        assert adjustment_pid is not None and ordinary_pid is not None
+
+        adjustment_task = asyncio.create_task(
+            replace_balance_adjustment(
+                adjustment_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=transaction_id,
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                expected_derived_balance=Money.parse(amount="0.00", currency="CNY"),
+                expected_account_nature="asset",
+                target_balance=Money.parse(amount="2.00", currency="CNY"),
+                note=None,
+                project=lambda result: result,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(observer, backend_pid=adjustment_pid)
+
+        ordinary_task = asyncio.create_task(
+            replace_finance_transaction(
+                ordinary_session,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                transaction_id=transaction_id,
+                kind="income",
+                account_id=account.id,
+                transaction_date=date(2026, 8, 1),
+                economic_amount=Money.parse(amount="3.00", currency="CNY"),
+                allocation_amount=Money.parse(amount="3.00", currency="CNY"),
+                category_id=None,
+                note=None,
+                project=lambda detail: detail.transaction.id,
+            )
+        )
+        assert await _wait_for_postgres_backend_lock(
+            observer,
+            backend_pid=ordinary_pid,
+            require_owned_advisory_lock=True,
+        )
+
+        await blocker.commit()
+        adjustment_result, ordinary_result = await asyncio.wait_for(
+            asyncio.gather(adjustment_task, ordinary_task, return_exceptions=True),
+            timeout=5,
+        )
+
+    assert isinstance(adjustment_result, BalanceAdjustmentResult)
+    assert adjustment_result.outcome == "updated"
+    assert isinstance(ordinary_result, FinanceTransactionKindImmutableError)
+    transactions = (await postgres_session.scalars(select(FinanceTransaction))).all()
+    movements = (await postgres_session.scalars(select(FinanceAccountMovement))).all()
+    allocations = (await postgres_session.scalars(select(FinanceCategoryAllocation))).all()
+    assert len(transactions) == len(movements) == 1
+    assert allocations == []
+    assert transactions[0].id == transaction_id
+    assert transactions[0].kind == "balance_adjustment"
+    assert movements[0].amount == Decimal("2.00")
 
 
 @pytest.mark.parametrize(
@@ -1500,15 +1839,36 @@ async def _wait_for_postgres_backend_lock(
     observer_session: AsyncSession,
     *,
     backend_pid: int,
+    require_owned_advisory_lock: bool = False,
 ) -> bool:
     """Wait briefly for one PostgreSQL backend to report a row-lock wait."""
 
     for _ in range(100):
-        wait_event_type = await observer_session.scalar(
-            text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :backend_pid"),
-            {"backend_pid": backend_pid},
-        )
-        if wait_event_type == "Lock":
+        state = (
+            await observer_session.execute(
+                text(
+                    """
+                    SELECT
+                        activity.wait_event_type,
+                        EXISTS (
+                            SELECT 1
+                            FROM pg_locks
+                            WHERE pid = :backend_pid
+                              AND locktype = 'advisory'
+                              AND granted
+                        ) AS owns_advisory_lock
+                    FROM pg_stat_activity AS activity
+                    WHERE activity.pid = :backend_pid
+                    """
+                ),
+                {"backend_pid": backend_pid},
+            )
+        ).one_or_none()
+        if (
+            state is not None
+            and state.wait_event_type == "Lock"
+            and (not require_owned_advisory_lock or state.owns_advisory_lock)
+        ):
             return True
         await asyncio.sleep(0.01)
     return False

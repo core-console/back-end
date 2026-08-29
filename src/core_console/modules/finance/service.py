@@ -27,6 +27,7 @@ from core_console.modules.finance.money import (
 from core_console.modules.finance.queries import (
     FinanceAccountBalance,
     FinanceTransactionDetail,
+    finance_transaction_exists,
     get_earliest_finance_account_transaction_date,
     get_finance_account_balance,
     get_finance_account_balance_at_date,
@@ -1411,14 +1412,23 @@ async def _require_finance_transaction_for_serialized_mutation(
         transaction_id=transaction_id,
     )
     await lock_finance_transaction_mutation(session, transaction_id=transaction_id)
-    transaction = await get_finance_transaction_for_update(
-        session,
-        ledger_id=ledger_id,
-        transaction_id=transaction_id,
-    )
-    if transaction is None:
-        raise FinanceTransactionNotFoundError
-    return transaction
+    while True:
+        # Under READ COMMITTED, a waiting FOR UPDATE can EPQ-miss a same-ID
+        # delete/reinsert. A separate existence statement gets a fresh snapshot;
+        # retry only when that snapshot proves the scoped Transaction still exists.
+        transaction = await get_finance_transaction_for_update(
+            session,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
+        )
+        if transaction is not None:
+            return transaction
+        if not await finance_transaction_exists(
+            session,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
+        ):
+            raise FinanceTransactionNotFoundError
 
 
 async def _commit_ledger_change(session: AsyncSession) -> None:
