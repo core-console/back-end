@@ -1258,6 +1258,158 @@
         ],
         "title": "ReplaceBalanceAdjustmentResultResponse"
       },
+      "ReplaceExpenseTransactionRequest": {
+        "additionalProperties": false,
+        "description": "Completely replace one existing Expense.",
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "title": "Accountid",
+            "type": "string"
+          },
+          "categoryAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAllocationRequest"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Categoryallocations",
+            "type": "array"
+          },
+          "economicAmount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "kind": {
+            "const": "expense",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "accountId",
+          "transactionDate",
+          "economicAmount",
+          "categoryAllocations",
+          "kind"
+        ],
+        "title": "ReplaceExpenseTransactionRequest",
+        "type": "object"
+      },
+      "ReplaceIncomeTransactionRequest": {
+        "additionalProperties": false,
+        "description": "Completely replace one existing Income.",
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "title": "Accountid",
+            "type": "string"
+          },
+          "categoryAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAllocationRequest"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Categoryallocations",
+            "type": "array"
+          },
+          "economicAmount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "kind": {
+            "const": "income",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "accountId",
+          "transactionDate",
+          "economicAmount",
+          "categoryAllocations",
+          "kind"
+        ],
+        "title": "ReplaceIncomeTransactionRequest",
+        "type": "object"
+      },
+      "ReplaceInternalTransferTransactionRequest": {
+        "additionalProperties": false,
+        "description": "Completely replace one existing Internal Transfer.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/MoneyRequest"
+          },
+          "destinationAccountId": {
+            "format": "uuid",
+            "title": "Destinationaccountid",
+            "type": "string"
+          },
+          "kind": {
+            "const": "internalTransfer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 500,
+            "title": "Note"
+          },
+          "sourceAccountId": {
+            "format": "uuid",
+            "title": "Sourceaccountid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "$ref": "#/components/schemas/FinanceRequestDate"
+          }
+        },
+        "required": [
+          "kind",
+          "sourceAccountId",
+          "destinationAccountId",
+          "amount",
+          "transactionDate"
+        ],
+        "title": "ReplaceInternalTransferTransactionRequest",
+        "type": "object"
+      },
       "UpdateAccountRequest": {
         "additionalProperties": false,
         "description": "Ordinary mutable Account fields using omitted-field semantics.",
@@ -3202,6 +3354,92 @@
       }
     },
     "/finance/ledgers/{ledgerId}/transactions/{transactionId}": {
+      "delete": {
+        "description": "Delete one complete Finance Transaction aggregate of any kind.",
+        "operationId": "deleteFinanceTransaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Transactionid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The path is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Delete a Finance Transaction",
+        "tags": [
+          "Finance"
+        ]
+      },
       "get": {
         "description": "Read one supported Finance Transaction in an owned Ledger.",
         "operationId": "getFinanceTransaction",
@@ -3291,6 +3529,138 @@
         },
         "security": [],
         "summary": "Get a Finance Transaction",
+        "tags": [
+          "Finance"
+        ]
+      },
+      "put": {
+        "description": "Completely replace one same-kind ordinary Finance Transaction.",
+        "operationId": "replaceFinanceTransaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Transactionid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "expense": "#/components/schemas/ReplaceExpenseTransactionRequest",
+                    "income": "#/components/schemas/ReplaceIncomeTransactionRequest",
+                    "internalTransfer": "#/components/schemas/ReplaceInternalTransferTransactionRequest"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ReplaceIncomeTransactionRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ReplaceExpenseTransactionRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ReplaceInternalTransferTransactionRequest"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceTransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The kind is immutable or archived."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Replace a Finance Transaction",
         "tags": [
           "Finance"
         ]

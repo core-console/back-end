@@ -360,7 +360,7 @@ def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> 
             )
 
 
-def test_openapi_describes_transaction_create_and_detail_contract(
+def test_openapi_describes_transaction_create_detail_replace_and_delete_contract(
     app: FastAPI,
 ) -> None:
     schema = app.openapi()
@@ -369,13 +369,19 @@ def test_openapi_describes_transaction_create_and_detail_contract(
     detail_path = paths["/finance/ledgers/{ledgerId}/transactions/{transactionId}"]
     create_operation = collection_path["post"]
     detail_operation = detail_path["get"]
+    replace_operation = detail_path["put"]
+    delete_operation = detail_path["delete"]
 
     assert set(collection_path) == {"post"}
-    assert set(detail_path) == {"get"}
+    assert set(detail_path) == {"get", "put", "delete"}
     assert create_operation["operationId"] == "createFinanceTransaction"
     assert detail_operation["operationId"] == "getFinanceTransaction"
+    assert replace_operation["operationId"] == "replaceFinanceTransaction"
+    assert delete_operation["operationId"] == "deleteFinanceTransaction"
     assert create_operation["security"] == []
     assert detail_operation["security"] == []
+    assert replace_operation["security"] == []
+    assert delete_operation["security"] == []
 
     request_union = create_operation["requestBody"]["content"]["application/json"]["schema"]
     assert request_union["discriminator"] == {
@@ -390,6 +396,20 @@ def test_openapi_describes_transaction_create_and_detail_contract(
         {"$ref": "#/components/schemas/CreateIncomeTransactionRequest"},
         {"$ref": "#/components/schemas/CreateExpenseTransactionRequest"},
         {"$ref": "#/components/schemas/CreateInternalTransferTransactionRequest"},
+    ]
+    replacement_union = replace_operation["requestBody"]["content"]["application/json"]["schema"]
+    assert replacement_union["discriminator"] == {
+        "propertyName": "kind",
+        "mapping": {
+            "income": "#/components/schemas/ReplaceIncomeTransactionRequest",
+            "expense": "#/components/schemas/ReplaceExpenseTransactionRequest",
+            "internalTransfer": ("#/components/schemas/ReplaceInternalTransferTransactionRequest"),
+        },
+    }
+    assert replacement_union["oneOf"] == [
+        {"$ref": "#/components/schemas/ReplaceIncomeTransactionRequest"},
+        {"$ref": "#/components/schemas/ReplaceExpenseTransactionRequest"},
+        {"$ref": "#/components/schemas/ReplaceInternalTransferTransactionRequest"},
     ]
 
     transaction_union = schema["components"]["schemas"]["FinanceTransactionResponse"]
@@ -427,10 +447,13 @@ def test_openapi_describes_transaction_create_and_detail_contract(
     }
     for kind in ("Income", "Expense"):
         request_schema = schema["components"]["schemas"][f"Create{kind}TransactionRequest"]
+        replacement_schema = schema["components"]["schemas"][f"Replace{kind}TransactionRequest"]
         response_schema = schema["components"]["schemas"][f"{kind}TransactionResponse"]
         assert request_schema["additionalProperties"] is False
+        assert replacement_schema["additionalProperties"] is False
         assert response_schema["additionalProperties"] is False
         assert set(request_schema["properties"]) == expected_request_fields
+        assert set(replacement_schema["properties"]) == expected_request_fields
         assert set(response_schema["properties"]) == expected_transaction_fields
         allocation_array = request_schema["properties"]["categoryAllocations"]
         assert allocation_array["minItems"] == 1
@@ -442,6 +465,9 @@ def test_openapi_describes_transaction_create_and_detail_contract(
         assert response_schema["properties"]["note"]["anyOf"][0]["maxLength"] == 500
 
     transfer_request = schema["components"]["schemas"]["CreateInternalTransferTransactionRequest"]
+    transfer_replacement = schema["components"]["schemas"][
+        "ReplaceInternalTransferTransactionRequest"
+    ]
     transfer_response = schema["components"]["schemas"]["InternalTransferTransactionResponse"]
     assert transfer_request["additionalProperties"] is False
     assert set(transfer_request["properties"]) == {
@@ -452,6 +478,9 @@ def test_openapi_describes_transaction_create_and_detail_contract(
         "transactionDate",
         "note",
     }
+    assert transfer_replacement["additionalProperties"] is False
+    assert transfer_replacement["properties"] == transfer_request["properties"]
+    assert transfer_replacement["required"] == transfer_request["required"]
     assert transfer_response["additionalProperties"] is False
     assert set(transfer_response["properties"]) == {
         "id",
@@ -465,7 +494,7 @@ def test_openapi_describes_transaction_create_and_detail_contract(
         "destinationAmount",
     }
 
-    for operation in (create_operation, detail_operation):
+    for operation in (create_operation, detail_operation, replace_operation):
         for status, response in operation["responses"].items():
             if status.startswith("2"):
                 assert response["content"]["application/json"]["schema"] == {
@@ -477,6 +506,15 @@ def test_openapi_describes_transaction_create_and_detail_contract(
                 response["content"]["application/problem+json"]["schema"]["$ref"]
                 == "#/components/schemas/ProblemDetails"
             )
+    assert delete_operation["responses"]["204"] == {"description": "Successful Response"}
+    for status, response in delete_operation["responses"].items():
+        if status == "204":
+            continue
+        assert set(response["content"]) == {"application/problem+json"}
+        assert (
+            response["content"]["application/problem+json"]["schema"]["$ref"]
+            == "#/components/schemas/ProblemDetails"
+        )
 
 
 def test_openapi_describes_balance_adjustment_context_and_command_contract(

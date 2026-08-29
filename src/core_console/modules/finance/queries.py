@@ -410,6 +410,17 @@ async def get_finance_transaction_for_update(
     return (await session.execute(statement)).scalar_one_or_none()
 
 
+async def lock_finance_transaction_mutation(
+    session: AsyncSession,
+    *,
+    transaction_id: UUID,
+) -> None:
+    """Serialize same-ID mutations before their row-locking statement begins."""
+
+    lock_key = int.from_bytes(transaction_id.bytes[:8], byteorder="big", signed=True)
+    await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
+
+
 async def get_earliest_finance_account_transaction_date(
     session: AsyncSession,
     *,

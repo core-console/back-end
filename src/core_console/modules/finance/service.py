@@ -39,6 +39,7 @@ from core_console.modules.finance.queries import (
     has_finance_account_history,
     list_finance_account_balances,
     list_finance_categories,
+    lock_finance_transaction_mutation,
 )
 
 _FINANCE_NAME_MAX_LENGTH = 100
@@ -182,10 +183,9 @@ def derive_account_movement_amount(
 
     if not economic_amount.amount.is_finite() or economic_amount.amount <= 0:
         raise InvalidFinanceTransactionError("Economic Amount must be finite and positive.")
-    normalized_direction = 1 if kind == "income" else -1
-    account_direction = normalized_direction if account_nature == "asset" else -normalized_direction
+    is_positive = (kind == "income") == (account_nature == "asset")
     return Money(
-        amount=economic_amount.amount * account_direction,
+        amount=(economic_amount.amount if is_positive else economic_amount.amount.copy_negate()),
         currency=economic_amount.currency,
     )
 
@@ -200,11 +200,17 @@ def derive_internal_transfer_movement_amounts(
 
     if not amount.amount.is_finite() or amount.amount <= 0:
         raise InvalidFinanceTransactionError("Transfer amount must be finite and positive.")
-    source_direction = -1 if source_nature == "asset" else 1
-    destination_direction = 1 if destination_nature == "asset" else -1
     return (
-        Money(amount=amount.amount * source_direction, currency=amount.currency),
-        Money(amount=amount.amount * destination_direction, currency=amount.currency),
+        Money(
+            amount=(amount.amount.copy_negate() if source_nature == "asset" else amount.amount),
+            currency=amount.currency,
+        ),
+        Money(
+            amount=(
+                amount.amount if destination_nature == "asset" else amount.amount.copy_negate()
+            ),
+            currency=amount.currency,
+        ),
     )
 
 
@@ -638,6 +644,238 @@ async def create_internal_transfer_transaction[Result](
     )
 
 
+async def replace_finance_transaction[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    transaction_id: UUID,
+    kind: Literal["income", "expense"],
+    account_id: UUID,
+    transaction_date: date,
+    economic_amount: Money,
+    allocation_amount: Money,
+    category_id: UUID | None,
+    note: str | None,
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Atomically replace one complete same-kind Income or Expense."""
+
+    existing = await _require_finance_transaction_for_serialized_mutation(
+        session,
+        owner_id=owner_id,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    if existing.kind != kind:
+        raise FinanceTransactionKindImmutableError
+    existing_detail = await _require_finance_transaction_detail(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    old_account_id = existing_detail.account.id
+    balances = await get_finance_account_balances_for_update(
+        session,
+        ledger_id=ledger_id,
+        account_ids=frozenset((old_account_id, account_id)),
+    )
+    accounts_by_id = {balance.account.id: balance.account for balance in balances}
+    account = accounts_by_id.get(account_id)
+    if account is None:
+        raise FinanceAccountNotFoundError
+    if account.status != "active" and account_id != old_account_id:
+        raise FinanceAccountArchivedError
+    if transaction_date < account.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Account Tracking Start Date."
+        )
+    if economic_amount.currency != account.currency:
+        raise InvalidFinanceTransactionError(
+            "Economic Amount currency must match the Account currency."
+        )
+    if (
+        not allocation_amount.amount.is_finite()
+        or allocation_amount.amount <= 0
+        or allocation_amount != economic_amount
+    ):
+        raise InvalidFinanceTransactionError(
+            "The Category Allocation must equal the complete positive Economic Amount."
+        )
+
+    category = None
+    if category_id is not None:
+        category = await _require_finance_category(
+            session,
+            ledger_id=ledger_id,
+            category_id=category_id,
+            for_update=True,
+        )
+        if category.status != "active" and category_id != existing_detail.allocation.category_id:
+            raise FinanceCategoryArchivedError
+
+    account_nature: Literal["asset", "liability"] = (
+        "asset" if account.nature == "asset" else "liability"
+    )
+    movement_amount = derive_account_movement_amount(
+        kind=kind,
+        account_nature=account_nature,
+        economic_amount=economic_amount,
+    )
+    replacement = FinanceTransaction(
+        id=transaction_id,
+        ledger_id=ledger_id,
+        kind=kind,
+        transaction_date=transaction_date,
+        note=normalize_transaction_note(note),
+    )
+    movement = FinanceAccountMovement(
+        transaction_id=transaction_id,
+        ledger_id=ledger_id,
+        account_id=account.id,
+        amount=movement_amount.amount,
+        currency=movement_amount.currency,
+        role="primary",
+    )
+    allocation = FinanceCategoryAllocation(
+        transaction_id=transaction_id,
+        ledger_id=ledger_id,
+        category_id=category.id if category is not None else None,
+        amount=allocation_amount.amount,
+        currency=allocation_amount.currency,
+    )
+    try:
+        await session.delete(existing)
+        await session.flush()
+        return await _persist_and_project_finance_transaction(
+            session,
+            transaction=replacement,
+            children=(movement, allocation),
+            project=project,
+        )
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def replace_internal_transfer_transaction[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    transaction_id: UUID,
+    source_account_id: UUID,
+    destination_account_id: UUID,
+    transaction_date: date,
+    amount: Money,
+    note: str | None,
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Atomically replace one complete same-kind Internal Transfer."""
+
+    existing = await _require_finance_transaction_for_serialized_mutation(
+        session,
+        owner_id=owner_id,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    if existing.kind != "internal_transfer":
+        raise FinanceTransactionKindImmutableError
+    existing_detail = await _require_finance_transaction_detail(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    old_accounts_by_role = {
+        item.movement.role: item.account.id for item in existing_detail.movement_details
+    }
+    if source_account_id == destination_account_id:
+        raise InvalidFinanceTransactionError("Source and Destination Accounts must be distinct.")
+    balances = await get_finance_account_balances_for_update(
+        session,
+        ledger_id=ledger_id,
+        account_ids=frozenset(
+            (
+                old_accounts_by_role["source"],
+                old_accounts_by_role["destination"],
+                source_account_id,
+                destination_account_id,
+            )
+        ),
+    )
+    accounts_by_id = {balance.account.id: balance.account for balance in balances}
+    source = accounts_by_id.get(source_account_id)
+    destination = accounts_by_id.get(destination_account_id)
+    if source is None or destination is None:
+        raise FinanceAccountNotFoundError
+    if (source.status != "active" and source_account_id != old_accounts_by_role["source"]) or (
+        destination.status != "active"
+        and destination_account_id != old_accounts_by_role["destination"]
+    ):
+        raise FinanceAccountArchivedError
+    if transaction_date < source.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Source Account Tracking Start Date."
+        )
+    if transaction_date < destination.tracking_start_date:
+        raise InvalidFinanceTransactionError(
+            "Transaction Date cannot be before the Destination Account Tracking Start Date."
+        )
+    if source.currency != destination.currency or amount.currency != source.currency:
+        raise InvalidFinanceTransactionError(
+            "Transfer Accounts and amount must use the same currency."
+        )
+
+    source_nature: Literal["asset", "liability"] = (
+        "asset" if source.nature == "asset" else "liability"
+    )
+    destination_nature: Literal["asset", "liability"] = (
+        "asset" if destination.nature == "asset" else "liability"
+    )
+    source_amount, destination_amount = derive_internal_transfer_movement_amounts(
+        source_nature=source_nature,
+        destination_nature=destination_nature,
+        amount=amount,
+    )
+    replacement = FinanceTransaction(
+        id=transaction_id,
+        ledger_id=ledger_id,
+        kind="internal_transfer",
+        transaction_date=transaction_date,
+        note=normalize_transaction_note(note),
+    )
+    movements = (
+        FinanceAccountMovement(
+            transaction_id=transaction_id,
+            ledger_id=ledger_id,
+            account_id=source.id,
+            amount=source_amount.amount,
+            currency=source_amount.currency,
+            role="source",
+        ),
+        FinanceAccountMovement(
+            transaction_id=transaction_id,
+            ledger_id=ledger_id,
+            account_id=destination.id,
+            amount=destination_amount.amount,
+            currency=destination_amount.currency,
+            role="destination",
+        ),
+    )
+    try:
+        await session.delete(existing)
+        await session.flush()
+        return await _persist_and_project_finance_transaction(
+            session,
+            transaction=replacement,
+            children=movements,
+            project=project,
+        )
+    except Exception:
+        await session.rollback()
+        raise
+
+
 async def get_balance_adjustment_context(
     session: AsyncSession,
     *,
@@ -905,6 +1143,43 @@ async def get_finance_transaction(
     )
 
 
+async def delete_finance_transaction(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    transaction_id: UUID,
+) -> None:
+    """Atomically remove one complete Transaction aggregate of any kind."""
+
+    existing = await _require_finance_transaction_for_serialized_mutation(
+        session,
+        owner_id=owner_id,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    detail = await _require_finance_transaction_detail(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    account_ids = frozenset(item.account.id for item in detail.movement_details)
+    locked_accounts = await get_finance_account_balances_for_update(
+        session,
+        ledger_id=ledger_id,
+        account_ids=account_ids,
+    )
+    if len(locked_accounts) != len(account_ids):
+        raise FinanceAccountNotFoundError
+    try:
+        await session.delete(existing)
+        await session.flush()
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+
 async def _persist_and_project_finance_transaction[Result](
     session: AsyncSession,
     *,
@@ -1118,6 +1393,32 @@ async def _require_finance_transaction_detail(
     if detail is None:
         raise FinanceTransactionNotFoundError
     return detail
+
+
+async def _require_finance_transaction_for_serialized_mutation(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    transaction_id: UUID,
+) -> FinanceTransaction:
+    """Lock one owned ordinary-mutation target without a delete/reinsert race."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    await _require_finance_transaction_detail(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    await lock_finance_transaction_mutation(session, transaction_id=transaction_id)
+    transaction = await get_finance_transaction_for_update(
+        session,
+        ledger_id=ledger_id,
+        transaction_id=transaction_id,
+    )
+    if transaction is None:
+        raise FinanceTransactionNotFoundError
+    return transaction
 
 
 async def _commit_ledger_change(session: AsyncSession) -> None:

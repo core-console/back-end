@@ -833,6 +833,760 @@ async def test_transaction_creation_enforces_active_scoped_references(
     assert non_owned_ledger.json()["code"] == "finance_ledger_not_found"
 
 
+async def test_income_replacement_preserves_identity_and_replaces_the_complete_effect(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("replace-income")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Replacement"})
+        ledger_id = ledger.json()["id"]
+        asset = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Cash",
+                "nature": "asset",
+                "currency": "CNY",
+                "openingBalance": {"amount": "100.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        liability = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Card",
+                "nature": "liability",
+                "currency": "CNY",
+                "openingBalance": {"amount": "50.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-15",
+            },
+        )
+        salary = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "Salary"},
+        )
+        refund = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "Refund"},
+        )
+        created = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=asset.json()["id"],
+            category_id=salary.json()["id"],
+            amount="25.00",
+            currency="CNY",
+        )
+        transaction_id = created.json()["id"]
+        replaced = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{transaction_id}",
+            json={
+                "kind": "income",
+                "accountId": liability.json()["id"],
+                "transactionDate": "2030-01-01",
+                "economicAmount": {"amount": "30.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {
+                        "amount": {"amount": "30.00", "currency": "CNY"},
+                        "categoryId": refund.json()["id"],
+                    }
+                ],
+                "note": "  card refund  ",
+            },
+        )
+        detail = await client.get(f"/api/finance/ledgers/{ledger_id}/transactions/{transaction_id}")
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    assert replaced.status_code == HTTPStatus.OK
+    assert replaced.json() == detail.json()
+    assert replaced.json() == {
+        "id": transaction_id,
+        "ledgerId": ledger_id,
+        "kind": "income",
+        "transactionDate": "2030-01-01",
+        "note": "card refund",
+        "account": {
+            "id": liability.json()["id"],
+            "name": "Card",
+            "status": "active",
+        },
+        "economicAmount": {"amount": "30.00", "currency": "CNY"},
+        "categoryAllocations": [
+            {
+                "amount": {"amount": "30.00", "currency": "CNY"},
+                "category": {
+                    "id": refund.json()["id"],
+                    "name": "Refund",
+                    "status": "active",
+                },
+            }
+        ],
+    }
+    assert {
+        account["name"]: account["currentBalance"]["amount"] for account in accounts.json()
+    } == {"Card": "20.00", "Cash": "100.00"}
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (FinanceTransaction, FinanceAccountMovement, FinanceCategoryAllocation)
+    ]
+    assert counts == [1, 1, 1]
+
+
+async def test_internal_transfer_replacement_moves_both_role_identified_effects(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("replace-transfer")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Transfers"})
+        ledger_id = ledger.json()["id"]
+        accounts: list[Response] = []
+        for name, nature, opening in (
+            ("Old Asset", "asset", "100.00"),
+            ("Old Liability", "liability", "20.00"),
+            ("New Liability", "liability", "-20.00"),
+            ("New Asset", "asset", "1.00"),
+        ):
+            accounts.append(
+                await client.post(
+                    f"/api/finance/ledgers/{ledger_id}/accounts",
+                    json={
+                        "name": name,
+                        "nature": nature,
+                        "currency": "CNY",
+                        "openingBalance": {"amount": opening, "currency": "CNY"},
+                        "trackingStartDate": "2026-08-01",
+                    },
+                )
+            )
+        old_source, old_destination, new_source, new_destination = accounts
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": old_source.json()["id"],
+                "destinationAccountId": old_destination.json()["id"],
+                "amount": {"amount": "10.00", "currency": "CNY"},
+                "transactionDate": "2026-08-21",
+            },
+        )
+        transaction_id = created.json()["id"]
+        replaced = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{transaction_id}",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": new_source.json()["id"],
+                "destinationAccountId": new_destination.json()["id"],
+                "amount": {"amount": "12.00", "currency": "CNY"},
+                "transactionDate": "2030-01-01",
+                "note": "  move debt  ",
+            },
+        )
+        account_result = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    assert replaced.status_code == HTTPStatus.OK
+    assert replaced.json() == {
+        "id": transaction_id,
+        "ledgerId": ledger_id,
+        "kind": "internalTransfer",
+        "transactionDate": "2030-01-01",
+        "note": "move debt",
+        "sourceAccount": {
+            "id": new_source.json()["id"],
+            "name": "New Liability",
+            "status": "active",
+        },
+        "sourceAmount": {"amount": "12.00", "currency": "CNY"},
+        "destinationAccount": {
+            "id": new_destination.json()["id"],
+            "name": "New Asset",
+            "status": "active",
+        },
+        "destinationAmount": {"amount": "12.00", "currency": "CNY"},
+    }
+    assert {
+        account["name"]: account["currentBalance"]["amount"] for account in account_result.json()
+    } == {
+        "New Asset": "13.00",
+        "New Liability": "-8.00",
+        "Old Asset": "100.00",
+        "Old Liability": "20.00",
+    }
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (FinanceTransaction, FinanceAccountMovement, FinanceCategoryAllocation)
+    ]
+    assert counts == [1, 2, 0]
+
+
+async def test_generic_deletion_removes_all_four_kinds_and_unlocks_account_semantics(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("delete-all-kinds")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Deletion"})
+        ledger_id = ledger.json()["id"]
+        accounts = [
+            await _create_account(client, ledger_id, name, "CNY")
+            for name in (
+                "Income",
+                "Expense",
+                "Transfer Source",
+                "Transfer Destination",
+                "Adjustment",
+            )
+        ]
+        (
+            income_account,
+            expense_account,
+            transfer_source,
+            transfer_destination,
+            adjustment_account,
+        ) = accounts
+        income = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=str(income_account["id"]),
+            transaction_date="2030-01-01",
+            amount="10.00",
+            currency="CNY",
+        )
+        expense = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "expense",
+                "accountId": expense_account["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "5.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "5.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        transfer = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": transfer_source["id"],
+                "destinationAccountId": transfer_destination["id"],
+                "amount": {"amount": "7.00", "currency": "CNY"},
+                "transactionDate": "2026-08-21",
+            },
+        )
+        adjustment = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": adjustment_account["id"],
+                "transactionDate": "2026-08-21",
+                "expectedDerivedBalance": {"amount": "0.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "3.00", "currency": "CNY"},
+            },
+        )
+        await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts/{income_account['id']}/archive"
+        )
+        transaction_ids = (
+            income.json()["id"],
+            expense.json()["id"],
+            transfer.json()["id"],
+            adjustment.json()["transaction"]["id"],
+        )
+        deleted = [
+            await client.delete(f"/api/finance/ledgers/{ledger_id}/transactions/{transaction_id}")
+            for transaction_id in transaction_ids
+        ]
+        account_result = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+        corrected = [
+            await client.patch(
+                f"/api/finance/ledgers/{ledger_id}/accounts/{account['id']}",
+                json={"nature": "liability"},
+            )
+            for account in accounts
+        ]
+
+    assert [response.status_code for response in deleted] == [HTTPStatus.NO_CONTENT] * 4
+    assert [response.content for response in deleted] == [b""] * 4
+    assert {
+        account["name"]: account["currentBalance"]["amount"] for account in account_result.json()
+    } == {
+        "Adjustment": "0.00",
+        "Expense": "0.00",
+        "Income": "0.00",
+        "Transfer Destination": "0.00",
+        "Transfer Source": "0.00",
+    }
+    assert [response.status_code for response in corrected] == [HTTPStatus.OK] * 5
+    counts = [
+        await postgres_session.scalar(select(func.count()).select_from(model))
+        for model in (FinanceTransaction, FinanceAccountMovement, FinanceCategoryAllocation)
+    ]
+    assert counts == [0, 0, 0]
+
+
+async def test_ordinary_replacement_preserves_scope_kind_and_archived_reference_rules(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("replace-rules-ordinary")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Rules"})
+        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        ledger_id = ledger.json()["id"]
+        account = await _create_account(client, ledger_id, "Cash", "CNY")
+        changed_archived_account = await _create_account(client, ledger_id, "Old Cash", "CNY")
+        category = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories", json={"name": "Food"}
+        )
+        changed_archived_category = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/categories", json={"name": "Old Food"}
+        )
+        categorized = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=str(account["id"]),
+            category_id=category.json()["id"],
+            amount="8.00",
+            currency="CNY",
+        )
+        uncategorized = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "expense",
+                "accountId": account["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "3.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "3.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        adjustment = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json={
+                "accountId": account["id"],
+                "transactionDate": "2026-08-21",
+                "expectedDerivedBalance": {"amount": "5.00", "currency": "CNY"},
+                "expectedAccountNature": "asset",
+                "targetBalance": {"amount": "6.00", "currency": "CNY"},
+            },
+        )
+        became_categorized = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{uncategorized.json()['id']}",
+            json={
+                "kind": "expense",
+                "accountId": account["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "3.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {
+                        "amount": {"amount": "3.00", "currency": "CNY"},
+                        "categoryId": category.json()["id"],
+                    }
+                ],
+            },
+        )
+        for resource, resource_id in (
+            ("accounts", account["id"]),
+            ("accounts", changed_archived_account["id"]),
+            ("categories", category.json()["id"]),
+            ("categories", changed_archived_category.json()["id"]),
+        ):
+            await client.post(f"/api/finance/ledgers/{ledger_id}/{resource}/{resource_id}/archive")
+
+        retained_archived = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{categorized.json()['id']}",
+            json={
+                "kind": "income",
+                "accountId": account["id"],
+                "transactionDate": "2026-08-22",
+                "economicAmount": {"amount": "9.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {
+                        "amount": {"amount": "9.00", "currency": "CNY"},
+                        "categoryId": category.json()["id"],
+                    }
+                ],
+            },
+        )
+        became_uncategorized = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{categorized.json()['id']}",
+            json={
+                "kind": "income",
+                "accountId": account["id"],
+                "transactionDate": "2026-08-22",
+                "economicAmount": {"amount": "9.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "9.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        changed_to_archived_category = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{uncategorized.json()['id']}",
+            json={
+                "kind": "expense",
+                "accountId": account["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "3.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {
+                        "amount": {"amount": "3.00", "currency": "CNY"},
+                        "categoryId": changed_archived_category.json()["id"],
+                    }
+                ],
+            },
+        )
+        changed_to_archived_account = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{uncategorized.json()['id']}",
+            json={
+                "kind": "expense",
+                "accountId": changed_archived_account["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "3.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "3.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        cross_kind = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{uncategorized.json()['id']}",
+            json={
+                "kind": "income",
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "3.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "3.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        adjustment_through_ordinary = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{adjustment.json()['transaction']['id']}",
+            json={
+                "kind": "income",
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "1.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "1.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        hidden = await client.put(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{uncategorized.json()['id']}",
+            json={
+                "kind": "income",
+                "accountId": str(uuid4()),
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "1.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "1.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+
+    assert retained_archived.status_code == HTTPStatus.OK
+    assert became_categorized.status_code == HTTPStatus.OK
+    assert (
+        became_categorized.json()["categoryAllocations"][0]["category"]["id"]
+        == category.json()["id"]
+    )
+    assert retained_archived.json()["account"]["status"] == "archived"
+    assert retained_archived.json()["categoryAllocations"][0]["category"]["status"] == "archived"
+    assert became_uncategorized.status_code == HTTPStatus.OK
+    assert became_uncategorized.json()["categoryAllocations"][0]["category"] is None
+    assert changed_to_archived_category.status_code == HTTPStatus.CONFLICT
+    assert changed_to_archived_category.json()["code"] == "finance_category_archived"
+    assert changed_to_archived_account.status_code == HTTPStatus.CONFLICT
+    assert changed_to_archived_account.json()["code"] == "finance_account_archived"
+    for response in (cross_kind, adjustment_through_ordinary):
+        assert response.status_code == HTTPStatus.CONFLICT
+        assert response.json()["code"] == "finance_transaction_kind_immutable"
+    assert hidden.status_code == HTTPStatus.NOT_FOUND
+    assert hidden.json()["code"] == "finance_transaction_not_found"
+
+
+async def test_transfer_replacement_retains_only_same_role_archived_accounts(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("replace-transfer-archive")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Archive"})
+        ledger_id = ledger.json()["id"]
+        source = await _create_account(client, ledger_id, "Source", "CNY")
+        destination = await _create_account(client, ledger_id, "Destination", "CNY")
+        other = await _create_account(client, ledger_id, "Other", "CNY")
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": source["id"],
+                "destinationAccountId": destination["id"],
+                "amount": {"amount": "2.00", "currency": "CNY"},
+                "transactionDate": "2026-08-21",
+            },
+        )
+        for account in (source, destination, other):
+            await client.post(f"/api/finance/ledgers/{ledger_id}/accounts/{account['id']}/archive")
+        retained = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": source["id"],
+                "destinationAccountId": destination["id"],
+                "amount": {"amount": "3.00", "currency": "CNY"},
+                "transactionDate": "2026-08-22",
+            },
+        )
+        swapped_roles = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": destination["id"],
+                "destinationAccountId": source["id"],
+                "amount": {"amount": "3.00", "currency": "CNY"},
+                "transactionDate": "2026-08-22",
+            },
+        )
+        changed_archived = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": source["id"],
+                "destinationAccountId": other["id"],
+                "amount": {"amount": "3.00", "currency": "CNY"},
+                "transactionDate": "2026-08-22",
+            },
+        )
+        before_tracking = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": source["id"],
+                "destinationAccountId": destination["id"],
+                "amount": {"amount": "3.00", "currency": "CNY"},
+                "transactionDate": "2026-07-31",
+            },
+        )
+
+    assert retained.status_code == HTTPStatus.OK
+    assert retained.json()["sourceAccount"]["status"] == "archived"
+    assert retained.json()["destinationAccount"]["status"] == "archived"
+    for response in (swapped_roles, changed_archived):
+        assert response.status_code == HTTPStatus.CONFLICT
+        assert response.json()["code"] == "finance_account_archived"
+    assert before_tracking.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert before_tracking.json()["code"] == "validation_error"
+
+
+async def test_expense_replacement_uses_liability_sign_and_durable_money_boundary(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("replace-expense-boundary")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+    boundary = f"{'9' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.99"
+    outside = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.00"
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Expense"})
+        ledger_id = ledger.json()["id"]
+        asset = await _create_account(client, ledger_id, "Asset", "CNY")
+        liability = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/accounts",
+            json={
+                "name": "Liability",
+                "nature": "liability",
+                "currency": "CNY",
+                "openingBalance": {"amount": "0.00", "currency": "CNY"},
+                "trackingStartDate": "2026-08-01",
+            },
+        )
+        created = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "expense",
+                "accountId": asset["id"],
+                "transactionDate": "2026-08-21",
+                "economicAmount": {"amount": "1.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "1.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        replacement_body = {
+            "kind": "expense",
+            "accountId": liability.json()["id"],
+            "transactionDate": "2026-08-22",
+            "economicAmount": {"amount": boundary, "currency": "CNY"},
+            "categoryAllocations": [
+                {"amount": {"amount": boundary, "currency": "CNY"}, "categoryId": None}
+            ],
+        }
+        replaced = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}",
+            json=replacement_body,
+        )
+        rejected = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}",
+            json={
+                **replacement_body,
+                "economicAmount": {"amount": outside, "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": outside, "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        detail = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['id']}"
+        )
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    assert replaced.status_code == HTTPStatus.OK
+    assert replaced.json()["economicAmount"]["amount"] == boundary
+    assert rejected.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert rejected.json()["code"] == "validation_error"
+    assert detail.json() == replaced.json()
+    assert {
+        account["name"]: account["currentBalance"]["amount"] for account in accounts.json()
+    } == {"Asset": "0.00", "Liability": boundary}
+
+
+async def test_generic_delete_hides_foreign_and_missing_transaction_identity(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+) -> None:
+    actor = _user("delete-scope")
+    other = _user("delete-scope-other")
+    postgres_session.add_all([actor, other])
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Private"})
+        account = await _create_account(client, ledger.json()["id"], "Cash", "CNY")
+        transaction = await _post_transaction(
+            client,
+            ledger_id=ledger.json()["id"],
+            account_id=str(account["id"]),
+            currency="CNY",
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=other) as client:
+        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        hidden = await client.delete(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{transaction.json()['id']}"
+        )
+        missing = await client.delete(
+            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{uuid4()}"
+        )
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        still_present = await client.get(
+            f"/api/finance/ledgers/{ledger.json()['id']}/transactions/{transaction.json()['id']}"
+        )
+
+    assert hidden.status_code == missing.status_code == HTTPStatus.NOT_FOUND
+    assert hidden.json()["code"] == missing.json()["code"] == "finance_transaction_not_found"
+    assert hidden.json()["detail"] == missing.json()["detail"]
+    assert still_present.status_code == HTTPStatus.OK
+
+
+async def test_ordinary_replacement_projection_failure_restores_original_aggregates(
+    postgres_database_url: str,
+    postgres_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _user("replace-projection-rollback")
+    postgres_session.add(actor)
+    await postgres_session.commit()
+
+    async with finance_client(database_url=postgres_database_url, actor=actor) as client:
+        ledger = await client.post("/api/finance/ledgers", json={"name": "Rollback"})
+        ledger_id = ledger.json()["id"]
+        first = await _create_account(client, ledger_id, "First", "CNY")
+        second = await _create_account(client, ledger_id, "Second", "CNY")
+        third = await _create_account(client, ledger_id, "Third", "CNY")
+        income = await _post_transaction(
+            client,
+            ledger_id=ledger_id,
+            account_id=str(first["id"]),
+            amount="10.00",
+            currency="CNY",
+        )
+        transfer = await client.post(
+            f"/api/finance/ledgers/{ledger_id}/transactions",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": first["id"],
+                "destinationAccountId": second["id"],
+                "amount": {"amount": "2.00", "currency": "CNY"},
+                "transactionDate": "2026-08-21",
+            },
+        )
+        original_projection = finance_api._to_transaction_response
+
+        def fail_projection(_detail: object) -> object:
+            raise RuntimeError("projection failed")
+
+        monkeypatch.setattr(finance_api, "_to_transaction_response", fail_projection)
+        failed_income = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{income.json()['id']}",
+            json={
+                "kind": "income",
+                "accountId": second["id"],
+                "transactionDate": "2026-08-22",
+                "economicAmount": {"amount": "20.00", "currency": "CNY"},
+                "categoryAllocations": [
+                    {"amount": {"amount": "20.00", "currency": "CNY"}, "categoryId": None}
+                ],
+            },
+        )
+        failed_transfer = await client.put(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{transfer.json()['id']}",
+            json={
+                "kind": "internalTransfer",
+                "sourceAccountId": second["id"],
+                "destinationAccountId": third["id"],
+                "amount": {"amount": "4.00", "currency": "CNY"},
+                "transactionDate": "2026-08-22",
+            },
+        )
+        monkeypatch.setattr(finance_api, "_to_transaction_response", original_projection)
+        income_after = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{income.json()['id']}"
+        )
+        transfer_after = await client.get(
+            f"/api/finance/ledgers/{ledger_id}/transactions/{transfer.json()['id']}"
+        )
+        accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
+
+    assert failed_income.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert failed_transfer.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert income_after.json() == income.json()
+    assert transfer_after.json() == transfer.json()
+    assert {
+        account["name"]: account["currentBalance"]["amount"] for account in accounts.json()
+    } == {"First": "8.00", "Second": "2.00", "Third": "0.00"}
+
+
 async def test_future_transactions_apply_immediately_and_bound_tracking_start_edits(
     postgres_database_url: str,
     postgres_session: AsyncSession,

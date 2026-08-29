@@ -428,8 +428,8 @@ class _TransactionNoteRequest(_RequestModel):
         return normalized
 
 
-class _CreateOrdinaryTransactionRequest(_TransactionNoteRequest):
-    """Common command fields for the first two Finance Transaction kinds."""
+class _OrdinaryTransactionRequest(_TransactionNoteRequest):
+    """Common command fields for Income and Expense writes."""
 
     account_id: UUID = Field(alias="accountId")
     transaction_date: FinanceRequestDate = Field(alias="transactionDate")
@@ -457,20 +457,32 @@ class _CreateOrdinaryTransactionRequest(_TransactionNoteRequest):
         return self
 
 
-class CreateIncomeTransactionRequest(_CreateOrdinaryTransactionRequest):
+class CreateIncomeTransactionRequest(_OrdinaryTransactionRequest):
     """Record value received from outside the Finance Ledger."""
 
     kind: Literal["income"]
 
 
-class CreateExpenseTransactionRequest(_CreateOrdinaryTransactionRequest):
+class CreateExpenseTransactionRequest(_OrdinaryTransactionRequest):
     """Record value spent outside the Finance Ledger."""
 
     kind: Literal["expense"]
 
 
-class CreateInternalTransferTransactionRequest(_TransactionNoteRequest):
-    """Record one atomic same-currency Transfer between two Accounts."""
+class ReplaceIncomeTransactionRequest(_OrdinaryTransactionRequest):
+    """Completely replace one existing Income."""
+
+    kind: Literal["income"]
+
+
+class ReplaceExpenseTransactionRequest(_OrdinaryTransactionRequest):
+    """Completely replace one existing Expense."""
+
+    kind: Literal["expense"]
+
+
+class _InternalTransferTransactionRequest(_TransactionNoteRequest):
+    """Common command fields for same-currency Internal Transfer writes."""
 
     kind: Literal["internalTransfer"]
     source_account_id: UUID = Field(alias="sourceAccountId")
@@ -491,6 +503,14 @@ class CreateInternalTransferTransactionRequest(_TransactionNoteRequest):
                 "Transfer amount must be positive.",
             )
         return self
+
+
+class CreateInternalTransferTransactionRequest(_InternalTransferTransactionRequest):
+    """Record one atomic same-currency Transfer between two Accounts."""
+
+
+class ReplaceInternalTransferTransactionRequest(_InternalTransferTransactionRequest):
+    """Completely replace one existing Internal Transfer."""
 
 
 class _BalanceAdjustmentCommandRequest(_TransactionNoteRequest):
@@ -515,5 +535,13 @@ type CreateFinanceTransactionRequest = Annotated[
     CreateIncomeTransactionRequest
     | CreateExpenseTransactionRequest
     | CreateInternalTransferTransactionRequest,
+    Field(discriminator="kind"),
+]
+
+
+type ReplaceFinanceTransactionRequest = Annotated[
+    ReplaceIncomeTransactionRequest
+    | ReplaceExpenseTransactionRequest
+    | ReplaceInternalTransferTransactionRequest,
     Field(discriminator="kind"),
 ]

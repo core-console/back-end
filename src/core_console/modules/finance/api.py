@@ -48,6 +48,7 @@ from core_console.modules.finance.schemas import (
     MoneyResponse,
     ReplaceBalanceAdjustmentRequest,
     ReplaceBalanceAdjustmentResultResponse,
+    ReplaceFinanceTransactionRequest,
     UpdateCategoryRequest,
     UpdateFinanceAccountRequest,
     UpdateLedgerRequest,
@@ -81,11 +82,14 @@ from core_console.modules.finance.service import (
     create_finance_ledger,
     create_finance_transaction,
     create_internal_transfer_transaction,
+    delete_finance_transaction,
     get_balance_adjustment_context,
     get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
     replace_balance_adjustment,
+    replace_finance_transaction,
+    replace_internal_transfer_transaction,
     unarchive_finance_account,
     unarchive_finance_category,
     update_finance_account,
@@ -1191,3 +1195,94 @@ async def get_transaction(
         )
     )
     return _to_transaction_response(detail)
+
+
+@router.put(
+    "/ledgers/{ledgerId}/transactions/{transactionId}",
+    operation_id="replaceFinanceTransaction",
+    summary="Replace a Finance Transaction",
+    response_model=FinanceTransactionResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {"model": ProblemDetails, "description": "The kind is immutable or archived."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def put_transaction(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    transaction_id: Annotated[UUID, Path(alias="transactionId")],
+    request: ReplaceFinanceTransactionRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FinanceTransactionResponse:
+    """Completely replace one same-kind ordinary Finance Transaction."""
+
+    if request.kind == "internalTransfer":
+        return await _run_finance_workflow(
+            replace_internal_transfer_transaction(
+                session,
+                owner_id=actor.id,
+                ledger_id=ledger_id,
+                transaction_id=transaction_id,
+                source_account_id=request.source_account_id,
+                destination_account_id=request.destination_account_id,
+                transaction_date=request.transaction_date,
+                amount=request.amount.to_money(),
+                note=request.note,
+                project=_to_transaction_response,
+            )
+        )
+    allocation = request.category_allocations[0]
+    return await _run_finance_workflow(
+        replace_finance_transaction(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
+            kind=request.kind,
+            account_id=request.account_id,
+            transaction_date=request.transaction_date,
+            economic_amount=request.economic_amount.to_money(),
+            allocation_amount=allocation.amount.to_money(),
+            category_id=allocation.category_id,
+            note=request.note,
+            project=_to_transaction_response,
+        )
+    )
+
+
+@router.delete(
+    "/ledgers/{ledgerId}/transactions/{transactionId}",
+    operation_id="deleteFinanceTransaction",
+    summary="Delete a Finance Transaction",
+    status_code=HTTPStatus.NO_CONTENT,
+    response_model=None,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The path is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def delete_transaction(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    transaction_id: Annotated[UUID, Path(alias="transactionId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Delete one complete Finance Transaction aggregate of any kind."""
+
+    await _run_finance_workflow(
+        delete_finance_transaction(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            transaction_id=transaction_id,
+        )
+    )
