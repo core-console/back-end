@@ -372,7 +372,7 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
     replace_operation = detail_path["put"]
     delete_operation = detail_path["delete"]
 
-    assert set(collection_path) == {"post"}
+    assert set(collection_path) == {"get", "post"}
     assert set(detail_path) == {"get", "put", "delete"}
     assert create_operation["operationId"] == "createFinanceTransaction"
     assert detail_operation["operationId"] == "getFinanceTransaction"
@@ -426,7 +426,6 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
         {"$ref": "#/components/schemas/InternalTransferTransactionResponse"},
         {"$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"},
     ]
-
     expected_transaction_fields = {
         "id",
         "ledgerId",
@@ -515,6 +514,60 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
             response["content"]["application/problem+json"]["schema"]["$ref"]
             == "#/components/schemas/ProblemDetails"
         )
+
+
+def test_openapi_describes_deterministic_transaction_history_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    operation = schema["paths"]["/finance/ledgers/{ledgerId}/transactions"]["get"]
+
+    assert operation["operationId"] == "listFinanceTransactions"
+    assert operation["security"] == []
+    assert set(operation["responses"]) == {"200", "403", "404", "422", "500", "503"}
+    parameters = {(item["name"], item["in"]): item for item in operation["parameters"]}
+    assert set(parameters) == {
+        ("ledgerId", "path"),
+        ("fromDate", "query"),
+        ("toDate", "query"),
+        ("accountId", "query"),
+        ("kind", "query"),
+        ("categoryId", "query"),
+        ("uncategorized", "query"),
+        ("cursor", "query"),
+        ("pageSize", "query"),
+    }
+    assert parameters[("pageSize", "query")]["schema"] == {
+        "type": "integer",
+        "maximum": 100,
+        "minimum": 1,
+        "default": 50,
+        "title": "Pagesize",
+    }
+    kind_schema = parameters[("kind", "query")]["schema"]["anyOf"][0]
+    assert kind_schema["enum"] == [
+        "income",
+        "expense",
+        "internalTransfer",
+        "balanceAdjustment",
+    ]
+    assert schema["components"]["schemas"]["ActiveUncategorized"] == {
+        "type": "boolean",
+        "const": True,
+    }
+    page_schema = schema["components"]["schemas"]["TransactionHistoryPageResponse"]
+    assert page_schema["additionalProperties"] is False
+    assert set(page_schema["required"]) == {"items", "nextCursor"}
+    assert page_schema["properties"]["items"]["items"] == {
+        "$ref": "#/components/schemas/FinanceTransactionResponse"
+    }
+    for status, response in operation["responses"].items():
+        if status == "200":
+            assert response["content"]["application/json"]["schema"] == {
+                "$ref": "#/components/schemas/TransactionHistoryPageResponse"
+            }
+        else:
+            assert response["content"]["application/problem+json"]["schema"] == {
+                "$ref": "#/components/schemas/ProblemDetails"
+            }
 
 
 def test_openapi_describes_balance_adjustment_context_and_command_contract(

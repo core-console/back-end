@@ -10,6 +10,13 @@ from psycopg.errors import UniqueViolation
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core_console.modules.finance.history import (
+    InvalidTransactionHistoryCursor,
+    TransactionHistoryKind,
+    TransactionHistoryPage,
+    TransactionHistoryQuery,
+    list_transaction_history,
+)
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -1142,6 +1149,51 @@ async def get_finance_transaction(
         ledger_id=ledger_id,
         transaction_id=transaction_id,
     )
+
+
+async def list_finance_transactions(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    from_date: date | None,
+    to_date: date | None,
+    account_id: UUID | None,
+    kind: TransactionHistoryKind | None,
+    category_id: UUID | None,
+    uncategorized: bool,
+    cursor: str | None,
+    page_size: int,
+) -> TransactionHistoryPage:
+    """Browse one owned Ledger through the closed deterministic read side."""
+
+    await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    if account_id is not None:
+        await _require_finance_account_balance(
+            session,
+            ledger_id=ledger_id,
+            account_id=account_id,
+        )
+    if category_id is not None:
+        await _require_finance_category(
+            session,
+            ledger_id=ledger_id,
+            category_id=category_id,
+        )
+    query = TransactionHistoryQuery(
+        from_date=from_date,
+        to_date=to_date,
+        account_id=account_id,
+        kind=kind,
+        category_id=category_id,
+        uncategorized=uncategorized,
+        cursor=cursor,
+        page_size=page_size,
+    )
+    try:
+        return await list_transaction_history(session, ledger_id=ledger_id, query=query)
+    except InvalidTransactionHistoryCursor:
+        raise InvalidFinanceTransactionError("The Transaction history cursor is invalid.") from None
 
 
 async def delete_finance_transaction(

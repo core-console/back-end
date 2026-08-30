@@ -88,6 +88,10 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "ActiveUncategorized": {
+        "const": true,
+        "type": "boolean"
+      },
       "BalanceAdjustmentContextResponse": {
         "additionalProperties": false,
         "description": "Authoritative inputs for one stale-safe target-balance command.",
@@ -1408,6 +1412,36 @@
           "transactionDate"
         ],
         "title": "ReplaceInternalTransferTransactionRequest",
+        "type": "object"
+      },
+      "TransactionHistoryPageResponse": {
+        "additionalProperties": false,
+        "description": "One closed cursor page of complete Finance Transactions.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FinanceTransactionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "TransactionHistoryPageResponse",
         "type": "object"
       },
       "UpdateAccountRequest": {
@@ -3230,6 +3264,221 @@
       }
     },
     "/finance/ledgers/{ledgerId}/transactions": {
+      "get": {
+        "description": "Browse one owned Ledger's deterministic Transaction history.",
+        "operationId": "listFinanceTransactions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fromDate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/FinanceRequestDate"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fromdate"
+            }
+          },
+          {
+            "in": "query",
+            "name": "toDate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/FinanceRequestDate"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Todate"
+            }
+          },
+          {
+            "in": "query",
+            "name": "accountId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Accountid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "income",
+                    "expense",
+                    "internalTransfer",
+                    "balanceAdjustment"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "categoryId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Categoryid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "uncategorized",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ActiveUncategorized"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uncategorized"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Pagesize",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionHistoryPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The resource does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The query is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "List Finance Transactions",
+        "tags": [
+          "Finance"
+        ]
+      },
       "post": {
         "description": "Create one supported Finance Transaction.",
         "operationId": "createFinanceTransaction",

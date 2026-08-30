@@ -855,3 +855,36 @@ async def test_list_ledgers_uses_established_database_failure_taxonomy(
     assert response.status_code == expected_status
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["code"] == expected_code
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "fromDate=2026-08-22&toDate=2026-08-21",
+        "fromDate=2026-08-21T00%3A00%3A00",
+        "uncategorized=false",
+        f"categoryId={uuid4()}&uncategorized=true",
+        "pageSize=0",
+        "pageSize=101",
+        "kind=refund",
+    ),
+)
+async def test_list_transactions_rejects_invalid_query_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    query: str,
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.get(f"/api/finance/ledgers/{uuid4()}/transactions?{query}")
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.execute).assert_not_awaited()

@@ -12,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.currencies import SUPPORTED_CURRENCIES
+from core_console.modules.finance.history_schemas import (
+    TransactionHistoryFilters,
+    TransactionHistoryPageResponse,
+)
 from core_console.modules.finance.models import FinanceCategory, FinanceLedger
 from core_console.modules.finance.money import CurrencyCode, Money
 from core_console.modules.finance.queries import (
@@ -87,6 +91,7 @@ from core_console.modules.finance.service import (
     get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
+    list_finance_transactions,
     replace_balance_adjustment,
     replace_finance_transaction,
     replace_internal_transfer_transaction,
@@ -1161,6 +1166,49 @@ async def post_transaction(
             note=request.note,
             project=_to_transaction_response,
         )
+    )
+
+
+@router.get(
+    "/ledgers/{ledgerId}/transactions",
+    operation_id="listFinanceTransactions",
+    summary="List Finance Transactions",
+    response_model=TransactionHistoryPageResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The query is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def list_transactions(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    filters: Annotated[TransactionHistoryFilters, Query()],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> TransactionHistoryPageResponse:
+    """Browse one owned Ledger's deterministic Transaction history."""
+
+    page = await _run_finance_workflow(
+        list_finance_transactions(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            from_date=filters.from_date,
+            to_date=filters.to_date,
+            account_id=filters.account_id,
+            kind=filters.kind,
+            category_id=filters.category_id,
+            uncategorized=filters.uncategorized is True,
+            cursor=filters.cursor,
+            page_size=filters.page_size,
+        )
+    )
+    return TransactionHistoryPageResponse(
+        items=[_to_transaction_response(detail) for detail in page.items],
+        nextCursor=page.next_cursor,
     )
 
 
