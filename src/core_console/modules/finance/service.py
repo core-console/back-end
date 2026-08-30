@@ -31,6 +31,7 @@ from core_console.modules.finance.money import (
     Money,
     subtract_money_amounts_exact,
 )
+from core_console.modules.finance.overview import FinanceOverview, read_finance_overview
 from core_console.modules.finance.queries import (
     FinanceAccountBalance,
     FinanceTransactionDetail,
@@ -267,6 +268,19 @@ async def list_finance_accounts(
 
     await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
     return await list_finance_account_balances(session, ledger_id=ledger_id)
+
+
+async def get_finance_overview(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    month: str,
+) -> FinanceOverview:
+    """Read one owned Ledger's calendar-first Finance Overview."""
+
+    ledger = await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
+    return await read_finance_overview(session, ledger=ledger, month=month)
 
 
 async def create_finance_account(

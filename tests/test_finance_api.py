@@ -607,6 +607,37 @@ async def test_account_requests_require_exact_calendar_tracking_start_dates(
 
 
 @pytest.mark.parametrize(
+    "query",
+    (
+        "",
+        "?month=0000-01",
+        "?month=2026-2",
+        "?month=2026-13",
+        "?month=2026-08-01",
+    ),
+)
+async def test_overview_requires_an_exact_valid_calendar_month_without_database_work(
+    app: FastAPI,
+    client: AsyncClient,
+    query: str,
+) -> None:
+    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
+
+    async def fake_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_current_user] = _active_user
+    app.dependency_overrides[get_session] = fake_session
+
+    response = await client.get(f"/api/finance/ledgers/{uuid4()}/overview{query}")
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
+    cast(AsyncMock, session.execute).assert_not_awaited()
+
+
+@pytest.mark.parametrize(
     ("method", "path_suffix", "body"),
     (
         ("POST", "", {"name": None}),

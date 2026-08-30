@@ -570,6 +570,84 @@ def test_openapi_describes_deterministic_transaction_history_contract(app: FastA
             }
 
 
+def test_openapi_describes_calendar_first_finance_overview_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    operation = schema["paths"]["/finance/ledgers/{ledgerId}/overview"]["get"]
+
+    assert operation["operationId"] == "getFinanceOverview"
+    assert operation["security"] == []
+    assert set(operation["responses"]) == {"200", "403", "404", "422", "500", "503"}
+    parameters = {(item["name"], item["in"]): item for item in operation["parameters"]}
+    assert set(parameters) == {("ledgerId", "path"), ("month", "query")}
+    assert parameters[("month", "query")]["required"] is True
+    assert parameters[("month", "query")]["schema"] == {
+        "$ref": "#/components/schemas/FinanceOverviewMonth"
+    }
+    assert schema["components"]["schemas"]["FinanceOverviewMonth"] == {
+        "type": "string",
+        "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+    }
+
+    overview = schema["components"]["schemas"]["FinanceOverviewResponse"]
+    assert overview["additionalProperties"] is False
+    assert set(overview["required"]) == {
+        "ledger",
+        "month",
+        "accounts",
+        "financialPositionByCurrency",
+        "monthSummaryByCurrency",
+        "days",
+    }
+    assert set(overview["properties"]) == set(overview["required"])
+    assert overview["properties"]["accounts"]["items"] == {
+        "$ref": "#/components/schemas/AccountResponse"
+    }
+
+    position = schema["components"]["schemas"]["FinancialPositionByCurrencyResponse"]
+    summary = schema["components"]["schemas"]["IncomeExpenseByCurrencyResponse"]
+    day = schema["components"]["schemas"]["FinanceOverviewDayResponse"]
+    activity = schema["components"]["schemas"]["DayActivityByCurrencyResponse"]
+    counts = schema["components"]["schemas"]["TransactionCountByKindResponse"]
+    for component in (position, summary, day, activity, counts):
+        assert component["additionalProperties"] is False
+        assert set(component["required"]) == set(component["properties"])
+    assert set(position["properties"]) == {
+        "currency",
+        "assetTotal",
+        "liabilityTotal",
+        "netPosition",
+    }
+    assert set(summary["properties"]) == {"currency", "income", "expense", "net"}
+    assert set(day["properties"]) == {
+        "date",
+        "transactionCount",
+        "transactionCountByKind",
+        "activityByCurrency",
+    }
+    assert set(activity["properties"]) == {
+        "currency",
+        "income",
+        "expense",
+        "net",
+        "transactionCount",
+    }
+    assert set(counts["properties"]) == {
+        "income",
+        "expense",
+        "internalTransfer",
+        "balanceAdjustment",
+    }
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/FinanceOverviewResponse"
+    }
+    for status, response in operation["responses"].items():
+        if status == "200":
+            continue
+        assert response["content"]["application/problem+json"]["schema"] == {
+            "$ref": "#/components/schemas/ProblemDetails"
+        }
+
+
 def test_openapi_describes_balance_adjustment_context_and_command_contract(
     app: FastAPI,
 ) -> None:

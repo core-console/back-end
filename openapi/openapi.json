@@ -777,6 +777,38 @@
         "title": "CurrencyResponse",
         "type": "object"
       },
+      "DayActivityByCurrencyResponse": {
+        "additionalProperties": false,
+        "description": "One Currency's aggregate activity on a calendar date.",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          },
+          "expense": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "income": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "net": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "transactionCount": {
+            "minimum": 0.0,
+            "title": "Transactioncount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "currency",
+          "income",
+          "expense",
+          "net",
+          "transactionCount"
+        ],
+        "title": "DayActivityByCurrencyResponse",
+        "type": "object"
+      },
       "ExpenseTransactionResponse": {
         "additionalProperties": false,
         "description": "Closed public Expense projection.",
@@ -842,6 +874,94 @@
         "title": "ExpenseTransactionResponse",
         "type": "object"
       },
+      "FinanceOverviewDayResponse": {
+        "additionalProperties": false,
+        "description": "One sparse calendar date containing Finance activity.",
+        "properties": {
+          "activityByCurrency": {
+            "items": {
+              "$ref": "#/components/schemas/DayActivityByCurrencyResponse"
+            },
+            "title": "Activitybycurrency",
+            "type": "array"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "transactionCount": {
+            "minimum": 0.0,
+            "title": "Transactioncount",
+            "type": "integer"
+          },
+          "transactionCountByKind": {
+            "$ref": "#/components/schemas/TransactionCountByKindResponse"
+          }
+        },
+        "required": [
+          "date",
+          "transactionCount",
+          "transactionCountByKind",
+          "activityByCurrency"
+        ],
+        "title": "FinanceOverviewDayResponse",
+        "type": "object"
+      },
+      "FinanceOverviewMonth": {
+        "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+        "type": "string"
+      },
+      "FinanceOverviewResponse": {
+        "additionalProperties": false,
+        "description": "Calendar-first present-position and selected-month Finance projection.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/FinanceOverviewDayResponse"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "financialPositionByCurrency": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialPositionByCurrencyResponse"
+            },
+            "title": "Financialpositionbycurrency",
+            "type": "array"
+          },
+          "ledger": {
+            "$ref": "#/components/schemas/LedgerResponse"
+          },
+          "month": {
+            "$ref": "#/components/schemas/FinanceOverviewMonth"
+          },
+          "monthSummaryByCurrency": {
+            "items": {
+              "$ref": "#/components/schemas/IncomeExpenseByCurrencyResponse"
+            },
+            "title": "Monthsummarybycurrency",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ledger",
+          "month",
+          "accounts",
+          "financialPositionByCurrency",
+          "monthSummaryByCurrency",
+          "days"
+        ],
+        "title": "FinanceOverviewResponse",
+        "type": "object"
+      },
       "FinanceRequestDate": {
         "format": "date",
         "type": "string"
@@ -871,6 +991,32 @@
           }
         ]
       },
+      "FinancialPositionByCurrencyResponse": {
+        "additionalProperties": false,
+        "description": "Present account-relative position for one Account Currency.",
+        "properties": {
+          "assetTotal": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          },
+          "liabilityTotal": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "netPosition": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          }
+        },
+        "required": [
+          "currency",
+          "assetTotal",
+          "liabilityTotal",
+          "netPosition"
+        ],
+        "title": "FinancialPositionByCurrencyResponse",
+        "type": "object"
+      },
       "HelloWorldResponse": {
         "additionalProperties": false,
         "description": "Frontend-compatible hello world response.",
@@ -888,6 +1034,32 @@
           "message"
         ],
         "title": "HelloWorldResponse",
+        "type": "object"
+      },
+      "IncomeExpenseByCurrencyResponse": {
+        "additionalProperties": false,
+        "description": "Income, Expense, and net activity for one Currency.",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode"
+          },
+          "expense": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "income": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "net": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          }
+        },
+        "required": [
+          "currency",
+          "income",
+          "expense",
+          "net"
+        ],
+        "title": "IncomeExpenseByCurrencyResponse",
         "type": "object"
       },
       "IncomeTransactionResponse": {
@@ -1412,6 +1584,40 @@
           "transactionDate"
         ],
         "title": "ReplaceInternalTransferTransactionRequest",
+        "type": "object"
+      },
+      "TransactionCountByKindResponse": {
+        "additionalProperties": false,
+        "description": "Finance Transaction counts for all four durable kinds.",
+        "properties": {
+          "balanceAdjustment": {
+            "minimum": 0.0,
+            "title": "Balanceadjustment",
+            "type": "integer"
+          },
+          "expense": {
+            "minimum": 0.0,
+            "title": "Expense",
+            "type": "integer"
+          },
+          "income": {
+            "minimum": 0.0,
+            "title": "Income",
+            "type": "integer"
+          },
+          "internalTransfer": {
+            "minimum": 0.0,
+            "title": "Internaltransfer",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "income",
+          "expense",
+          "internalTransfer",
+          "balanceAdjustment"
+        ],
+        "title": "TransactionCountByKindResponse",
         "type": "object"
       },
       "TransactionHistoryPageResponse": {
@@ -3258,6 +3464,99 @@
         },
         "security": [],
         "summary": "Unarchive a Finance Category",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/ledgers/{ledgerId}/overview": {
+      "get": {
+        "description": "Returns present Account balances and currency-separated selected-month activity.",
+        "operationId": "getFinanceOverview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FinanceOverviewMonth"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceOverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Access is denied."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The Ledger does not exist."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The request is invalid."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "An unexpected error occurred."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "PostgreSQL is unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Get the Finance Overview",
         "tags": [
           "Finance"
         ]

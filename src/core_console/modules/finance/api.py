@@ -18,6 +18,15 @@ from core_console.modules.finance.history_schemas import (
 )
 from core_console.modules.finance.models import FinanceCategory, FinanceLedger
 from core_console.modules.finance.money import CurrencyCode, Money
+from core_console.modules.finance.overview_schemas import (
+    DayActivityByCurrencyResponse,
+    FinanceOverviewDayResponse,
+    FinanceOverviewMonth,
+    FinanceOverviewResponse,
+    FinancialPositionByCurrencyResponse,
+    IncomeExpenseByCurrencyResponse,
+    TransactionCountByKindResponse,
+)
 from core_console.modules.finance.queries import (
     FinanceAccountBalance,
     FinanceTransactionDetail,
@@ -88,6 +97,7 @@ from core_console.modules.finance.service import (
     create_internal_transfer_transaction,
     delete_finance_transaction,
     get_balance_adjustment_context,
+    get_finance_overview,
     get_finance_transaction,
     list_finance_accounts,
     list_finance_categories_for_ledger,
@@ -537,6 +547,87 @@ async def get_accounts(
         )
     )
     return [_to_account_response(balance) for balance in balances]
+
+
+@router.get(
+    "/ledgers/{ledgerId}/overview",
+    operation_id="getFinanceOverview",
+    summary="Get the Finance Overview",
+    description=(
+        "Returns present Account balances and currency-separated selected-month activity."
+    ),
+    response_model=FinanceOverviewResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The Ledger does not exist."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def get_overview(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    month: Annotated[FinanceOverviewMonth, Query()],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FinanceOverviewResponse:
+    """Read one owned Ledger's present position and selected-month activity."""
+
+    overview = await _run_finance_workflow(
+        get_finance_overview(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            month=month,
+        )
+    )
+    return FinanceOverviewResponse(
+        ledger=_to_ledger_response(overview.ledger),
+        month=overview.month,
+        accounts=[_to_account_response(account) for account in overview.accounts],
+        financialPositionByCurrency=[
+            FinancialPositionByCurrencyResponse(
+                currency=position.currency,
+                assetTotal=_to_money_response(position.asset_total, position.currency),
+                liabilityTotal=_to_money_response(position.liability_total, position.currency),
+                netPosition=_to_money_response(position.net_position, position.currency),
+            )
+            for position in overview.financial_positions
+        ],
+        monthSummaryByCurrency=[
+            IncomeExpenseByCurrencyResponse(
+                currency=summary.currency,
+                income=_to_money_response(summary.income, summary.currency),
+                expense=_to_money_response(summary.expense, summary.currency),
+                net=_to_money_response(summary.net, summary.currency),
+            )
+            for summary in overview.month_summaries
+        ],
+        days=[
+            FinanceOverviewDayResponse(
+                date=day.date,
+                transactionCount=day.transaction_count,
+                transactionCountByKind=TransactionCountByKindResponse(
+                    income=day.transaction_counts.income,
+                    expense=day.transaction_counts.expense,
+                    internalTransfer=day.transaction_counts.internal_transfer,
+                    balanceAdjustment=day.transaction_counts.balance_adjustment,
+                ),
+                activityByCurrency=[
+                    DayActivityByCurrencyResponse(
+                        currency=activity.currency,
+                        income=_to_money_response(activity.income, activity.currency),
+                        expense=_to_money_response(activity.expense, activity.currency),
+                        net=_to_money_response(activity.net, activity.currency),
+                        transactionCount=activity.transaction_count,
+                    )
+                    for activity in day.activity_by_currency
+                ],
+            )
+            for day in overview.days
+        ],
+    )
 
 
 @router.post(

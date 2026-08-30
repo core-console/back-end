@@ -71,7 +71,7 @@ class FinanceTransactionDetail:
         return self.categories[0]
 
 
-def _current_balance_expression() -> ColumnElement[Decimal]:
+def current_finance_account_balance_expression() -> ColumnElement[Decimal]:
     """Return the correlated durable Account balance expression."""
 
     movement_total = (
@@ -151,7 +151,7 @@ async def list_finance_account_balances(
     statement = (
         select(
             FinanceAccount,
-            _current_balance_expression().label("current_balance"),
+            current_finance_account_balance_expression().label("current_balance"),
         )
         .where(FinanceAccount.ledger_id == ledger_id)
         .order_by(
@@ -178,7 +178,7 @@ async def get_finance_account_balance(
 
     statement = select(
         FinanceAccount,
-        _current_balance_expression().label("current_balance"),
+        current_finance_account_balance_expression().label("current_balance"),
     ).where(
         FinanceAccount.id == account_id,
         FinanceAccount.ledger_id == ledger_id,
@@ -250,7 +250,7 @@ async def get_finance_account_balances_for_update(
     statement = (
         select(
             FinanceAccount,
-            _current_balance_expression().label("current_balance"),
+            current_finance_account_balance_expression().label("current_balance"),
         )
         .where(
             FinanceAccount.ledger_id == ledger_id,
