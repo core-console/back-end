@@ -57,6 +57,9 @@
 
 ## Agent skills
 
+Repository preflight, snapshot-bound validation, and worktree review evidence are
+documented in `docs/agents/harness.md`.
+
 ### Issue tracker
 
 Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
