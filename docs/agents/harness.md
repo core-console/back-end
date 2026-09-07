@@ -61,3 +61,60 @@ is not PASS, PostgreSQL was not requested or exercised, harness or validation
 infrastructure changed, dependencies or configuration changed materially, database
 protection/migrations/CI behavior changed, or environment-sensitive behavior is under
 review. A receipt never replaces Standards and Spec reasoning.
+
+## Explicit publication
+
+Publication is a separate, explicitly invoked operation. Validation and review receipts
+are evidence only; they never authorize a commit, push, CI rerun, or issue closure.
+
+```powershell
+uv run --frozen python scripts/agent_harness.py publish `
+  --issue <number> --base <parent-sha> --sha <approved-sha> --branch <branch>
+```
+
+The approved SHA must be the current HEAD and the single child of the resolved base.
+The expected branch must be checked out, the worktree must be clean, local
+`origin/<branch>` must describe exactly the unpublished or already-pushed state, and
+the approved snapshot must have matching validation and review-state receipts. The
+validation must be an unchanged protected PASS with PostgreSQL both requested and
+exercised. No stale or merely filename-matching receipt is accepted.
+
+Immediately before a first push, the harness reads `refs/heads/<branch>` with
+`git ls-remote`, which does not update local refs. Remote drift stops publication. The
+origin fetch URL and all configured push URLs are resolved first. Git then resolves the
+effective push URL, including `url.*.insteadOf` and `url.*.pushInsteadOf` rewriting.
+Publication requires exactly one effective strict GitHub push destination with the same
+repository identity as the fetch URL, and the normal fast-forward push names that
+verified effective URL directly. Before publication, Git resolves that URL once more as
+a destination with `ls-remote --get-url`; any further `insteadOf` rewrite or ambiguity
+fails closed. Because Git has no equivalent no-contact proof for an explicit URL under
+remaining `pushInsteadOf` rules, their presence also fails closed:
+`git push <verified-url> <approved-sha>:refs/heads/<branch>`. Ambiguous, unparsable, or
+mismatched destinations stop before push. The harness never automatically forces,
+merges, rebases, resets, amends, squashes, or otherwise rewrites history.
+
+After push, the harness considers only workflow runs named `Validate` whose `headSha`
+equals the approved SHA. If several exist, the greatest numeric run ID wins. It waits
+for that exact run ID to complete successfully and requires the repository's complete
+job inventory: one terminal, successful `validate` job. Missing, malformed,
+non-terminal, inconsistent, or unsuccessful run/job evidence stops before issue lookup.
+The remaining CI deadline bounds every GitHub run-list and run-view subprocess; a
+command timeout follows the same compact failure path. Failure, cancellation, timeout,
+or unreliable identification stops without changing code, rerunning CI, creating
+commits, or closing the issue.
+Every GitHub CLI operation passes the repository identity parsed from `origin`
+explicitly, so ambient `gh` configuration cannot redirect CI lookup or issue closure.
+
+Only after exact-SHA CI succeeds does the harness recheck the live remote SHA, inspect
+exactly the supplied issue, and, when it is OPEN, recheck the live remote again as the
+final operation immediately before closing it with reason `completed`. An
+already-pushed SHA and an already-closed supplied issue are verified as completed
+steps, so reruns can resume after interruption without another commit, a different
+push, or duplicate closure. Closure ambiguity is resolved by rerunning and reading the
+issue state.
+
+Versioned success or exact-SHA CI failure receipts are written to
+`.agent/receipts/publication-issue-<number>-<approved-sha>.json`; verbose GitHub command
+responses remain under `.agent/logs/publication/`. Normal stdout contains only compact
+identifiers and receipt pointers. Publication-specific remote Git commands also retain
+complete stdout/stderr there; failures report only the phase and detailed-log path.
