@@ -726,6 +726,225 @@ def test_publish_ls_remote_failure_is_compact_and_persisted(
     assert marker in git_logs[0].read_text(encoding="utf-8")
 
 
+def test_publication_remote_read_recovers_from_transient_transport_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A classified transient read failure is retried with a fresh transcript."""
+
+    expected_sha = "a" * 40
+    attempts = 0
+
+    def transient_then_success(
+        command: tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal attempts
+        attempts += 1
+        assert kwargs.get("timeout") is not None
+        if attempts == 1:
+            return subprocess.CompletedProcess(
+                command,
+                128,
+                b"",
+                b"OpenSSL SSL_read: unexpected eof while reading",
+            )
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            f"{expected_sha}\trefs/heads/main\n".encode(),
+            b"",
+        )
+
+    monkeypatch.setattr(subprocess, "run", transient_then_success)
+    logs = tmp_path / "logs"
+
+    assert (
+        agent_harness.PublicationGit(tmp_path, logs).live_branch_sha(
+            TEST_REPOSITORY_URL,
+            "main",
+            phase="live-remote",
+        )
+        == expected_sha
+    )
+    assert attempts == 2
+    assert len(list(logs.glob("*-live-remote-git.log"))) == 2
+
+
+def test_publication_remote_read_exhausts_small_transient_attempt_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated transient failures stop after the fixed small attempt count."""
+
+    attempts = 0
+
+    def transient_failure(
+        command: tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal attempts
+        attempts += 1
+        return subprocess.CompletedProcess(
+            command,
+            128,
+            b"",
+            b"schannel: failed to receive handshake",
+        )
+
+    monkeypatch.setattr(subprocess, "run", transient_failure)
+    logs = tmp_path / "logs"
+
+    with pytest.raises(PublicationError, match=r"transient.*attempts"):
+        agent_harness.PublicationGit(tmp_path, logs).live_branch_sha(
+            TEST_REPOSITORY_URL,
+            "main",
+            phase="live-remote",
+        )
+
+    assert attempts == agent_harness.PUBLICATION_REMOTE_READ_ATTEMPTS
+    assert len(list(logs.glob("*-live-remote-git.log"))) == attempts
+
+
+def test_publication_remote_read_timeouts_share_one_overall_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each blocked read is bounded by the remaining shared deadline."""
+
+    monotonic_values = iter((100.0, 100.0, 100.03, 100.051))
+    timeouts: list[float] = []
+
+    def monotonic() -> float:
+        return next(monotonic_values)
+
+    def blocked_read(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, float)
+        timeouts.append(timeout)
+        raise subprocess.TimeoutExpired(command, timeout, output=b"partial remote output")
+
+    monkeypatch.setattr(agent_harness, "PUBLICATION_REMOTE_READ_DEADLINE_SECONDS", 0.05)
+    monkeypatch.setattr(time, "monotonic", monotonic)
+    monkeypatch.setattr(subprocess, "run", blocked_read)
+    logs = tmp_path / "logs"
+
+    with pytest.raises(PublicationError, match="deadline"):
+        agent_harness.PublicationGit(tmp_path, logs).live_branch_sha(
+            TEST_REPOSITORY_URL,
+            "main",
+            phase="live-remote",
+        )
+
+    assert timeouts == pytest.approx([0.05, 0.02])
+    assert len(list(logs.glob("*-live-remote-git.log"))) == 2
+    assert "partial remote output" in (logs / "01-live-remote-git.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        b"fatal: Authentication failed for 'https://github.com/core-console/back-end.git/'",
+        b"fatal: unable to access remote: SSL certificate problem: unable to get local issuer",
+    ],
+)
+def test_publication_remote_read_does_not_retry_non_transient_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: bytes,
+) -> None:
+    """Authentication and certificate failures fail on their first attempt."""
+
+    attempts = 0
+
+    def non_transient_failure(
+        command: tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal attempts
+        attempts += 1
+        return subprocess.CompletedProcess(command, 128, b"", stderr)
+
+    monkeypatch.setattr(subprocess, "run", non_transient_failure)
+
+    with pytest.raises(PublicationError, match="failed"):
+        agent_harness.PublicationGit(tmp_path, tmp_path / "logs").live_branch_sha(
+            TEST_REPOSITORY_URL,
+            "main",
+            phase="live-remote",
+        )
+
+    assert attempts == 1
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        b"fatal: Authentication failed while the connection timed out",
+        b"SSL certificate problem: unable to get local issuer after operation timed out",
+    ],
+)
+def test_publication_remote_read_timeout_does_not_override_permanent_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: bytes,
+) -> None:
+    """Permanent diagnostics accompanying a timeout take precedence over retry."""
+
+    attempts = 0
+
+    def permanent_timeout(
+        command: tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal attempts
+        attempts += 1
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, float)
+        raise subprocess.TimeoutExpired(command, timeout, stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "run", permanent_timeout)
+
+    with pytest.raises(PublicationError, match="failed"):
+        agent_harness.PublicationGit(tmp_path, tmp_path / "logs").live_branch_sha(
+            TEST_REPOSITORY_URL,
+            "main",
+            phase="live-remote",
+        )
+
+    assert attempts == 1
+
+
+def test_publication_remote_read_does_not_retry_malformed_success_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful command with ambiguous semantic evidence fails immediately."""
+
+    attempts = 0
+
+    def malformed_success(
+        command: tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal attempts
+        attempts += 1
+        return subprocess.CompletedProcess(command, 0, b"not-a-ref", b"")
+
+    monkeypatch.setattr(subprocess, "run", malformed_success)
+
+    with pytest.raises(PublicationError, match="ambiguous branch evidence"):
+        agent_harness.PublicationGit(tmp_path, tmp_path / "logs").live_branch_sha(
+            TEST_REPOSITORY_URL,
+            "main",
+            phase="live-remote",
+        )
+
+    assert attempts == 1
+
+
 def test_publish_rejected_push_diagnostics_are_compact_and_persisted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -735,6 +954,7 @@ def test_publish_rejected_push_diagnostics_are_compact_and_persisted(
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
     write_publication_evidence(repository, base_sha, protected=True, passing=True)
     original_run = subprocess.run
+    push_attempts = 0
     stdout_marker = "rejected-push-stdout"
     stderr_marker = "rejected-push-stderr"
 
@@ -742,6 +962,7 @@ def test_publish_rejected_push_diagnostics_are_compact_and_persisted(
         command: tuple[str, ...],
         **kwargs: object,
     ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal push_attempts
         if command[:3] == ("git", "ls-remote", "--exit-code"):
             return subprocess.CompletedProcess(
                 command,
@@ -750,6 +971,7 @@ def test_publish_rejected_push_diagnostics_are_compact_and_persisted(
                 b"",
             )
         if command[:2] == ("git", "push"):
+            push_attempts += 1
             return subprocess.CompletedProcess(
                 command,
                 1,
@@ -780,6 +1002,7 @@ def test_publish_rejected_push_diagnostics_are_compact_and_persisted(
     stored = push_logs[0].read_text(encoding="utf-8")
     assert stdout_marker in stored
     assert stderr_marker in stored
+    assert push_attempts == 1
     assert git(tmp_path / "remote.git", "rev-parse", "refs/heads/main") == base_sha
     assert github.closed_issues == []
 

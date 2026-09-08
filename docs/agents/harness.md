@@ -3,6 +3,19 @@
 The repository-local harness records deterministic Git/worktree state and validation
 evidence. It supports review; it does not automate Standards or Spec judgement.
 
+## Candidate lifecycle
+
+Use the local `implement-candidate` skill to produce one uncommitted candidate. After
+protected harness validation, generate `review-state`; its artifact is the canonical
+input for a fresh independent review session. Approval comes after that review and
+before commit.
+
+Committing changes the snapshot identity, even when the worktree bytes are unchanged.
+Before publication, generate fresh protected validation and review-state evidence for
+the committed snapshot. Uncommitted receipts are neither promoted nor treated as
+content-equivalent. The publication harness then owns push, exact-SHA CI verification,
+and implementation-issue closure.
+
 Run commands from the repository root with an explicit review base:
 
 ```powershell
@@ -79,10 +92,24 @@ the approved snapshot must have matching validation and review-state receipts. T
 validation must be an unchanged protected PASS with PostgreSQL both requested and
 exercised. No stale or merely filename-matching receipt is accepted.
 
+An explicit-URL publication does not refresh local `origin/<branch>`. If that tracking
+ref is stale before the next committed-snapshot publication, an explicitly authorized
+normal fetch may refresh it. Run preflight afterward and verify the refreshed tracking
+ref and live remote still identify the expected base before continuing. The harness
+never fetches implicitly, and a mismatch stops publication; do not reset, rebase,
+force, or use another destructive repair to manufacture the expected state.
+
 Immediately before a first push, the harness reads `refs/heads/<branch>` with
-`git ls-remote`, which does not update local refs. Remote drift stops publication. The
-origin fetch URL and all configured push URLs are resolved first. Git then resolves the
-effective push URL, including `url.*.insteadOf` and `url.*.pushInsteadOf` rewriting.
+`git ls-remote`, which does not update local refs. Each read has a subprocess timeout;
+a small attempt limit and one overall deadline bound the whole read. Only recognized
+transient transport failures are retried, with a separate retained transcript for each
+attempt. Authentication and certificate diagnostics take precedence even when the
+subprocess also reports a timeout; they fail immediately. Malformed evidence,
+repository binding, SHA mismatch, and other semantic safety failures also stop without
+retry. Push is attempted once and is never retried. Remote drift stops publication.
+The origin fetch URL and all configured push URLs are resolved first. Git then resolves
+the effective push URL, including `url.*.insteadOf` and `url.*.pushInsteadOf`
+rewriting.
 Publication requires exactly one effective strict GitHub push destination with the same
 repository identity as the fetch URL, and the normal fast-forward push names that
 verified effective URL directly. Before publication, Git resolves that URL once more as

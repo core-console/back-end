@@ -143,13 +143,14 @@ machine paths, or random values.
 
 ## Quality checks
 
-Run the complete local validation entrypoint after syncing:
+For a candidate handoff, run the repository harness with the candidate's explicit
+review base. This is the canonical complete validation route:
 
 ```console
-uv run --frozen python scripts/validate.py
+uv run --frozen python scripts/agent_harness.py validate --base <sha> --protected
 ```
 
-It checks, in order:
+The harness runs `scripts/validate.py`, which checks, in order:
 
 1. `uv.lock` consistency
 2. Ruff formatting
@@ -157,6 +158,10 @@ It checks, in order:
 4. strict mypy
 5. pytest
 6. OpenAPI drift
+
+It then runs the committed, staged, and unstaged diff checks and writes
+snapshot-bound validation evidence. Do not run a second standalone full validation
+for the same candidate snapshot.
 
 Run an individual check with the same frozen environment, for example:
 

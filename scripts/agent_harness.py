@@ -26,6 +26,30 @@ REVIEW_SCHEMA = "core-console-agent-review/v2"
 VALIDATION_SCHEMA = "core-console-agent-validation/v1"
 PREFLIGHT_SCHEMA = "core-console-agent-preflight/v1"
 PUBLICATION_SCHEMA = "core-console-agent-publication/v1"
+PUBLICATION_REMOTE_READ_ATTEMPTS = 3
+PUBLICATION_REMOTE_READ_ATTEMPT_TIMEOUT_SECONDS = 5.0
+PUBLICATION_REMOTE_READ_DEADLINE_SECONDS = 12.0
+
+_NON_RETRYABLE_REMOTE_READ_MARKERS = (
+    "access denied",
+    "authentication failed",
+    "certificate",
+    "could not read username",
+    "permission denied",
+    "repository not found",
+    "unable to get local issuer",
+)
+_TRANSIENT_REMOTE_READ_MARKERS = (
+    "connection reset by peer",
+    "connection timed out",
+    "could not resolve host",
+    "failed to connect",
+    "failed to receive handshake",
+    "http/2 stream",
+    "operation timed out",
+    "remote end hung up unexpectedly",
+    "unexpected eof while reading",
+)
 
 
 @dataclass(frozen=True)
@@ -128,25 +152,52 @@ class PublicationGit:
         self._log_directory = log_directory
         self._command_index = 0
 
-    def _run(self, phase: str, *arguments: str) -> bytes:
+    def _run_once(
+        self,
+        phase: str,
+        *arguments: str,
+        timeout_seconds: float | None = None,
+    ) -> tuple[subprocess.CompletedProcess[bytes], Path, bool]:
         self._command_index += 1
         command = ("git", *arguments)
-        result = subprocess.run(
-            command,
-            cwd=self._root,
-            check=False,
-            capture_output=True,
-        )
+        timed_out = False
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self._root,
+                check=False,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            timed_out = True
+            result = subprocess.CompletedProcess(
+                command,
+                -1,
+                _command_output_bytes(error.stdout),
+                _command_output_bytes(error.stderr),
+            )
         log_path = self._log_directory / f"{self._command_index:02d}-{_safe_label(phase)}-git.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        timeout_note = f"\n[timeout]\n{timeout_seconds} seconds\n" if timed_out else ""
         log_path.write_text(
             (
                 f"$ {subprocess.list2cmdline(command)}\n\n[stdout]\n"
                 f"{result.stdout.decode('utf-8', errors='replace')}\n[stderr]\n"
                 f"{result.stderr.decode('utf-8', errors='replace')}"
+                f"{timeout_note}"
             ),
             encoding="utf-8",
         )
+        return result, log_path, timed_out
+
+    def _run(self, phase: str, *arguments: str) -> bytes:
+        result, log_path, timed_out = self._run_once(phase, *arguments)
+        if timed_out:
+            raise PublicationError(
+                f"publication Git phase={phase} timed out; "
+                f"detailed-log={log_path.relative_to(self._root).as_posix()}"
+            )
         if result.returncode != 0:
             raise PublicationError(
                 f"publication Git phase={phase} failed; "
@@ -155,13 +206,49 @@ class PublicationGit:
         return result.stdout
 
     def live_branch_sha(self, remote_url: str, branch: str, *, phase: str) -> str:
-        output = self._run(
-            phase,
-            "ls-remote",
-            "--exit-code",
-            remote_url,
-            f"refs/heads/{branch}",
-        )
+        deadline = time.monotonic() + PUBLICATION_REMOTE_READ_DEADLINE_SECONDS
+        output: bytes | None = None
+        last_log_path: Path | None = None
+        for attempt in range(1, PUBLICATION_REMOTE_READ_ATTEMPTS + 1):
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                detail = (
+                    f"; detailed-log={last_log_path.relative_to(self._root).as_posix()}"
+                    if last_log_path is not None
+                    else ""
+                )
+                raise PublicationError(
+                    f"publication Git phase={phase} exceeded remote-read deadline{detail}"
+                )
+            result, log_path, timed_out = self._run_once(
+                phase,
+                "ls-remote",
+                "--exit-code",
+                remote_url,
+                f"refs/heads/{branch}",
+                timeout_seconds=min(
+                    PUBLICATION_REMOTE_READ_ATTEMPT_TIMEOUT_SECONDS,
+                    remaining_seconds,
+                ),
+            )
+            last_log_path = log_path
+            if result.returncode == 0 and not timed_out:
+                output = result.stdout
+                break
+            transient = _is_transient_remote_read_failure(result.stderr, timed_out=timed_out)
+            if not transient:
+                raise PublicationError(
+                    f"publication Git phase={phase} failed; "
+                    f"detailed-log={log_path.relative_to(self._root).as_posix()}"
+                )
+            if attempt == PUBLICATION_REMOTE_READ_ATTEMPTS:
+                raise PublicationError(
+                    f"publication Git phase={phase} exhausted transient remote-read "
+                    f"failures after {attempt} attempts; "
+                    f"detailed-log={log_path.relative_to(self._root).as_posix()}"
+                )
+        if output is None:
+            raise PublicationError(f"publication Git phase={phase} remote read failed")
         fields = _text(output).split()
         if len(fields) != 2 or fields[1] != f"refs/heads/{branch}":
             raise PublicationError(
@@ -176,6 +263,15 @@ class PublicationGit:
             remote_url,
             f"{approved_sha}:refs/heads/{branch}",
         )
+
+
+def _is_transient_remote_read_failure(stderr: bytes, *, timed_out: bool = False) -> bool:
+    """Classify only known transport failures as safe read-only retry candidates."""
+
+    diagnostic = stderr.decode("utf-8", errors="replace").lower()
+    if any(marker in diagnostic for marker in _NON_RETRYABLE_REMOTE_READ_MARKERS):
+        return False
+    return timed_out or any(marker in diagnostic for marker in _TRANSIENT_REMOTE_READ_MARKERS)
 
 
 class GitHubCli:

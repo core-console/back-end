@@ -44,14 +44,25 @@
   tests may use a dedicated local or CI PostgreSQL via `TEST_DATABASE_URL`, but
   must never fall back to or clean `DATABASE_URL`; Keycloak, Kubernetes, and
   real public networks remain outside current integration-test dependencies.
-- Run `uv run --frozen python scripts/validate.py` and `git diff --check` before
-  handing off a change.
+- Run the protected repository harness validation documented in
+  `docs/agents/harness.md` before handing off a candidate. It owns the complete
+  validation sequence and all required diff checks.
 - Follow Conventional Commits and keep each commit to one logical concern.
 
 ## Change approval boundary
 
 - Do not commit or push unless the user explicitly approves it in the current conversation.
-- Implementation tasks stop after validation and report `READY_FOR_REVIEW`.
+- Use the local `implement-candidate` skill for candidate implementation. Stop
+  after protected harness validation and canonical review-state generation, then
+  report `READY_FOR_REVIEW` with the uncommitted candidate.
+- A fresh session independently reviews an uncommitted candidate from the
+  canonical harness artifact. Approval is required before commit or publication.
+- A commit changes snapshot identity. Regenerate protected validation and
+  review-state evidence for that committed snapshot before publication; do not
+  reuse or promote the uncommitted receipts.
+- Implementation delivery and issue closure must go through the publication
+  harness; never run `gh issue close` directly for an implementation issue.
+  Direct closure remains available only for non-delivery tracker work.
 - Repository instructions take precedence over conflicting workflow defaults.
 - Do not expand the approved scope while addressing review findings.
 
