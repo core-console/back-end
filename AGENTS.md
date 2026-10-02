@@ -52,9 +52,10 @@
 ## Change approval boundary
 
 - Do not commit or push unless the user explicitly approves it in the current conversation.
-- Use the local `implement-candidate` skill for candidate implementation. Stop
-  after protected harness validation and canonical review-state generation, then
-  report `READY_FOR_REVIEW` with the uncommitted candidate.
+- Use Matt `implement` with the repository override in `docs/agents/harness.md`:
+  protected validation is the final suite, Standards and Spec review cover the
+  complete identity-bound candidate, and handoff stops uncommitted at
+  `READY_FOR_REVIEW`.
 - A fresh session independently reviews an uncommitted candidate from the
   canonical harness artifact. Approval is required before commit or publication.
 - A commit changes snapshot identity. Regenerate protected validation and
@@ -62,7 +63,9 @@
   reuse or promote the uncommitted receipts.
 - Implementation delivery and issue closure must go through the publication
   harness; never run `gh issue close` directly for an implementation issue.
-  Direct closure remains available only for non-delivery tracker work.
+  Issue linkage is optional; close only an explicitly supplied issue after the
+  harness's exact-SHA CI and remote checks. Direct closure remains available
+  only for non-delivery tracker work.
 - Repository instructions take precedence over conflicting workflow defaults.
 - Do not expand the approved scope while addressing review findings.
 

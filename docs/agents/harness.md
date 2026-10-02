@@ -5,16 +5,36 @@ evidence. It supports review; it does not automate Standards or Spec judgement.
 
 ## Candidate lifecycle
 
-Use the local `implement-candidate` skill to produce one uncommitted candidate. After
-protected harness validation, generate `review-state`; its artifact is the canonical
-input for a fresh independent review session. Approval comes after that review and
-before commit.
+Use the installed Matt `implement` skill for the approved spec or tickets, with these
+repository overrides:
+
+1. Use Matt's TDD loop where possible at agreed seams, with targeted tests and
+   typechecking during implementation. Use protected harness validation below as
+   the final complete suite, rather than running a second standalone full suite.
+2. Generate `review-state`, then run Matt `code-review`'s parallel Standards and Spec
+   reviews against that canonical artifact. Pin its resolved base SHA, HEAD SHA,
+   snapshot digest, changed-file inventory, and validation/review receipt paths.
+   Supply the approved user spec or ticket and repository standards to the reviewers.
+   Review all committed, staged, unstaged, and untracked candidate content; Matt's
+   default `git diff <fixed-point>...HEAD` alone omits uncommitted work and is not the
+   review input here. Resolve findings and regenerate evidence after candidate changes.
+3. Stop uncommitted at `READY_FOR_REVIEW` instead of Matt `implement`'s default commit
+   step. Keep the index untouched when the user requests an unstaged candidate.
+
+Matt skills own implementation and independent Standards/Spec judgement. The harness
+owns snapshot identity, protected validation, canonical review evidence, and separately
+authorized publication. A READY review-state artifact is preparation evidence, not a
+Standards or Spec approval. A fresh session independently reviews the complete
+uncommitted candidate from the canonical artifact; user approval comes after that
+review and before commit or publication. In-session Matt reviews do not replace this
+approval boundary. Installed skills remain unchanged; this repository needs no separate
+candidate implementation skill.
 
 Committing changes the snapshot identity, even when the worktree bytes are unchanged.
 Before publication, generate fresh protected validation and review-state evidence for
 the committed snapshot. Uncommitted receipts are neither promoted nor treated as
 content-equivalent. The publication harness then owns push, exact-SHA CI verification,
-and implementation-issue closure.
+and closure of an explicitly supplied implementation issue. Issue linkage is optional.
 
 Run commands from the repository root with an explicit review base:
 
@@ -82,8 +102,13 @@ are evidence only; they never authorize a commit, push, CI rerun, or issue closu
 
 ```powershell
 uv run --frozen python scripts/agent_harness.py publish `
-  --issue <number> --base <parent-sha> --sha <approved-sha> --branch <branch>
+  --base <parent-sha> --sha <approved-sha> --branch <branch>
 ```
+
+Add `--issue <number>` only when publication includes that issue. Without it, the
+harness neither looks up nor closes an issue, and publication needs no invented tracker
+item. Both paths require the same approved candidate and all validation, review,
+destination, push, exact-SHA CI/job, final remote equality, and receipt evidence.
 
 The approved SHA must be the current HEAD and the single child of the resolved base.
 The expected branch must be checked out, the worktree must be clean, local
@@ -132,16 +157,23 @@ commits, or closing the issue.
 Every GitHub CLI operation passes the repository identity parsed from `origin`
 explicitly, so ambient `gh` configuration cannot redirect CI lookup or issue closure.
 
-Only after exact-SHA CI succeeds does the harness recheck the live remote SHA, inspect
-exactly the supplied issue, and, when it is OPEN, recheck the live remote again as the
-final operation immediately before closing it with reason `completed`. An
-already-pushed SHA and an already-closed supplied issue are verified as completed
+Only after exact-SHA CI succeeds does the harness recheck the live remote SHA. When
+an issue was explicitly supplied, it then inspects exactly that issue and, when it is
+OPEN, rechecks the live remote again as the final operation immediately before closing
+it with reason `completed`. An already-pushed SHA and an already-closed supplied issue
+are verified as completed
 steps, so reruns can resume after interruption without another commit, a different
 push, or duplicate closure. Closure ambiguity is resolved by rerunning and reading the
-issue state.
+issue state. Every successful publication, with or without an issue, still requires
+the final clean-worktree, local HEAD, and live remote equality check before its PASS
+receipt.
 
 Versioned success or exact-SHA CI failure receipts are written to
 `.agent/receipts/publication-issue-<number>-<approved-sha>.json`; verbose GitHub command
-responses remain under `.agent/logs/publication/`. Normal stdout contains only compact
-identifiers and receipt pointers. Publication-specific remote Git commands also retain
+responses remain under `.agent/logs/publication/issue-<number>-<approved-sha>/`.
+Issue-free receipts use `.agent/receipts/publication-no-issue-<approved-sha>.json` and
+logs use `.agent/logs/publication/no-issue-<approved-sha>/`. Their `issueNumber` and
+`finalIssueState` fields are null, including on exact-SHA CI failure; supplied-issue
+receipt fields and paths retain their existing meaning. Normal stdout contains only
+compact identifiers and receipt pointers. Publication-specific remote Git commands also retain
 complete stdout/stderr there; failures report only the phase and detailed-log path.

@@ -183,7 +183,7 @@ class IsolatedPublicationGit:
 def publish_repository(
     repository: Path,
     *,
-    issue: int,
+    issue: int | None = None,
     base: str,
     approved_sha: str,
     branch: str,
@@ -239,7 +239,10 @@ def committed_publication_candidate(tmp_path: Path) -> tuple[Path, str, str]:
     return repository, base_sha, git(repository, "rev-parse", "HEAD")
 
 
-def test_publish_rejects_mismatched_origin_push_destination(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_rejects_mismatched_origin_push_destination(
+    tmp_path: Path, issue: int | None
+) -> None:
     """A push URL for another repository is rejected before either remote changes."""
 
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
@@ -253,7 +256,7 @@ def test_publish_rejects_mismatched_origin_push_destination(tmp_path: Path) -> N
     with pytest.raises(PublicationError, match="push destination"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -491,7 +494,10 @@ def write_publication_evidence(
     return validation.receipt_path
 
 
-def test_publish_rejects_wrong_head_before_external_action(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_rejects_wrong_head_before_external_action(
+    tmp_path: Path, issue: int | None
+) -> None:
     """Explicit approval is bound to the current HEAD SHA."""
 
     repository, base_sha, _approved_sha = committed_publication_candidate(tmp_path)
@@ -499,7 +505,7 @@ def test_publish_rejects_wrong_head_before_external_action(tmp_path: Path) -> No
     with pytest.raises(PublicationError, match="HEAD does not equal approved SHA"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha="0" * 40,
             branch="main",
@@ -509,7 +515,10 @@ def test_publish_rejects_wrong_head_before_external_action(tmp_path: Path) -> No
     assert git(tmp_path / "remote.git", "rev-parse", "refs/heads/main") == base_sha
 
 
-def test_publish_rejects_dirty_worktree_before_external_action(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_rejects_dirty_worktree_before_external_action(
+    tmp_path: Path, issue: int | None
+) -> None:
     """Publication cannot race unapproved worktree content."""
 
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
@@ -518,7 +527,7 @@ def test_publish_rejects_dirty_worktree_before_external_action(tmp_path: Path) -
     with pytest.raises(PublicationError, match="worktree is not clean"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -596,8 +605,10 @@ def test_publish_rejects_local_tracking_state_behind_expected_base(tmp_path: Pat
         ),
     ),
 )
+@pytest.mark.parametrize("issue", (15, None))
 def test_publish_rejects_inadequate_matching_validation(
     tmp_path: Path,
+    issue: int | None,
     protected: bool,
     passing: bool,
     message: str,
@@ -615,7 +626,7 @@ def test_publish_rejects_inadequate_matching_validation(
     with pytest.raises(PublicationError, match=message):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -623,7 +634,8 @@ def test_publish_rejects_inadequate_matching_validation(
         )
 
 
-def test_publish_rejects_stale_validation_receipt(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_rejects_stale_validation_receipt(tmp_path: Path, issue: int | None) -> None:
     """A receipt filename cannot substitute for exact structured identity."""
 
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
@@ -640,7 +652,7 @@ def test_publish_rejects_stale_validation_receipt(tmp_path: Path) -> None:
     with pytest.raises(PublicationError, match="validation receipt is stale"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -648,7 +660,8 @@ def test_publish_rejects_stale_validation_receipt(tmp_path: Path) -> None:
         )
 
 
-def test_publish_rejects_live_remote_drift(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_rejects_live_remote_drift(tmp_path: Path, issue: int | None) -> None:
     """The live remote must still be the expected base immediately before push."""
 
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
@@ -669,7 +682,7 @@ def test_publish_rejects_live_remote_drift(tmp_path: Path) -> None:
     with pytest.raises(PublicationError, match="live remote branch drifted"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -1007,6 +1020,121 @@ def test_publish_rejected_push_diagnostics_are_compact_and_persisted(
     assert github.closed_issues == []
 
 
+@pytest.mark.parametrize("evidence", ("receipt", "artifact"))
+def test_publish_without_issue_rejects_stale_review_evidence(tmp_path: Path, evidence: str) -> None:
+    """Omitting an issue cannot bypass identity-bound review evidence."""
+
+    repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
+    write_publication_evidence(repository, base_sha, protected=True, passing=True)
+    snapshot = snapshot_repository(repository, base_sha)
+    review_path = repository / ".agent" / "receipts" / f"review-{snapshot.digest}.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    target = review_path if evidence == "receipt" else repository / review["artifactPath"]
+    data = json.loads(target.read_text(encoding="utf-8"))
+    data["snapshotDigest"] = "0" * 64
+    target.write_text(f"{json.dumps(data)}\n", encoding="utf-8")
+
+    with pytest.raises(PublicationError, match=f"review-state {evidence} is stale"):
+        publish_repository(
+            repository,
+            base=base_sha,
+            approved_sha=approved_sha,
+            branch="main",
+            github=UnexpectedGitHub(),
+        )
+
+    assert git(tmp_path / "remote.git", "rev-parse", "refs/heads/main") == base_sha
+
+
+@pytest.mark.parametrize("phase", ("after-ci-live-remote", "final-live-remote"))
+def test_publish_without_issue_rejects_remote_drift_after_ci(tmp_path: Path, phase: str) -> None:
+    """Successful CI alone cannot produce a PASS receipt after remote drift."""
+
+    repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
+    write_publication_evidence(repository, base_sha, protected=True, passing=True)
+    github = FakeGitHub(
+        runs=[validation_run(approved_sha)],
+        run_views=[validation_run(approved_sha)],
+    )
+
+    class DriftingRemote(IsolatedPublicationGit):
+        def live_branch_sha(self, remote_url: str, branch: str, *, phase: str) -> str:
+            if phase == drift_phase:
+                git(tmp_path / "remote.git", "update-ref", "refs/heads/main", base_sha)
+            return super().live_branch_sha(remote_url, branch, phase=phase)
+
+    drift_phase = phase
+    with pytest.raises(
+        PublicationError, match=r"changed after exact-SHA CI|final repository state"
+    ):
+        publish_repository(
+            repository,
+            base=base_sha,
+            approved_sha=approved_sha,
+            branch="main",
+            github=github,
+            publication_git=DriftingRemote(repository),
+            ci_timeout_seconds=1,
+            ci_poll_seconds=0,
+        )
+
+    assert github.operations == ["list_validation_runs", "get_validation_run"]
+    assert github.closed_issues == []
+    assert not (
+        repository / ".agent" / "receipts" / f"publication-no-issue-{approved_sha}.json"
+    ).exists()
+
+
+def test_publish_without_issue_preserves_evidence_and_never_queries_tracker(tmp_path: Path) -> None:
+    """Issue-free publication retains the protected, exact-SHA delivery proof."""
+
+    repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
+    write_publication_evidence(repository, base_sha, protected=True, passing=True)
+    github = FakeGitHub(
+        runs=[validation_run(base_sha, run_id=101), validation_run(approved_sha)],
+        run_views=[validation_run(approved_sha)],
+    )
+
+    result = agent_harness.publish_repository(
+        repository,
+        base=base_sha,
+        approved_sha=approved_sha,
+        branch="main",
+        github=github,
+        publication_git=IsolatedPublicationGit(repository),
+        ci_timeout_seconds=1,
+        ci_poll_seconds=0,
+    )
+
+    assert result["outcome"] == "PASS"
+    assert result["issueNumber"] is None
+    assert result["finalIssueState"] is None
+    assert github.operations == ["list_validation_runs", "get_validation_run"]
+    assert github.closed_issues == []
+    assert object_dict(result["push"]) == {"performed": True, "mode": "normal-fast-forward"}
+    assert result["receiptPath"] == f".agent/receipts/publication-no-issue-{approved_sha}.json"
+    receipt = json.loads((repository / str(result["receiptPath"])).read_text(encoding="utf-8"))
+    assert receipt["schema"] == "core-console-agent-publication/v1"
+    assert receipt["baseSha"] == base_sha
+    assert receipt["approvedSha"] == approved_sha
+    assert receipt["remoteBranchBeforePush"] == base_sha
+    assert receipt["remoteBranchAfterPush"] == approved_sha
+    assert receipt["finalLocalHead"] == approved_sha
+    assert receipt["finalRemoteSha"] == approved_sha
+    assert receipt["workingTreeClean"] is True
+    assert object_dict(receipt["ci"])["headSha"] == approved_sha
+    assert object_dict(receipt["ci"])["runId"] == 202
+    assert object_dict(receipt["ci"])["jobs"] == [
+        {"name": "validate", "status": "completed", "conclusion": "success"}
+    ]
+    validation = object_dict(receipt["validationReceipt"])
+    review = object_dict(receipt["reviewReceipt"])
+    assert validation["snapshotDigest"] == review["snapshotDigest"]
+    assert (repository / str(validation["path"])).is_file()
+    assert (repository / str(review["path"])).is_file()
+    assert git(tmp_path / "remote.git", "rev-parse", "refs/heads/main") == approved_sha
+
+
 def test_publish_uses_normal_push_and_closes_only_after_exact_sha_ci(
     tmp_path: Path,
 ) -> None:
@@ -1058,8 +1186,10 @@ def test_publish_uses_normal_push_and_closes_only_after_exact_sha_ci(
 
 
 @pytest.mark.parametrize("conclusion", ("failure", "cancelled"))
+@pytest.mark.parametrize("issue", (15, None))
 def test_failed_or_cancelled_exact_sha_ci_blocks_issue_closure(
     tmp_path: Path,
+    issue: int | None,
     conclusion: str,
 ) -> None:
     """A terminal non-success conclusion stops after push and preserves the issue."""
@@ -1074,7 +1204,7 @@ def test_failed_or_cancelled_exact_sha_ci_blocks_issue_closure(
     with pytest.raises(PublicationError, match=f"CI concluded {conclusion}"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -1085,12 +1215,23 @@ def test_failed_or_cancelled_exact_sha_ci_blocks_issue_closure(
 
     assert git(tmp_path / "remote.git", "rev-parse", "refs/heads/main") == approved_sha
     assert github.closed_issues == []
-    receipt_path = repository / ".agent" / "receipts" / f"publication-issue-15-{approved_sha}.json"
+    receipt_path = (
+        repository
+        / ".agent"
+        / "receipts"
+        / (
+            f"publication-issue-15-{approved_sha}.json"
+            if issue is not None
+            else f"publication-no-issue-{approved_sha}.json"
+        )
+    )
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert receipt["outcome"] == "FAIL"
     assert receipt["failedStep"] == "exact-SHA CI"
     assert object_dict(receipt["ci"])["headSha"] == approved_sha
-    assert receipt["finalIssueState"] == "not queried"
+    assert receipt["finalIssueState"] == ("not queried" if issue is not None else None)
+    assert receipt["issueNumber"] == issue
+    assert "get_issue" not in github.operations
 
 
 @pytest.mark.parametrize(
@@ -1106,8 +1247,10 @@ def test_failed_or_cancelled_exact_sha_ci_blocks_issue_closure(
         "incomplete-validate-job",
     ),
 )
+@pytest.mark.parametrize("issue", (15, None))
 def test_invalid_exact_sha_ci_evidence_blocks_issue_closure(
     tmp_path: Path,
+    issue: int | None,
     case: str,
 ) -> None:
     """Every selected-run and required-job proof is complete before closure."""
@@ -1143,7 +1286,7 @@ def test_invalid_exact_sha_ci_evidence_blocks_issue_closure(
     with pytest.raises(PublicationError, match="exact-SHA CI"):
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -1153,7 +1296,16 @@ def test_invalid_exact_sha_ci_evidence_blocks_issue_closure(
         )
 
     assert github.closed_issues == []
-    receipt_path = repository / ".agent" / "receipts" / f"publication-issue-15-{approved_sha}.json"
+    receipt_path = (
+        repository
+        / ".agent"
+        / "receipts"
+        / (
+            f"publication-issue-15-{approved_sha}.json"
+            if issue is not None
+            else f"publication-no-issue-{approved_sha}.json"
+        )
+    )
     if receipt_path.exists():
         assert json.loads(receipt_path.read_text(encoding="utf-8"))["outcome"] != "PASS"
 
@@ -1241,7 +1393,8 @@ def test_publish_rechecks_remote_immediately_before_issue_closure(tmp_path: Path
         assert json.loads(receipt_path.read_text(encoding="utf-8"))["outcome"] != "PASS"
 
 
-def test_publish_rerun_does_not_push_or_close_again(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_rerun_does_not_push_or_close_again(tmp_path: Path, issue: int | None) -> None:
     """A completed publication is safely verified on rerun."""
 
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
@@ -1252,7 +1405,7 @@ def test_publish_rerun_does_not_push_or_close_again(tmp_path: Path) -> None:
     )
     first = publish_repository(
         repository,
-        issue=15,
+        issue=issue,
         base=base_sha,
         approved_sha=approved_sha,
         branch="main",
@@ -1262,7 +1415,7 @@ def test_publish_rerun_does_not_push_or_close_again(tmp_path: Path) -> None:
     )
     second = publish_repository(
         repository,
-        issue=15,
+        issue=issue,
         base=base_sha,
         approved_sha=approved_sha,
         branch="main",
@@ -1273,7 +1426,7 @@ def test_publish_rerun_does_not_push_or_close_again(tmp_path: Path) -> None:
 
     assert object_dict(first["push"])["performed"] is True
     assert object_dict(second["push"])["performed"] is False
-    assert github.closed_issues == [15]
+    assert github.closed_issues == ([15] if issue is not None else [])
     assert git(repository, "rev-list", "--count", f"{base_sha}..{approved_sha}") == "1"
 
 
@@ -1406,7 +1559,10 @@ def test_publish_generates_only_normal_push_command(
     assert all("force" not in argument for command in publication_pushes for argument in command)
 
 
-def test_publish_ci_discovery_timeout_retains_compact_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize("issue", (15, None))
+def test_publish_ci_discovery_timeout_retains_compact_failure(
+    tmp_path: Path, issue: int | None
+) -> None:
     """Missing exact-SHA CI stops with a receipt and without querying the issue."""
 
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
@@ -1416,7 +1572,7 @@ def test_publish_ci_discovery_timeout_retains_compact_failure(tmp_path: Path) ->
     with pytest.raises(PublicationError, match="could not be identified or timed out") as error:
         publish_repository(
             repository,
-            issue=15,
+            issue=issue,
             base=base_sha,
             approved_sha=approved_sha,
             branch="main",
@@ -1524,7 +1680,7 @@ def test_publish_rerun_verifies_ambiguous_completed_closure(tmp_path: Path) -> N
     assert github.closed_issues == [15]
 
 
-def test_publish_cli_requires_explicit_issue_base_sha_and_branch() -> None:
+def test_publish_cli_requires_base_sha_and_branch_and_allows_optional_issue() -> None:
     """The publication command exposes every authorization identity explicitly."""
 
     script = Path(__file__).resolve().parents[1] / "scripts" / "agent_harness.py"
@@ -1536,14 +1692,16 @@ def test_publish_cli_requires_explicit_issue_base_sha_and_branch() -> None:
     )
 
     assert completed.returncode == 0
-    assert "--issue" in completed.stdout
+    assert "[--issue ISSUE]" in completed.stdout
     assert "--base" in completed.stdout
     assert "--sha" in completed.stdout
     assert "--branch" in completed.stdout
 
 
+@pytest.mark.parametrize("issue", (15, None))
 def test_publish_cli_success_output_is_compact(
     tmp_path: Path,
+    issue: int | None,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1553,6 +1711,7 @@ def test_publish_cli_success_output_is_compact(
     marker = "verbose-success-payload-that-must-not-reach-stdout"
 
     def successful_publish(*_args: object, **_kwargs: object) -> dict[str, object]:
+        assert _kwargs["issue"] == issue
         return {
             "ci": {"runId": 202, "jobs": [{"detail": marker * 1000}]},
             "receiptPath": ".agent/receipts/publication.json",
@@ -1569,8 +1728,7 @@ def test_publish_cli_success_output_is_compact(
             "--repo",
             str(repository),
             "publish",
-            "--issue",
-            "15",
+            *(("--issue", str(issue)) if issue is not None else ()),
             "--base",
             base_sha,
             "--sha",
@@ -1583,7 +1741,9 @@ def test_publish_cli_success_output_is_compact(
 
     assert exit_code == 0
     assert marker not in output
-    assert output.startswith(f"PASS issue=15 sha={approved_sha} ci-run=202")
+    assert output.startswith(
+        f"PASS issue={issue if issue is not None else 'none'} sha={approved_sha} ci-run=202"
+    )
 
 
 def test_github_commands_are_explicitly_bound_to_repository(

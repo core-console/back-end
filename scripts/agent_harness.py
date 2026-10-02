@@ -1018,7 +1018,7 @@ def collect_preflight(repository: Path, base: str) -> dict[str, object]:
 def publish_repository(
     repository: Path,
     *,
-    issue: int,
+    issue: int | None = None,
     base: str,
     approved_sha: str,
     branch: str,
@@ -1031,7 +1031,11 @@ def publish_repository(
 
     root = Path(_text(_git(repository, "rev-parse", "--show-toplevel")))
     publication_log_directory = (
-        root / OUTPUT_DIRECTORY / "logs" / "publication" / f"issue-{issue}-{approved_sha}"
+        root
+        / OUTPUT_DIRECTORY
+        / "logs"
+        / "publication"
+        / _publication_identifier(issue, approved_sha)
     )
     if publication_git is None:
         publication_git = PublicationGit(root, publication_log_directory)
@@ -1210,26 +1214,29 @@ def publish_repository(
     ):
         raise PublicationError("live remote changed after exact-SHA CI")
 
-    issue_data = github.get_issue(issue)
-    if issue_data.get("number") != issue:
-        raise PublicationError("GitHub returned a different issue")
-    issue_state = issue_data.get("state")
-    if issue_state == "OPEN":
-        if (
-            publication_git.live_branch_sha(
-                fetch_url,
-                branch,
-                phase="before-close-live-remote",
-            )
-            != approved_sha
-        ):
-            raise PublicationError("live remote changed immediately before issue closure")
-        github.close_issue(issue)
+    final_issue_state = None
+    if issue is not None:
         issue_data = github.get_issue(issue)
-        if issue_data.get("number") != issue or issue_data.get("state") != "CLOSED":
-            raise PublicationError("issue closure could not be verified")
-    elif issue_state != "CLOSED":
-        raise PublicationError("target issue state is not OPEN or CLOSED")
+        if issue_data.get("number") != issue:
+            raise PublicationError("GitHub returned a different issue")
+        issue_state = issue_data.get("state")
+        if issue_state == "OPEN":
+            if (
+                publication_git.live_branch_sha(
+                    fetch_url,
+                    branch,
+                    phase="before-close-live-remote",
+                )
+                != approved_sha
+            ):
+                raise PublicationError("live remote changed immediately before issue closure")
+            github.close_issue(issue)
+            issue_data = github.get_issue(issue)
+            if issue_data.get("number") != issue or issue_data.get("state") != "CLOSED":
+                raise PublicationError("issue closure could not be verified")
+        elif issue_state != "CLOSED":
+            raise PublicationError("target issue state is not OPEN or CLOSED")
+        final_issue_state = issue_data.get("state")
 
     final_head = _text(_git(root, "rev-parse", "HEAD"))
     final_remote = publication_git.live_branch_sha(
@@ -1268,7 +1275,7 @@ def publish_repository(
                 "jobs": jobs,
                 "overallConclusion": conclusion,
             },
-            "finalIssueState": issue_data.get("state"),
+            "finalIssueState": final_issue_state,
         }
     )
     receipt_path = _publication_receipt_path(root, issue, approved_sha)
@@ -1293,10 +1300,18 @@ def _read_json_object(path: Path, failure: str) -> dict[str, object]:
     return value
 
 
-def _publication_receipt_path(root: Path, issue: int, approved_sha: str) -> Path:
+def _publication_identifier(issue: int | None, approved_sha: str) -> str:
+    """Keep issue-linked and issue-free publication evidence in distinct paths."""
+
+    linkage = "no-issue" if issue is None else f"issue-{issue}"
+    return f"{linkage}-{approved_sha}"
+
+
+def _publication_receipt_path(root: Path, issue: int | None, approved_sha: str) -> Path:
     """Return the stable idempotent receipt path for one authorized publication."""
 
-    return root / OUTPUT_DIRECTORY / "receipts" / f"publication-issue-{issue}-{approved_sha}.json"
+    identifier = _publication_identifier(issue, approved_sha)
+    return root / OUTPUT_DIRECTORY / "receipts" / f"publication-{identifier}.json"
 
 
 def _github_repository_identity_from_url(origin_url: str) -> str | None:
@@ -1405,7 +1420,7 @@ def _publication_receipt_envelope(
     root: Path,
     *,
     repository_identity: str,
-    issue: int,
+    issue: int | None,
     base_sha: str,
     approved_sha: str,
     snapshot_digest: str,
@@ -1452,7 +1467,7 @@ def _write_ci_failure_receipt(
     publication_git: PublicationGitBoundary,
     fetch_url: str,
     repository_identity: str,
-    issue: int,
+    issue: int | None,
     branch: str,
     base_sha: str,
     approved_sha: str,
@@ -1516,7 +1531,7 @@ def _write_ci_failure_receipt(
             "failedStep": "exact-SHA CI",
             "failure": failure,
             "ci": ci,
-            "finalIssueState": "not queried",
+            "finalIssueState": "not queried" if issue is not None else None,
             "receiptPath": receipt_path.relative_to(root).as_posix(),
         }
     )
@@ -1611,7 +1626,9 @@ def _parser() -> argparse.ArgumentParser:
     validation.add_argument("--base", required=True)
     validation.add_argument("--protected", action="store_true")
     publication = subcommands.add_parser("publish")
-    publication.add_argument("--issue", required=True, type=int)
+    publication.add_argument(
+        "--issue", type=int, help="explicit issue to verify and close after CI"
+    )
     publication.add_argument("--base", required=True)
     publication.add_argument("--sha", required=True)
     publication.add_argument("--branch", required=True)
@@ -1644,10 +1661,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(json.dumps(output, sort_keys=True))
         return 0
     if options.command == "publish":
-        issue = int(options.issue)
+        issue = int(options.issue) if options.issue is not None else None
         approved_sha = str(options.sha)
         log_directory = (
-            repository / OUTPUT_DIRECTORY / "logs" / "publication" / f"issue-{issue}-{approved_sha}"
+            repository
+            / OUTPUT_DIRECTORY
+            / "logs"
+            / "publication"
+            / _publication_identifier(issue, approved_sha)
         )
         _, _, repository_identity = _publication_destinations(repository)
         publication_result = publish_repository(
@@ -1662,8 +1683,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         )
         ci = publication_result["ci"]
         assert isinstance(ci, dict)
+        issue_label = str(issue) if issue is not None else "none"
         print(
-            f"PASS issue={issue} sha={approved_sha} ci-run={ci['runId']} "
+            f"PASS issue={issue_label} sha={approved_sha} ci-run={ci['runId']} "
             f"receipt={publication_result['receiptPath']}"
         )
         return 0
