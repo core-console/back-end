@@ -22,7 +22,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17.6
+        image: postgres:17.11
         env:
           POSTGRES_DB: core_console_test
           POSTGRES_USER: core_console_test
@@ -37,10 +37,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -54,10 +54,10 @@ jobs:
       - name: Run complete validation
         run: uv run --frozen python scripts/validate.py
 
-      - name: Build wheel
+      - name: Build source distribution and wheel
         run: |
           wheel_dir="${RUNNER_TEMP}/core-console-wheel"
-          uv build --wheel --out-dir "$wheel_dir"
+          uv build --no-sources --out-dir "$wheel_dir"
 
           shopt -s nullglob
           wheels=("$wheel_dir"/*.whl)
@@ -71,7 +71,12 @@ jobs:
         run: |
           package_venv="${RUNNER_TEMP}/core-console-install"
           .venv/bin/python -m venv "$package_venv"
-          uv pip install --strict --python "$package_venv/bin/python" "$WHEEL_PATH"
+          runtime_requirements="${RUNNER_TEMP}/core-console-runtime.txt"
+          uv export --frozen --no-default-groups --no-emit-project \
+            --output-file "$runtime_requirements"
+          uv pip install --strict --require-hashes --python "$package_venv/bin/python" \
+            --requirements "$runtime_requirements"
+          uv pip install --strict --no-deps --python "$package_venv/bin/python" "$WHEEL_PATH"
 
           cd "$RUNNER_TEMP"
           "$package_venv/bin/python" -I \

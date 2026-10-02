@@ -13,12 +13,17 @@ deterministically:
 
 ```console
 uv python install
-uv sync
+uv sync --locked
 ```
 
 No PostgreSQL, Keycloak, Kubernetes cluster, or real network service is required
 to install the project or run the unit tests. The PostgreSQL integration tests
 run only when an explicit, dedicated `TEST_DATABASE_URL` is provided.
+
+Use the pinned uv version before running project commands; uv rejects other
+versions. Python 3.14 is the supported minor release. The current toolchain and
+deliberate convention choices are documented in
+[`docs/python-toolchain.md`](docs/python-toolchain.md).
 
 ## Development
 
@@ -175,8 +180,33 @@ or PostgreSQL. `tests/integration/test_users_postgres.py` uses real PostgreSQL
 only through `TEST_DATABASE_URL`; it never falls back to `DATABASE_URL` and
 skips locally when no safe test target is available. The test target must be a
 dedicated database with a test-marked name. CI supplies a dedicated PostgreSQL
-17.6 service database. Coverage can be added when it informs a concrete testing
+17.11 service database. Coverage can be added when it informs a concrete testing
 decision; there is no arbitrary repository-wide threshold.
+
+## Packaging and dependency audits
+
+Build a source distribution, then a wheel from that distribution:
+
+```console
+uv build --no-sources
+```
+
+Hatchling and its isolated build dependencies are pinned in `pyproject.toml`.
+CI installs the wheel outside the checkout with only the hash-verified runtime
+dependencies exported from `uv.lock`, then runs
+`scripts/validate_installation.py` with Python's isolated mode. Development
+dependencies are excluded from this installation.
+
+Run the separate online dependency audit for both developer and CI platforms:
+
+```console
+uv audit --locked --python-platform windows
+uv audit --locked --python-platform linux
+```
+
+These include all dependency groups. Audits require network access and remain
+separate from the deterministic validation gate. Review the isolated build
+toolchain when updating Hatchling or its build constraints as well.
 
 ## Deferred capabilities
 

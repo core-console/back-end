@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.31.0"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
@@ -9,29 +9,42 @@ description = "Core Console main backend"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "alembic==1.18.5",
-    "fastapi==0.141.1",
-    "psycopg[binary]==3.3.4",
-    "pydantic==2.13.4",
-    "pydantic-settings==2.14.2",
-    "sqlalchemy[asyncio]==2.0.51",
-    "uvicorn==0.52.0",
+    "alembic==1.20.0",
+    "fastapi==0.142.2",
+    "psycopg[binary]==3.3.6",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "sqlalchemy[asyncio]==2.1.2",
+    "starlette==1.7.0",
+    "uvicorn==0.54.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/core-console/back-end"
+Issues = "https://github.com/core-console/back-end/issues"
 
 [project.scripts]
 start = "core_console.cli:start"
 
 [dependency-groups]
 dev = [
-    "anyio==4.14.2",
+    "anyio==4.15.1",
     "httpx==0.28.1",
-    "mypy==2.3.0",
+    "mypy==2.4.0",
     "pytest==9.1.1",
-    "ruff==0.16.1",
+    "ruff==0.16.10",
 ]
 
 [tool.uv]
-required-version = "==0.12.0"
+required-version = "==0.12.22"
+# Build isolation resolves separately from uv.lock; constrain Hatchling's toolchain too.
+build-constraint-dependencies = [
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "tomlkit==0.15.1",
+    "trove-classifiers==2026.9.21.13",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/core_console"]
@@ -47,10 +60,11 @@ select = ["ASYNC", "B", "C4", "E", "F", "I", "RUF", "SIM", "UP"]
 "migrations/env.py" = ["E402"]
 
 [tool.mypy]
+python_version = "3.14"
 strict = true
 warn_unreachable = true
 files = ["src", "tests", "scripts", "migrations/env.py"]
 
-[tool.pytest.ini_options]
+[tool.pytest]
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 testpaths = ["tests"]
