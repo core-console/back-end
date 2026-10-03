@@ -2,6 +2,12 @@
 
 Status: review draft
 
+The approved [Finance create-submission protocol](finance-create-submission-protocol.md)
+defines the planned cross-repository create/recovery change. For that change it
+supersedes the five create response shapes and adds submission headers, receipts,
+and lookup; existing financial semantics and non-create operations remain here.
+The protocol is specified, not yet implemented.
+
 ## 1. Purpose
 
 Finance v1 is the first usable personal-bookkeeping release for Core Console. It
