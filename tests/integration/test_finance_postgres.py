@@ -46,6 +46,8 @@ from core_console.modules.finance.service import (
     create_finance_transaction,
     create_internal_transfer_transaction,
     delete_finance_transaction,
+    execute_create_balance_adjustment,
+    execute_create_internal_transfer_transaction,
     replace_balance_adjustment,
     replace_finance_transaction,
     replace_internal_transfer_transaction,
@@ -331,9 +333,11 @@ async def test_internal_transfer_history_locks_both_account_semantics(
         await postgres_session.rollback()
 
 
+@pytest.mark.parametrize("caller_owned", [False, True], ids=["direct", "caller-owned"])
 async def test_opposing_internal_transfers_use_compatible_account_lock_order(
     postgres_engine: AsyncEngine,
     postgres_session: AsyncSession,
+    caller_owned: bool,
 ) -> None:
     owner = _user("opposing-transfer-locks")
     postgres_session.add(owner)
@@ -363,31 +367,35 @@ async def test_opposing_internal_transfers_use_compatible_account_lock_order(
     await postgres_session.commit()
 
     session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+
+    async def transfer(
+        session: AsyncSession, source_id: UUID, destination_id: UUID, amount: str
+    ) -> UUID:
+        create = (
+            execute_create_internal_transfer_transaction
+            if caller_owned
+            else create_internal_transfer_transaction
+        )
+        transaction_id = await create(
+            session,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            source_account_id=source_id,
+            destination_account_id=destination_id,
+            transaction_date=date(2026, 8, 1),
+            amount=Money.parse(amount=amount, currency="CNY"),
+            note=None,
+            project=lambda detail: detail.transaction.id,
+        )
+        if caller_owned:
+            await session.commit()
+        return transaction_id
+
     async with session_factory() as forward_session, session_factory() as reverse_session:
         await asyncio.wait_for(
             asyncio.gather(
-                create_internal_transfer_transaction(
-                    forward_session,
-                    owner_id=owner.id,
-                    ledger_id=ledger.id,
-                    source_account_id=first.id,
-                    destination_account_id=second.id,
-                    transaction_date=date(2026, 8, 1),
-                    amount=Money.parse(amount="3.00", currency="CNY"),
-                    note=None,
-                    project=lambda detail: detail.transaction.id,
-                ),
-                create_internal_transfer_transaction(
-                    reverse_session,
-                    owner_id=owner.id,
-                    ledger_id=ledger.id,
-                    source_account_id=second.id,
-                    destination_account_id=first.id,
-                    transaction_date=date(2026, 8, 1),
-                    amount=Money.parse(amount="2.00", currency="CNY"),
-                    note=None,
-                    project=lambda detail: detail.transaction.id,
-                ),
+                transfer(forward_session, first.id, second.id, "3.00"),
+                transfer(reverse_session, second.id, first.id, "2.00"),
             ),
             timeout=5,
         )
@@ -396,6 +404,82 @@ async def test_opposing_internal_transfers_use_compatible_account_lock_order(
         select(func.count()).select_from(FinanceAccountMovement)
     )
     assert movement_count == 4
+
+
+@pytest.mark.parametrize("commit", [True, False], ids=["commit", "rollback"])
+async def test_caller_owned_transfer_holds_account_locks_until_outer_boundary(
+    postgres_engine: AsyncEngine,
+    postgres_session: AsyncSession,
+    commit: bool,
+) -> None:
+    owner = _user("caller-owned-transfer-locks")
+    postgres_session.add(owner)
+    await postgres_session.flush()
+    ledger = _ledger(owner.id, name="Personal", name_key="personal")
+    postgres_session.add(ledger)
+    await postgres_session.flush()
+    accounts = [
+        _account(
+            ledger.id,
+            name=name,
+            name_key=name.casefold(),
+            nature="asset",
+            currency="CNY",
+            opening_balance=Decimal("0.00"),
+            status="active",
+        )
+        for name in ("Source", "Destination")
+    ]
+    postgres_session.add_all(accounts)
+    await postgres_session.commit()
+    session_factory = async_sessionmaker(postgres_engine, expire_on_commit=False)
+    async with (
+        session_factory() as caller,
+        session_factory() as archiver,
+        session_factory() as observer,
+    ):
+        transaction = await caller.begin()
+        await execute_create_internal_transfer_transaction(
+            caller,
+            owner_id=owner.id,
+            ledger_id=ledger.id,
+            source_account_id=accounts[0].id,
+            destination_account_id=accounts[1].id,
+            transaction_date=date(2026, 8, 1),
+            amount=Money.parse(amount="12.34", currency="CNY"),
+            note=None,
+            project=lambda detail: detail.transaction.id,
+        )
+        archiver_pid = await archiver.scalar(select(func.pg_backend_pid()))
+        assert archiver_pid is not None
+        archive_task = asyncio.create_task(
+            archive_finance_account(
+                archiver,
+                owner_id=owner.id,
+                ledger_id=ledger.id,
+                account_id=accounts[0].id,
+            )
+        )
+        try:
+            assert await _wait_for_postgres_backend_lock(observer, backend_pid=archiver_pid)
+            if commit:
+                await transaction.commit()
+            else:
+                await transaction.rollback()
+            archived = await asyncio.wait_for(archive_task, timeout=5)
+            assert archived.account.status == "archived"
+            assert archived.current_balance == (Decimal("-12.34") if commit else Decimal("0.00"))
+        finally:
+            await caller.rollback()
+            if not archive_task.done():
+                archive_task.cancel()
+            await asyncio.gather(archive_task, return_exceptions=True)
+    assert await postgres_session.scalar(select(func.count()).select_from(FinanceTransaction)) == (
+        1 if commit else 0
+    )
+    assert await postgres_session.scalar(
+        select(func.count()).select_from(FinanceAccountMovement)
+    ) == (2 if commit else 0)
 
 
 async def test_concurrent_ordinary_replacements_of_one_transaction_remain_complete(
@@ -1279,10 +1363,12 @@ async def test_ordinary_replacement_classifies_kind_after_same_id_adjustment_rep
     "intervening_writer",
     ("income", "expense", "transfer", "adjustment"),
 )
+@pytest.mark.parametrize("caller_owned", [False, True], ids=["direct", "caller-owned"])
 async def test_balance_adjustment_recomputes_after_concurrent_account_writer(
     postgres_engine: AsyncEngine,
     postgres_session: AsyncSession,
     intervening_writer: str,
+    caller_owned: bool,
 ) -> None:
     owner = _user(f"adjustment-concurrency-{intervening_writer}")
     postgres_session.add(owner)
@@ -1325,8 +1411,9 @@ async def test_balance_adjustment_recomputes_after_concurrent_account_writer(
         assert locked_account is not None
         adjustment_backend_pid = await adjustment_session.scalar(select(func.pg_backend_pid()))
         assert adjustment_backend_pid is not None
+        create = execute_create_balance_adjustment if caller_owned else create_balance_adjustment
         adjustment_task = asyncio.create_task(
-            create_balance_adjustment(
+            create(
                 adjustment_session,
                 owner_id=owner.id,
                 ledger_id=ledger.id,

@@ -1,4 +1,12 @@
-"""Finance Ledger application workflows."""
+"""Finance Ledger application workflows.
+
+The create_* entry points own the direct API commit/rollback boundary. Their
+execute_create_* counterparts flush and project within the caller's transaction
+without committing or rolling it back, including Adjustment noChange. Callers
+must roll back failed execution (or a surrounding savepoint) before persisting
+other work. Returned ORM objects and projections remain tentative until commit;
+deferred PostgreSQL aggregate constraints are checked at that outer boundary.
+"""
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -231,10 +239,35 @@ async def create_finance_ledger(
 ) -> FinanceLedger:
     """Create one explicitly named Finance Ledger for a Local User."""
 
+    try:
+        ledger = await execute_create_finance_ledger(session, owner_id=owner_id, name=name)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return ledger
+
+
+async def execute_create_finance_ledger(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    name: str,
+) -> FinanceLedger:
+    """Flush a Ledger create; the caller owns commit and rollback."""
+
     normalized_name, name_key = normalize_ledger_name(name)
     ledger = FinanceLedger(owner_id=owner_id, name=normalized_name, name_key=name_key)
     session.add(ledger)
-    await _commit_ledger_change(session)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        if (
+            isinstance(exc.orig, UniqueViolation)
+            and exc.orig.diag.constraint_name == _LEDGER_NAME_CONSTRAINT
+        ):
+            raise FinanceLedgerNameConflictError from None
+        raise
     return ledger
 
 
@@ -296,6 +329,37 @@ async def create_finance_account(
 ) -> FinanceAccountBalance:
     """Create one account-relative position in an owned Ledger."""
 
+    try:
+        balance = await execute_create_finance_account(
+            session,
+            owner_id=owner_id,
+            ledger_id=ledger_id,
+            name=name,
+            nature=nature,
+            currency=currency,
+            opening_balance=opening_balance,
+            tracking_start_date=tracking_start_date,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return balance
+
+
+async def execute_create_finance_account(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    name: str,
+    nature: Literal["asset", "liability"],
+    currency: CurrencyCode,
+    opening_balance: Money,
+    tracking_start_date: date,
+) -> FinanceAccountBalance:
+    """Flush and read an Account create; the caller owns commit and rollback."""
+
     await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
     if opening_balance.currency != currency:
         raise InvalidFinanceAccountMoneyError(
@@ -319,7 +383,6 @@ async def create_finance_account(
         ledger_id=ledger_id,
         account_id=account.id,
     )
-    await session.commit()
     return balance
 
 
@@ -473,6 +536,26 @@ async def create_finance_category(
 ) -> FinanceCategory:
     """Create one neutral Category in an owned Ledger."""
 
+    try:
+        category = await execute_create_finance_category(
+            session, owner_id=owner_id, ledger_id=ledger_id, name=name
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return category
+
+
+async def execute_create_finance_category(
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    name: str,
+) -> FinanceCategory:
+    """Flush a Category create; the caller owns commit and rollback."""
+
     await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
     normalized_name, name_key = normalize_category_name(name)
     category = FinanceCategory(
@@ -482,7 +565,15 @@ async def create_finance_category(
         status="active",
     )
     session.add(category)
-    await _commit_category_change(session)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        if (
+            isinstance(exc.orig, UniqueViolation)
+            and exc.orig.diag.constraint_name == _CATEGORY_NAME_CONSTRAINT
+        ):
+            raise FinanceCategoryNameConflictError from None
+        raise
     return category
 
 
@@ -501,6 +592,43 @@ async def create_finance_transaction[Result](
     project: Callable[[FinanceTransactionDetail], Result],
 ) -> Result:
     """Atomically persist and project one complete Income or Expense."""
+
+    try:
+        projected = await execute_create_finance_transaction(
+            session,
+            owner_id=owner_id,
+            ledger_id=ledger_id,
+            kind=kind,
+            account_id=account_id,
+            transaction_date=transaction_date,
+            economic_amount=economic_amount,
+            allocation_amount=allocation_amount,
+            category_id=category_id,
+            note=note,
+            project=project,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return projected
+
+
+async def execute_create_finance_transaction[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    kind: Literal["income", "expense"],
+    account_id: UUID,
+    transaction_date: date,
+    economic_amount: Money,
+    allocation_amount: Money,
+    category_id: UUID | None,
+    note: str | None,
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Flush and project Income or Expense; the caller owns commit and rollback."""
 
     await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
     account_balance = await _require_finance_account_balance(
@@ -571,7 +699,7 @@ async def create_finance_transaction[Result](
         amount=allocation_amount.amount,
         currency=allocation_amount.currency,
     )
-    return await _persist_and_project_finance_transaction(
+    return await _flush_and_project_finance_transaction(
         session,
         transaction=transaction,
         children=(movement, allocation),
@@ -592,6 +720,39 @@ async def create_internal_transfer_transaction[Result](
     project: Callable[[FinanceTransactionDetail], Result],
 ) -> Result:
     """Atomically persist and project one same-currency Internal Transfer."""
+
+    try:
+        projected = await execute_create_internal_transfer_transaction(
+            session,
+            owner_id=owner_id,
+            ledger_id=ledger_id,
+            source_account_id=source_account_id,
+            destination_account_id=destination_account_id,
+            transaction_date=transaction_date,
+            amount=amount,
+            note=note,
+            project=project,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return projected
+
+
+async def execute_create_internal_transfer_transaction[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    source_account_id: UUID,
+    destination_account_id: UUID,
+    transaction_date: date,
+    amount: Money,
+    note: str | None,
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Flush and project an Internal Transfer; the caller owns commit and rollback."""
 
     await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
     if source_account_id == destination_account_id:
@@ -658,7 +819,7 @@ async def create_internal_transfer_transaction[Result](
             role="destination",
         ),
     ]
-    return await _persist_and_project_finance_transaction(
+    return await _flush_and_project_finance_transaction(
         session,
         transaction=transaction,
         children=movements,
@@ -1003,6 +1164,41 @@ async def create_balance_adjustment[Result](
 ) -> Result:
     """Atomically create only the non-zero correction to a stale-safe target."""
 
+    try:
+        projected = await execute_create_balance_adjustment(
+            session,
+            owner_id=owner_id,
+            ledger_id=ledger_id,
+            account_id=account_id,
+            transaction_date=transaction_date,
+            expected_derived_balance=expected_derived_balance,
+            expected_account_nature=expected_account_nature,
+            target_balance=target_balance,
+            note=note,
+            project=project,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    return projected
+
+
+async def execute_create_balance_adjustment[Result](
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    account_id: UUID,
+    transaction_date: date,
+    expected_derived_balance: Money,
+    expected_account_nature: Literal["asset", "liability"],
+    target_balance: Money,
+    note: str | None,
+    project: Callable[[BalanceAdjustmentResult[FinanceTransactionDetail]], Result],
+) -> Result:
+    """Project an Adjustment or noChange; the caller owns commit and rollback."""
+
     await _require_owned_ledger(session, owner_id=owner_id, ledger_id=ledger_id)
     account = await get_finance_account_for_update(
         session,
@@ -1024,13 +1220,7 @@ async def create_balance_adjustment[Result](
         excluded_transaction_id=None,
     )
     if correction_delta.amount == 0:
-        try:
-            projected = project(BalanceAdjustmentResult(outcome="noChange", transaction=None))
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        return projected
+        return project(BalanceAdjustmentResult(outcome="noChange", transaction=None))
 
     transaction_id = uuid4()
     transaction = FinanceTransaction(
@@ -1048,7 +1238,7 @@ async def create_balance_adjustment[Result](
         currency=correction_delta.currency,
         role="adjustment",
     )
-    return await _persist_and_project_finance_transaction(
+    return await _flush_and_project_finance_transaction(
         session,
         transaction=transaction,
         children=(movement,),
@@ -1256,22 +1446,39 @@ async def _persist_and_project_finance_transaction[Result](
 ) -> Result:
     """Commit only after the complete aggregate can produce its public result."""
 
-    session.add(transaction)
     try:
-        await session.flush()
-        session.add_all(children)
-        await session.flush()
-        detail = await _require_finance_transaction_detail(
+        projected = await _flush_and_project_finance_transaction(
             session,
-            ledger_id=transaction.ledger_id,
-            transaction_id=transaction.id,
+            transaction=transaction,
+            children=children,
+            project=project,
         )
-        projected = project(detail)
         await session.commit()
     except Exception:
         await session.rollback()
         raise
     return projected
+
+
+async def _flush_and_project_finance_transaction[Result](
+    session: AsyncSession,
+    *,
+    transaction: FinanceTransaction,
+    children: Sequence[FinanceAccountMovement | FinanceCategoryAllocation],
+    project: Callable[[FinanceTransactionDetail], Result],
+) -> Result:
+    """Flush and project the complete aggregate without ending its transaction."""
+
+    session.add(transaction)
+    await session.flush()
+    session.add_all(children)
+    await session.flush()
+    detail = await _require_finance_transaction_detail(
+        session,
+        ledger_id=transaction.ledger_id,
+        transaction_id=transaction.id,
+    )
+    return project(detail)
 
 
 async def update_finance_category(
