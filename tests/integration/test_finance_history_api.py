@@ -21,6 +21,7 @@ from core_console.modules.finance.models import (
 )
 from core_console.modules.users.models import User
 from core_console.resources import get_application_resources
+from integration.finance_submission_helpers import submission_headers
 
 pytestmark = pytest.mark.anyio
 
@@ -90,8 +91,10 @@ async def test_history_pages_same_date_transactions_without_duplicates_or_omissi
         actor=actor,
         statement_log=statement_log,
     ) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "History"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "History"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         empty = await client.get(f"/api/finance/ledgers/{ledger_id}/transactions")
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
@@ -180,14 +183,20 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
         actor=other_user,
     ) as other_client:
         foreign_owned_ledger = await other_client.post(
-            "/api/finance/ledgers", json={"name": "Foreign Owner"}
+            "/api/finance/ledgers",
+            json={"name": "Foreign Owner"},
+            headers=submission_headers(other_user.id),
         )
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Owned"})
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
-        ledger_id = ledger.json()["id"]
-        other_ledger_id = other_ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Owned"}, headers=submission_headers(actor.id)
+        )
+        other_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
+        other_ledger_id = other_ledger.json()["outcome"]["resource"]["id"]
         cash = await _create_account(client, ledger_id=ledger_id, name="Cash")
         card = await _create_account(client, ledger_id=ledger_id, name="Card")
         foreign_account = await _create_account(client, ledger_id=other_ledger_id, name="Private")
@@ -283,7 +292,7 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
         )
         missing_ledger = await client.get(f"/api/finance/ledgers/{uuid4()}/transactions")
         foreign_owned_ledger_response = await client.get(
-            f"/api/finance/ledgers/{foreign_owned_ledger.json()['id']}/transactions"
+            f"/api/finance/ledgers/{foreign_owned_ledger.json()['outcome']['resource']['id']}/transactions"
         )
 
     adjustment_id = adjustment.json()["transaction"]["id"]
@@ -346,9 +355,15 @@ async def test_history_cursor_is_opaque_validated_and_bound_to_filters(
     await postgres_session.commit()
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Cursor"})
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other Cursor"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Cursor"}, headers=submission_headers(actor.id)
+        )
+        other_ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Other Cursor"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await _create_account(client, ledger_id=ledger_id, name="Cash")
         for day in (24, 23, 22):
             await _create_ordinary(
@@ -380,7 +395,7 @@ async def test_history_cursor_is_opaque_validated_and_bound_to_filters(
             params={"kind": "income", "pageSize": "2", "cursor": f"{cursor}!"},
         )
         other_ledger_reuse = await client.get(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions",
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/transactions",
             params={"kind": "income", "pageSize": "2", "cursor": cursor},
         )
 
@@ -406,8 +421,12 @@ async def test_history_reads_current_mutation_aftermath_without_writing(
     await postgres_session.commit()
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Current State"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Current State"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         cash = await _create_account(client, ledger_id=ledger_id, name="Cash")
         reserve = await _create_account(client, ledger_id=ledger_id, name="Reserve")
         kept = await _create_ordinary(

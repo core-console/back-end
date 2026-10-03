@@ -33,6 +33,7 @@ class FinanceLedger(Base):
 
     __tablename__ = "finance_ledgers"
     __table_args__ = (
+        UniqueConstraint("id", "owner_id", name="uq_finance_ledgers_id_owner"),
         CheckConstraint(
             "regexp_replace(name, '^[[:space:]]+|[[:space:]]+$', '', 'g') <> ''",
             name="ck_finance_ledgers_name_not_blank",

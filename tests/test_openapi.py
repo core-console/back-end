@@ -163,7 +163,9 @@ def test_openapi_describes_finance_currency_and_ledger_contract(app: FastAPI) ->
     assert set(ledger_schema["required"]) == {"id", "name"}
     assert set(ledger_schema["properties"]) == {"id", "name"}
 
-    create_schema = schema["components"]["schemas"]["CreateLedgerRequest"]
+    create_schema = paths["/finance/ledgers"]["post"]["requestBody"]["content"]["application/json"][
+        "schema"
+    ]
     update_schema = schema["components"]["schemas"]["UpdateLedgerRequest"]
     assert create_schema["additionalProperties"] is False
     assert update_schema["additionalProperties"] is False
@@ -178,9 +180,16 @@ def test_openapi_describes_finance_currency_and_ledger_contract(app: FastAPI) ->
             if status.startswith("2"):
                 continue
             assert set(response["content"]) == {"application/problem+json"}
+            expected_ref = (
+                {"409": "LedgerConflictResponse", "422": "LedgerValidationResponse"}.get(
+                    status, "ProblemDetails"
+                )
+                if operation["operationId"] == "createFinanceLedger"
+                else "ProblemDetails"
+            )
             assert (
                 response["content"]["application/problem+json"]["schema"]["$ref"]
-                == "#/components/schemas/ProblemDetails"
+                == f"#/components/schemas/{expected_ref}"
             )
 
 

@@ -70,7 +70,11 @@ def problem_response(problem: ProblemDetails) -> JSONResponse:
 
     return JSONResponse(
         status_code=problem.status,
-        content=problem.model_dump(mode="json", exclude_none=True),
+        content={
+            key: value
+            for key, value in problem.model_dump(mode="json", by_alias=True).items()
+            if value is not None
+        },
         media_type=PROBLEM_MEDIA_TYPE,
     )
 

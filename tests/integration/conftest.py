@@ -29,6 +29,7 @@ from core_console.modules.finance.models import (
     FinanceLedger,
     FinanceTransaction,
 )
+from core_console.modules.finance.submission_models import FinanceSubmission
 from core_console.modules.users.models import User
 
 
@@ -205,6 +206,7 @@ async def postgres_session(
             yield session
         finally:
             await session.rollback()
+            await session.execute(delete(FinanceSubmission))
             await session.execute(delete(FinanceCategoryAllocation))
             await session.execute(delete(FinanceAccountMovement))
             await session.execute(delete(FinanceTransaction))

@@ -21,6 +21,7 @@ from core_console.modules.finance.models import (
 )
 from core_console.modules.finance.money import POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS
 from core_console.modules.users.models import User
+from integration.finance_submission_helpers import submission_headers
 
 pytestmark = pytest.mark.anyio
 
@@ -59,17 +60,25 @@ async def test_user_can_create_list_and_rename_only_their_own_ledgers(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        beta_response = await client.post("/api/finance/ledgers", json={"name": "  Beta  "})
-        alpha_response = await client.post("/api/finance/ledgers", json={"name": "alpha"})
-        zebra_response = await client.post("/api/finance/ledgers", json={"name": "zebra"})
-        umlaut_response = await client.post("/api/finance/ledgers", json={"name": "Äpfel"})
+        beta_response = await client.post(
+            "/api/finance/ledgers", json={"name": "  Beta  "}, headers=submission_headers(actor.id)
+        )
+        alpha_response = await client.post(
+            "/api/finance/ledgers", json={"name": "alpha"}, headers=submission_headers(actor.id)
+        )
+        zebra_response = await client.post(
+            "/api/finance/ledgers", json={"name": "zebra"}, headers=submission_headers(actor.id)
+        )
+        umlaut_response = await client.post(
+            "/api/finance/ledgers", json={"name": "Äpfel"}, headers=submission_headers(actor.id)
+        )
         listed_response = await client.get("/api/finance/ledgers")
         unchanged_response = await client.patch(
-            f"/api/finance/ledgers/{beta_response.json()['id']}",
+            f"/api/finance/ledgers/{beta_response.json()['outcome']['resource']['id']}",
             json={},
         )
         renamed_response = await client.patch(
-            f"/api/finance/ledgers/{beta_response.json()['id']}",
+            f"/api/finance/ledgers/{beta_response.json()['outcome']['resource']['id']}",
             json={"name": "  Personal  "},
         )
 
@@ -77,25 +86,28 @@ async def test_user_can_create_list_and_rename_only_their_own_ledgers(
         other_create_response = await client.post(
             "/api/finance/ledgers",
             json={"name": "ALPHA"},
+            headers=submission_headers(other_user.id),
         )
         other_listed_response = await client.get("/api/finance/ledgers")
 
     assert beta_response.status_code == HTTPStatus.CREATED
-    assert beta_response.json()["name"] == "Beta"
+    beta_id = beta_response.json()["outcome"]["resource"]["id"]
     assert alpha_response.status_code == HTTPStatus.CREATED
     assert listed_response.json() == [
-        alpha_response.json(),
-        beta_response.json(),
-        zebra_response.json(),
-        umlaut_response.json(),
+        {"id": alpha_response.json()["outcome"]["resource"]["id"], "name": "alpha"},
+        {"id": beta_id, "name": "Beta"},
+        {"id": zebra_response.json()["outcome"]["resource"]["id"], "name": "zebra"},
+        {"id": umlaut_response.json()["outcome"]["resource"]["id"], "name": "Äpfel"},
     ]
-    assert unchanged_response.json() == beta_response.json()
+    assert unchanged_response.json() == {"id": beta_id, "name": "Beta"}
     assert renamed_response.json() == {
-        "id": beta_response.json()["id"],
+        "id": beta_response.json()["outcome"]["resource"]["id"],
         "name": "Personal",
     }
     assert other_create_response.status_code == HTTPStatus.CREATED
-    assert other_listed_response.json() == [other_create_response.json()]
+    assert other_listed_response.json() == [
+        {"id": other_create_response.json()["outcome"]["resource"]["id"], "name": "ALPHA"}
+    ]
 
 
 async def test_case_folded_ledger_names_conflict_only_for_the_same_owner(
@@ -108,16 +120,16 @@ async def test_case_folded_ledger_names_conflict_only_for_the_same_owner(
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         created_response = await client.post(
-            "/api/finance/ledgers",
-            json={"name": "Straße"},
+            "/api/finance/ledgers", json={"name": "Straße"}, headers=submission_headers(actor.id)
         )
         duplicate_response = await client.post(
-            "/api/finance/ledgers",
-            json={"name": "STRASSE"},
+            "/api/finance/ledgers", json={"name": "STRASSE"}, headers=submission_headers(actor.id)
         )
-        work_response = await client.post("/api/finance/ledgers", json={"name": "Work"})
+        work_response = await client.post(
+            "/api/finance/ledgers", json={"name": "Work"}, headers=submission_headers(actor.id)
+        )
         rename_response = await client.patch(
-            f"/api/finance/ledgers/{work_response.json()['id']}",
+            f"/api/finance/ledgers/{work_response.json()['outcome']['resource']['id']}",
             json={"name": "strasse"},
         )
 
@@ -138,11 +150,15 @@ async def test_missing_and_non_owned_ledgers_have_the_same_safe_result(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Private"})
+        other_ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Private"},
+            headers=submission_headers(other_user.id),
+        )
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         non_owned_response = await client.patch(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}",
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}",
             json={"name": "Disclosed"},
         )
         missing_response = await client.patch(
@@ -176,7 +192,9 @@ async def test_create_ledger_rejects_invalid_or_unknown_fields(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        response = await client.post("/api/finance/ledgers", json=body)
+        response = await client.post(
+            "/api/finance/ledgers", json=body, headers=submission_headers(actor.id)
+        )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert response.headers["content-type"].startswith("application/problem+json")
@@ -210,8 +228,10 @@ async def test_user_can_manage_account_lifecycle_with_account_relative_balances(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         liability = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -301,9 +321,11 @@ async def test_user_can_correct_nature_on_an_unlocked_zero_position_account(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
                 "nature": "asset",
@@ -313,7 +335,7 @@ async def test_user_can_correct_nature_on_an_unlocked_zero_position_account(
             },
         )
         corrected = await client.patch(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
             json={"nature": "liability"},
         )
 
@@ -336,9 +358,11 @@ async def test_user_can_correct_currency_on_an_unlocked_zero_position_account(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
                 "nature": "asset",
@@ -348,7 +372,7 @@ async def test_user_can_correct_currency_on_an_unlocked_zero_position_account(
             },
         )
         corrected = await client.patch(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
             json={"currency": "JPY"},
         )
 
@@ -371,9 +395,11 @@ async def test_user_can_correct_nature_and_currency_together_on_an_unlocked_acco
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
                 "nature": "asset",
@@ -383,7 +409,7 @@ async def test_user_can_correct_nature_and_currency_together_on_an_unlocked_acco
             },
         )
         corrected = await client.patch(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
             json={"nature": "liability", "currency": "USD"},
         )
 
@@ -412,9 +438,11 @@ async def test_account_semantic_correction_rejects_nonzero_opening_balance(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
                 "nature": "asset",
@@ -423,9 +451,12 @@ async def test_account_semantic_correction_rejects_nonzero_opening_balance(
                 "trackingStartDate": "2026-08-01",
             },
         )
-        account_path = f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}"
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
+        account_path = f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
         rejected = await client.patch(account_path, json=body)
-        listed = await client.get(f"/api/finance/ledgers/{ledger.json()['id']}/accounts")
+        listed = await client.get(
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts"
+        )
 
     assert account.status_code == HTTPStatus.CREATED
     assert rejected.status_code == HTTPStatus.CONFLICT
@@ -459,9 +490,11 @@ async def test_account_semantic_correction_rejects_any_durable_transaction_histo
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
                 "nature": "asset",
@@ -471,7 +504,7 @@ async def test_account_semantic_correction_rejects_any_durable_transaction_histo
             },
         )
         transaction = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/transactions",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/transactions",
             json={
                 "kind": kind,
                 "accountId": account.json()["id"],
@@ -480,9 +513,12 @@ async def test_account_semantic_correction_rejects_any_durable_transaction_histo
                 "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
             },
         )
-        account_path = f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}"
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
+        account_path = f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
         rejected = await client.patch(account_path, json={"nature": "liability"})
-        listed = await client.get(f"/api/finance/ledgers/{ledger.json()['id']}/accounts")
+        listed = await client.get(
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts"
+        )
 
     assert account.status_code == HTTPStatus.CREATED
     assert transaction.status_code == HTTPStatus.CREATED
@@ -517,10 +553,14 @@ async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        first_ledger = await client.post("/api/finance/ledgers", json={"name": "First"})
-        second_ledger = await client.post("/api/finance/ledgers", json={"name": "Second"})
+        first_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "First"}, headers=submission_headers(actor.id)
+        )
+        second_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Private",
                 "nature": "asset",
@@ -531,28 +571,28 @@ async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
         )
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
         non_owned_ledger = await client.get(
-            f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts"
+            f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/accounts"
         )
         non_owned_semantic = await client.patch(
-            f"/api/finance/ledgers/{first_ledger.json()['id']}/accounts/{account.json()['id']}",
+            f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
             json={"nature": "liability"},
         )
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         wrong_ledger = await client.patch(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{account.json()['id']}",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
             json={"name": "Leaked"},
         )
         wrong_ledger_semantic = await client.patch(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{account.json()['id']}",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
             json={"nature": "liability"},
         )
         missing_account = await client.patch(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{uuid4()}",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/accounts/{uuid4()}",
             json={"name": "Missing"},
         )
         missing_semantic = await client.patch(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/accounts/{uuid4()}",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/accounts/{uuid4()}",
             json={"currency": "USD"},
         )
 
@@ -581,8 +621,10 @@ async def test_account_list_order_uses_status_case_folded_name_and_identifier(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Order"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Order"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         created = []
         for name in ("beta", "Alpha", "alpha"):
             response = await client.post(
@@ -614,8 +656,10 @@ async def test_income_and_expense_are_readable_and_derive_account_relative_balan
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         asset = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -731,10 +775,14 @@ async def test_transaction_creation_enforces_active_scoped_references(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
+        other_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
+        )
         account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
                 "nature": "asset",
@@ -744,7 +792,7 @@ async def test_transaction_creation_enforces_active_scoped_references(
             },
         )
         other_account = await client.post(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Other Cash",
                 "nature": "asset",
@@ -754,52 +802,52 @@ async def test_transaction_creation_enforces_active_scoped_references(
             },
         )
         category = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/categories",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/categories",
             json={"name": "Food"},
         )
         archived_account = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}/archive"
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}/archive"
         )
         archived_account_write = await _post_transaction(
             client,
-            ledger_id=ledger.json()["id"],
+            ledger_id=ledger.json()["outcome"]["resource"]["id"],
             account_id=archived_account.json()["id"],
         )
         await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/accounts/{account.json()['id']}/unarchive"
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}/unarchive"
         )
         categorized = await _post_transaction(
             client,
-            ledger_id=ledger.json()["id"],
+            ledger_id=ledger.json()["outcome"]["resource"]["id"],
             account_id=account.json()["id"],
             category_id=category.json()["id"],
         )
         archived_category = await client.post(
-            f"/api/finance/ledgers/{ledger.json()['id']}/categories/{category.json()['id']}/archive"
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/categories/{category.json()['id']}/archive"
         )
         archived_history = await client.get(
-            f"/api/finance/ledgers/{ledger.json()['id']}/transactions/{categorized.json()['id']}"
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/transactions/{categorized.json()['id']}"
         )
         wrong_transaction_scope = await client.get(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{categorized.json()['id']}"
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/transactions/{categorized.json()['id']}"
         )
         missing_transaction = await client.get(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{uuid4()}"
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/transactions/{uuid4()}"
         )
         archived_category_write = await _post_transaction(
             client,
-            ledger_id=ledger.json()["id"],
+            ledger_id=ledger.json()["outcome"]["resource"]["id"],
             account_id=account.json()["id"],
             category_id=archived_category.json()["id"],
         )
         wrong_account_scope = await _post_transaction(
             client,
-            ledger_id=other_ledger.json()["id"],
+            ledger_id=other_ledger.json()["outcome"]["resource"]["id"],
             account_id=account.json()["id"],
         )
         wrong_category_scope = await _post_transaction(
             client,
-            ledger_id=other_ledger.json()["id"],
+            ledger_id=other_ledger.json()["outcome"]["resource"]["id"],
             account_id=other_account.json()["id"],
             category_id=category.json()["id"],
         )
@@ -807,7 +855,7 @@ async def test_transaction_creation_enforces_active_scoped_references(
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
         non_owned_ledger = await _post_transaction(
             client,
-            ledger_id=ledger.json()["id"],
+            ledger_id=ledger.json()["outcome"]["resource"]["id"],
             account_id=account.json()["id"],
         )
 
@@ -842,8 +890,12 @@ async def test_income_replacement_preserves_identity_and_replaces_the_complete_e
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Replacement"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Replacement"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         asset = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -944,8 +996,10 @@ async def test_internal_transfer_replacement_moves_both_role_identified_effects(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Transfers"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Transfers"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         accounts: list[Response] = []
         for name, nature, opening in (
             ("Old Asset", "asset", "100.00"),
@@ -1034,8 +1088,10 @@ async def test_generic_deletion_removes_all_four_kinds_and_unlocks_account_seman
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Deletion"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Deletion"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         accounts = [
             await _create_account(client, ledger_id, name, "CNY")
             for name in (
@@ -1143,9 +1199,13 @@ async def test_ordinary_replacement_preserves_scope_kind_and_archived_reference_
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Rules"})
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Rules"}, headers=submission_headers(actor.id)
+        )
+        other_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await _create_account(client, ledger_id, "Cash", "CNY")
         changed_archived_account = await _create_account(client, ledger_id, "Old Cash", "CNY")
         category = await client.post(
@@ -1286,7 +1346,7 @@ async def test_ordinary_replacement_preserves_scope_kind_and_archived_reference_
             },
         )
         hidden = await client.put(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{uncategorized.json()['id']}",
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/transactions/{uncategorized.json()['id']}",
             json={
                 "kind": "income",
                 "accountId": str(uuid4()),
@@ -1328,8 +1388,10 @@ async def test_transfer_replacement_retains_only_same_role_archived_accounts(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Archive"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Archive"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         source = await _create_account(client, ledger_id, "Source", "CNY")
         destination = await _create_account(client, ledger_id, "Destination", "CNY")
         other = await _create_account(client, ledger_id, "Other", "CNY")
@@ -1407,8 +1469,10 @@ async def test_expense_replacement_uses_liability_sign_and_durable_money_boundar
     outside = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.00"
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Expense"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Expense"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         asset = await _create_account(client, ledger_id, "Asset", "CNY")
         liability = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
@@ -1480,27 +1544,33 @@ async def test_generic_delete_hides_foreign_and_missing_transaction_identity(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Private"})
-        account = await _create_account(client, ledger.json()["id"], "Cash", "CNY")
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Private"}, headers=submission_headers(actor.id)
+        )
+        account = await _create_account(
+            client, ledger.json()["outcome"]["resource"]["id"], "Cash", "CNY"
+        )
         transaction = await _post_transaction(
             client,
-            ledger_id=ledger.json()["id"],
+            ledger_id=ledger.json()["outcome"]["resource"]["id"],
             account_id=str(account["id"]),
             currency="CNY",
         )
 
     async with finance_client(database_url=postgres_database_url, actor=other) as client:
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        other_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(other.id)
+        )
         hidden = await client.delete(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{transaction.json()['id']}"
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/transactions/{transaction.json()['id']}"
         )
         missing = await client.delete(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/transactions/{uuid4()}"
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/transactions/{uuid4()}"
         )
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         still_present = await client.get(
-            f"/api/finance/ledgers/{ledger.json()['id']}/transactions/{transaction.json()['id']}"
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/transactions/{transaction.json()['id']}"
         )
 
     assert hidden.status_code == missing.status_code == HTTPStatus.NOT_FOUND
@@ -1519,8 +1589,10 @@ async def test_ordinary_replacement_projection_failure_restores_original_aggrega
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Rollback"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Rollback"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         first = await _create_account(client, ledger_id, "First", "CNY")
         second = await _create_account(client, ledger_id, "Second", "CNY")
         third = await _create_account(client, ledger_id, "Third", "CNY")
@@ -1596,8 +1668,10 @@ async def test_future_transactions_apply_immediately_and_bound_tracking_start_ed
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Dates"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Dates"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -1649,8 +1723,10 @@ async def test_internal_transfer_create_detail_balances_and_validation(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Transfers"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Transfers"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         source = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -1746,13 +1822,19 @@ async def test_internal_transfer_enforces_currency_archive_and_account_scope(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        first = await client.post("/api/finance/ledgers", json={"name": "First"})
-        second = await client.post("/api/finance/ledgers", json={"name": "Second"})
-        first_id = first.json()["id"]
+        first = await client.post(
+            "/api/finance/ledgers", json={"name": "First"}, headers=submission_headers(actor.id)
+        )
+        second = await client.post(
+            "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
+        )
+        first_id = first.json()["outcome"]["resource"]["id"]
         source = await _create_account(client, first_id, "Source", "CNY")
         destination = await _create_account(client, first_id, "Destination", "CNY")
         usd = await _create_account(client, first_id, "USD", "USD")
-        out_of_scope = await _create_account(client, second.json()["id"], "Private", "CNY")
+        out_of_scope = await _create_account(
+            client, second.json()["outcome"]["resource"]["id"], "Private", "CNY"
+        )
         command = {
             "kind": "internalTransfer",
             "sourceAccountId": source["id"],
@@ -1800,8 +1882,10 @@ async def test_user_can_manage_the_complete_category_lifecycle(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Personal"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/categories",
             json={"name": "  Food  "},
@@ -1852,9 +1936,13 @@ async def test_category_names_remain_unique_while_archived_within_one_ledger(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        first_ledger = await client.post("/api/finance/ledgers", json={"name": "First"})
-        second_ledger = await client.post("/api/finance/ledgers", json={"name": "Second"})
-        first_ledger_id = first_ledger.json()["id"]
+        first_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "First"}, headers=submission_headers(actor.id)
+        )
+        second_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
+        )
+        first_ledger_id = first_ledger.json()["outcome"]["resource"]["id"]
         category = await client.post(
             f"/api/finance/ledgers/{first_ledger_id}/categories",
             json={"name": "Straße"},
@@ -1878,7 +1966,7 @@ async def test_category_names_remain_unique_while_archived_within_one_ledger(
             f"/api/finance/ledgers/{first_ledger_id}/categories/{category.json()['id']}/unarchive"
         )
         same_name_other_ledger = await client.post(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/categories",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/categories",
             json={"name": "STRASSE"},
         )
 
@@ -1902,25 +1990,29 @@ async def test_category_lookups_do_not_leak_across_ledger_or_owner_scope(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        first_ledger = await client.post("/api/finance/ledgers", json={"name": "First"})
-        second_ledger = await client.post("/api/finance/ledgers", json={"name": "Second"})
+        first_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "First"}, headers=submission_headers(actor.id)
+        )
+        second_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
+        )
         category = await client.post(
-            f"/api/finance/ledgers/{first_ledger.json()['id']}/categories",
+            f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/categories",
             json={"name": "Private"},
         )
 
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
         non_owned_ledger = await client.get(
-            f"/api/finance/ledgers/{first_ledger.json()['id']}/categories"
+            f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/categories"
         )
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         wrong_ledger = await client.patch(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/categories/{category.json()['id']}",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/categories/{category.json()['id']}",
             json={"name": "Leaked"},
         )
         missing_category = await client.patch(
-            f"/api/finance/ledgers/{second_ledger.json()['id']}/categories/{uuid4()}",
+            f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/categories/{uuid4()}",
             json={"name": "Missing"},
         )
 
@@ -1942,8 +2034,10 @@ async def test_category_list_order_uses_status_case_folded_name_and_identifier(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Order"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Order"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         created = []
         for name in ("beta", "Alpha", "zebra", "Äpfel"):
             response = await client.post(
@@ -1968,8 +2062,12 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Adjustments"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Adjustments"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         asset = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2120,9 +2218,13 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Owned"})
-        other_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Owned"}, headers=submission_headers(actor.id)
+        )
+        other_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2147,7 +2249,7 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
             f"/api/finance/ledgers/{ledger_id}/accounts/{archived.json()['id']}/archive"
         )
         other_account = await client.post(
-            f"/api/finance/ledgers/{other_ledger.json()['id']}/accounts",
+            f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Elsewhere",
                 "nature": "asset",
@@ -2261,8 +2363,12 @@ async def test_complete_balance_adjustment_result_projection_failure_rolls_back_
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Projection"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Projection"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2315,8 +2421,10 @@ async def test_balance_adjustment_persists_exact_delta_above_decimal_context_pre
     expected_delta = "999999999999999999999999999999.99"
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Exact"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Exact"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2368,8 +2476,10 @@ async def test_postgresql_boundary_persists_and_derived_overflow_returns_validat
     outside = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}.00"
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Boundary"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Boundary"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2424,8 +2534,12 @@ async def test_replace_balance_adjustment_updates_moves_and_removes_exact_old_ef
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Replacement"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Replacement"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         first = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2536,8 +2650,10 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Rules"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Rules"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2645,9 +2761,11 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
         )
 
     async with finance_client(database_url=postgres_database_url, actor=other) as client:
-        foreign_ledger = await client.post("/api/finance/ledgers", json={"name": "Other"})
+        foreign_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(other.id)
+        )
         hidden = await client.put(
-            f"/api/finance/ledgers/{foreign_ledger.json()['id']}/balance-adjustments/{retained.json()['transaction']['id']}",
+            f"/api/finance/ledgers/{foreign_ledger.json()['outcome']['resource']['id']}/balance-adjustments/{retained.json()['transaction']['id']}",
             json={
                 "accountId": str(uuid4()),
                 "transactionDate": "2026-08-10",
@@ -2678,8 +2796,10 @@ async def test_replacement_projection_rolls_back_and_removal_unlocks_semantics(
     await postgres_session.commit()
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Rollback"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Rollback"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
@@ -2761,8 +2881,10 @@ async def test_replace_balance_adjustment_rejects_derived_delta_outside_durable_
     one_higher_than_negative_boundary = f"-{'9' * (POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS - 1)}8.99"
 
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Range"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Range"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={

@@ -2150,7 +2150,8 @@ async def test_migrations_create_one_owned_finance_ledger_schema(
         for key in schema["foreign_keys"]
     } == {(("owner_id",), "users", ("id",))}
     assert {tuple(constraint["column_names"]) for constraint in schema["unique_constraints"]} == {
-        ("owner_id", "name_key")
+        ("owner_id", "name_key"),
+        ("id", "owner_id"),
     }
     assert {constraint["name"] for constraint in schema["check_constraints"]} == {
         "ck_finance_ledgers_name_not_blank",
@@ -2334,7 +2335,9 @@ async def test_balance_adjustment_migration_downgrades_and_upgrades_clean_databa
         downgraded, upgraded = await connection.run_sync(round_trip)
 
     assert downgraded == "20260823_01"
-    assert upgraded == "20260825_01"
+    assert (
+        upgraded == ScriptDirectory.from_config(Config(str(ALEMBIC_CONFIG_PATH))).get_current_head()
+    )
 
 
 async def test_finance_ledger_requires_a_real_owner(

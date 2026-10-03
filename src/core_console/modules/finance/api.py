@@ -50,7 +50,6 @@ from core_console.modules.finance.schemas import (
     CreateBalanceAdjustmentRequest,
     CreateCategoryRequest,
     CreateFinanceTransactionRequest,
-    CreateLedgerRequest,
     CurrencyResponse,
     ExpenseTransactionResponse,
     FinanceRequestDate,
@@ -92,7 +91,6 @@ from core_console.modules.finance.service import (
     create_balance_adjustment,
     create_finance_account,
     create_finance_category,
-    create_finance_ledger,
     create_finance_transaction,
     create_internal_transfer_transaction,
     delete_finance_transaction,
@@ -628,35 +626,6 @@ async def get_overview(
             for day in overview.days
         ],
     )
-
-
-@router.post(
-    "/ledgers",
-    operation_id="createFinanceLedger",
-    summary="Create a Finance Ledger",
-    description="Explicitly creates one personally owned Finance Ledger.",
-    status_code=HTTPStatus.CREATED,
-    response_model=LedgerResponse,
-    responses={
-        403: {"model": ProblemDetails, "description": "Access is denied."},
-        409: {"model": ProblemDetails, "description": "The Ledger name conflicts."},
-        422: {"model": ProblemDetails, "description": "The request is invalid."},
-        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
-        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
-    },
-    openapi_extra={"security": []},
-)
-async def post_ledger(
-    request: CreateLedgerRequest,
-    actor: Annotated[CurrentUser, Depends(require_active_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> LedgerResponse:
-    """Create one named Ledger for the Current User."""
-
-    ledger = await _run_finance_workflow(
-        create_finance_ledger(session, owner_id=actor.id, name=request.name)
-    )
-    return _to_ledger_response(ledger)
 
 
 @router.post(

@@ -11,6 +11,12 @@ from core_console.health.api import router as health_router
 from core_console.http_logging import HttpRequestLoggingMiddleware
 from core_console.logging_config import configure_logging
 from core_console.modules.finance.api import router as finance_router
+from core_console.modules.finance.submission_api import (
+    SubmissionLookupNoStoreMiddleware,
+)
+from core_console.modules.finance.submission_api import (
+    router as submission_router,
+)
 from core_console.modules.hello.api import router as hello_router
 from core_console.modules.users.api import router as users_router
 from core_console.openapi import CoreConsoleApp
@@ -48,9 +54,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     install_problem_handlers(app)
     app.add_middleware(UnexpectedExceptionMiddleware)
+    app.add_middleware(SubmissionLookupNoStoreMiddleware)
     app.add_middleware(HttpRequestLoggingMiddleware)
     app.include_router(hello_router)
     app.include_router(users_router)
     app.include_router(finance_router)
+    app.include_router(submission_router)
     app.include_router(health_router)
     return app

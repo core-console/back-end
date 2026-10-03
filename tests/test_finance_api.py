@@ -25,10 +25,8 @@ from core_console.modules.finance.service import (
     FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
     FinanceCategoryNotFoundError,
-    FinanceLedgerNameConflictError,
     FinanceLedgerNotFoundError,
     FinanceTransactionNotFoundError,
-    InvalidFinanceLedgerNameError,
 )
 from core_console.modules.users.dependencies import get_current_user
 from core_console.modules.users.identity import CurrentUser
@@ -197,19 +195,6 @@ async def test_finance_money_outside_durable_range_returns_422_without_database_
     (
         (
             "POST",
-            "/api/finance/ledgers",
-            {"name": "Personal"},
-            "create_finance_ledger",
-            InvalidFinanceLedgerNameError("Ledger name must not be blank."),
-            {
-                "status": HTTPStatus.UNPROCESSABLE_ENTITY,
-                "title": "Unprocessable Entity",
-                "detail": "Ledger name must not be blank.",
-                "code": "validation_error",
-            },
-        ),
-        (
-            "POST",
             f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
             {
                 "accountId": str(uuid4()),
@@ -299,19 +284,6 @@ async def test_finance_money_outside_durable_range_returns_422_without_database_
                 "title": "Not Found",
                 "detail": "The requested Finance Category does not exist.",
                 "code": "finance_category_not_found",
-            },
-        ),
-        (
-            "POST",
-            "/api/finance/ledgers",
-            {"name": "Personal"},
-            "create_finance_ledger",
-            FinanceLedgerNameConflictError(),
-            {
-                "status": HTTPStatus.CONFLICT,
-                "title": "Conflict",
-                "detail": "A Finance Ledger with this name already exists.",
-                "code": "finance_ledger_name_conflict",
             },
         ),
         (
@@ -458,7 +430,7 @@ async def test_currency_catalog_uses_the_active_user_boundary(
         {"name": "Personal", "isDefault": True},
     ),
 )
-async def test_create_ledger_rejects_invalid_public_requests_without_database_work(
+async def test_unkeyed_ledger_request_requires_client_update_before_validation(
     app: FastAPI,
     client: AsyncClient,
     body: dict[str, object],
@@ -473,9 +445,9 @@ async def test_create_ledger_rejects_invalid_public_requests_without_database_wo
 
     response = await client.post("/api/finance/ledgers", json=body)
 
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.status_code == HTTPStatus.BAD_REQUEST
     assert response.headers["content-type"].startswith("application/problem+json")
-    assert response.json()["code"] == "validation_error"
+    assert response.json()["code"] == "finance_submission_protocol_required"
     cast(AsyncMock, session.commit).assert_not_awaited()
 
 

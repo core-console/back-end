@@ -15,6 +15,7 @@ from core_console.app import create_app
 from core_console.config import AuthMode, Environment, Settings
 from core_console.modules.users.models import User
 from core_console.resources import get_application_resources
+from integration.finance_submission_helpers import submission_headers
 
 pytestmark = pytest.mark.anyio
 
@@ -84,16 +85,18 @@ async def test_overview_keeps_an_empty_owned_ledger_readable(
         actor=actor,
         statement_log=statement_log,
     ) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Empty"})
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Empty"}, headers=submission_headers(actor.id)
+        )
         statement_log.clear()
         overview = await client.get(
-            f"/api/finance/ledgers/{ledger.json()['id']}/overview",
+            f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/overview",
             params={"month": "2026-02"},
         )
 
     assert overview.status_code == HTTPStatus.OK
     assert overview.json() == {
-        "ledger": ledger.json(),
+        "ledger": {"id": ledger.json()["outcome"]["resource"]["id"], "name": "Empty"},
         "month": "2026-02",
         "accounts": [],
         "financialPositionByCurrency": [],
@@ -173,8 +176,10 @@ async def test_overview_returns_present_account_relative_position_and_zero_month
         actor=actor,
         statement_log=statement_log,
     ) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Position"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Position"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         cash = await _create_account(
             client,
             ledger_id=ledger_id,
@@ -295,8 +300,10 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
     await postgres_session.commit()
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Activity"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Activity"}, headers=submission_headers(actor.id)
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         cash = await _create_account(
             client,
             ledger_id=ledger_id,
@@ -502,10 +509,12 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
     await postgres_session.commit()
 
     async with _finance_client(database_url=postgres_database_url, actor=other) as client:
-        foreign_ledger = await client.post("/api/finance/ledgers", json={"name": "Private"})
+        foreign_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Private"}, headers=submission_headers(other.id)
+        )
         foreign_account = await _create_account(
             client,
-            ledger_id=foreign_ledger.json()["id"],
+            ledger_id=foreign_ledger.json()["outcome"]["resource"]["id"],
             name="Private",
             nature="asset",
             currency="USD",
@@ -513,7 +522,7 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
         )
         await _create_ordinary(
             client,
-            ledger_id=foreign_ledger.json()["id"],
+            ledger_id=foreign_ledger.json()["outcome"]["resource"]["id"],
             account_id=foreign_account["id"],
             kind="income",
             currency="USD",
@@ -522,21 +531,23 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
         )
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        owned_ledger = await client.post("/api/finance/ledgers", json={"name": "Owned"})
+        owned_ledger = await client.post(
+            "/api/finance/ledgers", json={"name": "Owned"}, headers=submission_headers(actor.id)
+        )
         await _create_account(
             client,
-            ledger_id=owned_ledger.json()["id"],
+            ledger_id=owned_ledger.json()["outcome"]["resource"]["id"],
             name="Owned cash",
             nature="asset",
             currency="CNY",
             opening_balance="1",
         )
         owned_overview = await client.get(
-            f"/api/finance/ledgers/{owned_ledger.json()['id']}/overview",
+            f"/api/finance/ledgers/{owned_ledger.json()['outcome']['resource']['id']}/overview",
             params={"month": "2026-08"},
         )
         maximum_month = await client.get(
-            f"/api/finance/ledgers/{owned_ledger.json()['id']}/overview",
+            f"/api/finance/ledgers/{owned_ledger.json()['outcome']['resource']['id']}/overview",
             params={"month": "9999-12"},
         )
         missing = await client.get(
@@ -544,18 +555,18 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
             params={"month": "2026-08"},
         )
         foreign = await client.get(
-            f"/api/finance/ledgers/{foreign_ledger.json()['id']}/overview",
+            f"/api/finance/ledgers/{foreign_ledger.json()['outcome']['resource']['id']}/overview",
             params={"month": "2026-08"},
         )
         invalid = [
             await client.get(
-                f"/api/finance/ledgers/{foreign_ledger.json()['id']}/overview",
+                f"/api/finance/ledgers/{foreign_ledger.json()['outcome']['resource']['id']}/overview",
                 params={"month": value},
             )
             for value in ("0000-01", "2026-8", "2026-13", "2026-08-01")
         ]
         missing_month = await client.get(
-            f"/api/finance/ledgers/{foreign_ledger.json()['id']}/overview"
+            f"/api/finance/ledgers/{foreign_ledger.json()['outcome']['resource']['id']}/overview"
         )
 
     assert missing.status_code == HTTPStatus.NOT_FOUND
@@ -587,8 +598,12 @@ async def test_overview_month_boundaries_reflect_replacement_and_deletion_curren
     await postgres_session.commit()
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Current state"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Current state"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await _create_account(
             client,
             ledger_id=ledger_id,
@@ -666,8 +681,12 @@ async def test_overview_reflects_balance_adjustment_replacement_and_removal(
     await postgres_session.commit()
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
-        ledger = await client.post("/api/finance/ledgers", json={"name": "Adjustments"})
-        ledger_id = ledger.json()["id"]
+        ledger = await client.post(
+            "/api/finance/ledgers",
+            json={"name": "Adjustments"},
+            headers=submission_headers(actor.id),
+        )
+        ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account = await _create_account(
             client,
             ledger_id=ledger_id,

@@ -50,7 +50,11 @@ def _use_problem_details_media_type(contract_paths: dict[str, Any]) -> None:
                 json_content = content.get("application/json")
                 if not isinstance(json_content, dict):
                     continue
-                if json_content.get("schema") != {"$ref": _PROBLEM_DETAILS_REF}:
+                if json_content.get("schema", {}).get("$ref") not in {
+                    _PROBLEM_DETAILS_REF,
+                    "#/components/schemas/LedgerConflictResponse",
+                    "#/components/schemas/LedgerValidationResponse",
+                }:
                     continue
                 content[PROBLEM_MEDIA_TYPE] = content.pop("application/json")
 
