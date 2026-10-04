@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import date
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -17,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from core_console.modules.finance import submissions
 from core_console.modules.finance.models import FinanceLedger
-from core_console.modules.finance.service import execute_create_finance_ledger
+from core_console.modules.finance.money import Money
+from core_console.modules.finance.service import (
+    create_finance_account,
+    create_finance_category,
+    execute_create_finance_ledger,
+)
 from core_console.modules.finance.submission_models import FinanceSubmission
 from core_console.modules.finance.submission_schemas import (
     LedgerCreatedReceipt,
@@ -469,14 +475,28 @@ async def test_concurrent_first_admissions_converge_under_submission_key_lock(
             ),
             timeout=5,
         )
-        assert sorted(response.status_code for response in responses) == (
+        assert any(response.status_code == 201 for response in responses)
+        for response in responses:
+            assert response.status_code in (201, 409)
+            if response.status_code == 409:
+                assert response.json()["code"] in {
+                    "finance_submission_busy",
+                    "finance_submission_content_conflict",
+                }
+        # A bounded busy response is allowed under load. Once the competing
+        # request finishes, explicit retry must converge to replay or conflict.
+        settled = [
+            await client.post("/api/finance/ledgers", json={"name": name}, headers=headers)
+            for name in ("Home", "Different" if different_content else " Home ")
+        ]
+        assert sorted(response.status_code for response in settled) == (
             [201, 409] if different_content else [201, 201]
         )
         if different_content:
-            conflict = next(response for response in responses if response.status_code == 409)
+            conflict = next(response for response in settled if response.status_code == 409)
             assert conflict.json()["code"] == "finance_submission_content_conflict"
         else:
-            assert responses[0].json() == responses[1].json()
+            assert settled[0].json() == settled[1].json()
         assert len((await client.get("/api/finance/ledgers")).json()) == 1
     assert await postgres_session.scalar(select(func.count()).select_from(FinanceSubmission)) == 1
 
@@ -616,35 +636,35 @@ async def test_submission_migration_preserves_populated_finance_and_refuses_evid
     postgres_session.add(ledger)
     await postgres_session.commit()
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
-        account = await client.post(
-            f"/api/finance/ledgers/{ledger.id}/accounts",
-            json={
-                "name": "Cash",
-                "nature": "asset",
-                "currency": "CNY",
-                "openingBalance": {"amount": "100.00", "currency": "CNY"},
-                "trackingStartDate": "2026-08-01",
-            },
+        account = await create_finance_account(
+            postgres_session,
+            owner_id=actor.id,
+            ledger_id=ledger.id,
+            name="Cash",
+            nature="asset",
+            currency="CNY",
+            opening_balance=Money.parse(amount="100.00", currency="CNY"),
+            tracking_start_date=date(2026, 8, 1),
         )
-        category = await client.post(
-            f"/api/finance/ledgers/{ledger.id}/categories", json={"name": "Food"}
+        category = await create_finance_category(
+            postgres_session, owner_id=actor.id, ledger_id=ledger.id, name="Food"
         )
         transaction = await client.post(
             f"/api/finance/ledgers/{ledger.id}/transactions",
             json={
                 "kind": "expense",
-                "accountId": account.json()["id"],
+                "accountId": str(account.account.id),
                 "transactionDate": "2026-08-01",
                 "economicAmount": {"amount": "12.34", "currency": "CNY"},
                 "categoryAllocations": [
                     {
-                        "categoryId": category.json()["id"],
+                        "categoryId": str(category.id),
                         "amount": {"amount": "12.34", "currency": "CNY"},
                     }
                 ],
             },
         )
-        assert account.status_code == category.status_code == transaction.status_code == 201
+        assert transaction.status_code == 201
         paths = [
             "/api/finance/ledgers",
             *(

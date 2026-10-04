@@ -21,7 +21,7 @@ from core_console.modules.finance.models import (
 )
 from core_console.modules.users.models import User
 from core_console.resources import get_application_resources
-from integration.finance_submission_helpers import submission_headers
+from integration.finance_submission_helpers import create_finance_resource, submission_headers
 
 pytestmark = pytest.mark.anyio
 
@@ -96,7 +96,8 @@ async def test_history_pages_same_date_transactions_without_duplicates_or_omissi
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
         empty = await client.get(f"/api/finance/ledgers/{ledger_id}/transactions")
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -105,6 +106,7 @@ async def test_history_pages_same_date_transactions_without_duplicates_or_omissi
                 "openingBalance": {"amount": "0", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         created_ids: list[str] = []
         for index in range(5):
@@ -197,15 +199,22 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
         other_ledger_id = other_ledger.json()["outcome"]["resource"]["id"]
-        cash = await _create_account(client, ledger_id=ledger_id, name="Cash")
-        card = await _create_account(client, ledger_id=ledger_id, name="Card")
-        foreign_account = await _create_account(client, ledger_id=other_ledger_id, name="Private")
-        food = await client.post(
-            f"/api/finance/ledgers/{ledger_id}/categories", json={"name": "Food"}
+        cash = await _create_account(client, ledger_id=ledger_id, name="Cash", owner_id=actor.id)
+        card = await _create_account(client, ledger_id=ledger_id, name="Card", owner_id=actor.id)
+        foreign_account = await _create_account(
+            client, ledger_id=other_ledger_id, name="Private", owner_id=actor.id
         )
-        foreign_category = await client.post(
+        food = await create_finance_resource(
+            client,
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "Food"},
+            owner_id=actor.id,
+        )
+        foreign_category = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{other_ledger_id}/categories",
             json={"name": "Private"},
+            owner_id=actor.id,
         )
         income = await _create_ordinary(
             client,
@@ -364,7 +373,7 @@ async def test_history_cursor_is_opaque_validated_and_bound_to_filters(
             headers=submission_headers(actor.id),
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await _create_account(client, ledger_id=ledger_id, name="Cash")
+        account = await _create_account(client, ledger_id=ledger_id, name="Cash", owner_id=actor.id)
         for day in (24, 23, 22):
             await _create_ordinary(
                 client,
@@ -427,8 +436,10 @@ async def test_history_reads_current_mutation_aftermath_without_writing(
             headers=submission_headers(actor.id),
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        cash = await _create_account(client, ledger_id=ledger_id, name="Cash")
-        reserve = await _create_account(client, ledger_id=ledger_id, name="Reserve")
+        cash = await _create_account(client, ledger_id=ledger_id, name="Cash", owner_id=actor.id)
+        reserve = await _create_account(
+            client, ledger_id=ledger_id, name="Reserve", owner_id=actor.id
+        )
         kept = await _create_ordinary(
             client,
             ledger_id=ledger_id,
@@ -562,9 +573,12 @@ async def _create_account(
     *,
     ledger_id: str,
     name: str,
+    owner_id: UUID,
 ) -> dict[str, Any]:
-    response = await client.post(
+    response = await create_finance_resource(
+        client,
         f"/api/finance/ledgers/{ledger_id}/accounts",
+        owner_id=owner_id,
         json={
             "name": name,
             "nature": "asset",

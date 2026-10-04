@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
@@ -21,7 +21,7 @@ from core_console.modules.finance.models import (
 )
 from core_console.modules.finance.money import POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS
 from core_console.modules.users.models import User
-from integration.finance_submission_helpers import submission_headers
+from integration.finance_submission_helpers import create_finance_resource, submission_headers
 
 pytestmark = pytest.mark.anyio
 
@@ -232,7 +232,8 @@ async def test_user_can_manage_account_lifecycle_with_account_relative_balances(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        liability = await client.post(
+        liability = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "  Credit Card  ",
@@ -241,8 +242,10 @@ async def test_user_can_manage_account_lifecycle_with_account_relative_balances(
                 "openingBalance": {"amount": "250", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        asset = await client.post(
+        asset = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -251,6 +254,7 @@ async def test_user_can_manage_account_lifecycle_with_account_relative_balances(
                 "openingBalance": {"amount": "100", "currency": "JPY"},
                 "trackingStartDate": "2026-08-02",
             },
+            owner_id=actor.id,
         )
         unchanged = await client.patch(
             f"/api/finance/ledgers/{ledger_id}/accounts/{liability.json()['id']}",
@@ -324,7 +328,8 @@ async def test_user_can_correct_nature_on_an_unlocked_zero_position_account(
         ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
@@ -333,6 +338,7 @@ async def test_user_can_correct_nature_on_an_unlocked_zero_position_account(
                 "openingBalance": {"amount": "0", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         corrected = await client.patch(
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
@@ -361,7 +367,8 @@ async def test_user_can_correct_currency_on_an_unlocked_zero_position_account(
         ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
@@ -370,6 +377,7 @@ async def test_user_can_correct_currency_on_an_unlocked_zero_position_account(
                 "openingBalance": {"amount": "0", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         corrected = await client.patch(
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
@@ -398,7 +406,8 @@ async def test_user_can_correct_nature_and_currency_together_on_an_unlocked_acco
         ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
@@ -407,6 +416,7 @@ async def test_user_can_correct_nature_and_currency_together_on_an_unlocked_acco
                 "openingBalance": {"amount": "0", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         corrected = await client.patch(
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}",
@@ -441,7 +451,8 @@ async def test_account_semantic_correction_rejects_nonzero_opening_balance(
         ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
@@ -450,6 +461,7 @@ async def test_account_semantic_correction_rejects_nonzero_opening_balance(
                 "openingBalance": {"amount": "25.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
         account_path = f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
@@ -493,7 +505,8 @@ async def test_account_semantic_correction_rejects_any_durable_transaction_histo
         ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
@@ -502,6 +515,7 @@ async def test_account_semantic_correction_rejects_any_durable_transaction_histo
                 "openingBalance": {"amount": "0", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         transaction = await client.post(
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/transactions",
@@ -559,7 +573,8 @@ async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
         second_ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Private",
@@ -568,6 +583,7 @@ async def test_account_lookups_do_not_leak_across_ledger_or_owner_scope(
                 "openingBalance": {"amount": "1.00", "currency": "USD"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
         non_owned_ledger = await client.get(
@@ -627,7 +643,8 @@ async def test_account_list_order_uses_status_case_folded_name_and_identifier(
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
         created = []
         for name in ("beta", "Alpha", "alpha"):
-            response = await client.post(
+            response = await create_finance_resource(
+                client,
                 f"/api/finance/ledgers/{ledger_id}/accounts",
                 json={
                     "name": name,
@@ -636,6 +653,7 @@ async def test_account_list_order_uses_status_case_folded_name_and_identifier(
                     "openingBalance": {"amount": "0", "currency": "CNY"},
                     "trackingStartDate": "2026-08-01",
                 },
+                owner_id=actor.id,
             )
             created.append(response.json())
         archived = await client.post(
@@ -660,7 +678,8 @@ async def test_income_and_expense_are_readable_and_derive_account_relative_balan
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        asset = await client.post(
+        asset = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -669,8 +688,10 @@ async def test_income_and_expense_are_readable_and_derive_account_relative_balan
                 "openingBalance": {"amount": "100.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        liability = await client.post(
+        liability = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Card",
@@ -679,10 +700,13 @@ async def test_income_and_expense_are_readable_and_derive_account_relative_balan
                 "openingBalance": {"amount": "200.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        category = await client.post(
+        category = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/categories",
             json={"name": "Salary"},
+            owner_id=actor.id,
         )
 
         commands = (
@@ -781,7 +805,8 @@ async def test_transaction_creation_enforces_active_scoped_references(
         other_ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
         )
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Cash",
@@ -790,8 +815,10 @@ async def test_transaction_creation_enforces_active_scoped_references(
                 "openingBalance": {"amount": "0", "currency": "USD"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        other_account = await client.post(
+        other_account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Other Cash",
@@ -800,10 +827,13 @@ async def test_transaction_creation_enforces_active_scoped_references(
                 "openingBalance": {"amount": "0", "currency": "USD"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        category = await client.post(
+        category = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/categories",
             json={"name": "Food"},
+            owner_id=actor.id,
         )
         archived_account = await client.post(
             f"/api/finance/ledgers/{ledger.json()['outcome']['resource']['id']}/accounts/{account.json()['id']}/archive"
@@ -896,7 +926,8 @@ async def test_income_replacement_preserves_identity_and_replaces_the_complete_e
             headers=submission_headers(actor.id),
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        asset = await client.post(
+        asset = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -905,8 +936,10 @@ async def test_income_replacement_preserves_identity_and_replaces_the_complete_e
                 "openingBalance": {"amount": "100.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        liability = await client.post(
+        liability = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Card",
@@ -915,14 +948,19 @@ async def test_income_replacement_preserves_identity_and_replaces_the_complete_e
                 "openingBalance": {"amount": "50.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-15",
             },
+            owner_id=actor.id,
         )
-        salary = await client.post(
+        salary = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/categories",
             json={"name": "Salary"},
+            owner_id=actor.id,
         )
-        refund = await client.post(
+        refund = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/categories",
             json={"name": "Refund"},
+            owner_id=actor.id,
         )
         created = await _post_transaction(
             client,
@@ -1008,7 +1046,8 @@ async def test_internal_transfer_replacement_moves_both_role_identified_effects(
             ("New Asset", "asset", "1.00"),
         ):
             accounts.append(
-                await client.post(
+                await create_finance_resource(
+                    client,
                     f"/api/finance/ledgers/{ledger_id}/accounts",
                     json={
                         "name": name,
@@ -1017,6 +1056,7 @@ async def test_internal_transfer_replacement_moves_both_role_identified_effects(
                         "openingBalance": {"amount": opening, "currency": "CNY"},
                         "trackingStartDate": "2026-08-01",
                     },
+                    owner_id=actor.id,
                 )
             )
         old_source, old_destination, new_source, new_destination = accounts
@@ -1093,7 +1133,7 @@ async def test_generic_deletion_removes_all_four_kinds_and_unlocks_account_seman
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
         accounts = [
-            await _create_account(client, ledger_id, name, "CNY")
+            await _create_account(client, ledger_id, name, "CNY", owner_id=actor.id)
             for name in (
                 "Income",
                 "Expense",
@@ -1206,13 +1246,21 @@ async def test_ordinary_replacement_preserves_scope_kind_and_archived_reference_
             "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await _create_account(client, ledger_id, "Cash", "CNY")
-        changed_archived_account = await _create_account(client, ledger_id, "Old Cash", "CNY")
-        category = await client.post(
-            f"/api/finance/ledgers/{ledger_id}/categories", json={"name": "Food"}
+        account = await _create_account(client, ledger_id, "Cash", "CNY", owner_id=actor.id)
+        changed_archived_account = await _create_account(
+            client, ledger_id, "Old Cash", "CNY", owner_id=actor.id
         )
-        changed_archived_category = await client.post(
-            f"/api/finance/ledgers/{ledger_id}/categories", json={"name": "Old Food"}
+        category = await create_finance_resource(
+            client,
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "Food"},
+            owner_id=actor.id,
+        )
+        changed_archived_category = await create_finance_resource(
+            client,
+            f"/api/finance/ledgers/{ledger_id}/categories",
+            json={"name": "Old Food"},
+            owner_id=actor.id,
         )
         categorized = await _post_transaction(
             client,
@@ -1392,9 +1440,11 @@ async def test_transfer_replacement_retains_only_same_role_archived_accounts(
             "/api/finance/ledgers", json={"name": "Archive"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        source = await _create_account(client, ledger_id, "Source", "CNY")
-        destination = await _create_account(client, ledger_id, "Destination", "CNY")
-        other = await _create_account(client, ledger_id, "Other", "CNY")
+        source = await _create_account(client, ledger_id, "Source", "CNY", owner_id=actor.id)
+        destination = await _create_account(
+            client, ledger_id, "Destination", "CNY", owner_id=actor.id
+        )
+        other = await _create_account(client, ledger_id, "Other", "CNY", owner_id=actor.id)
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/transactions",
             json={
@@ -1473,8 +1523,9 @@ async def test_expense_replacement_uses_liability_sign_and_durable_money_boundar
             "/api/finance/ledgers", json={"name": "Expense"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        asset = await _create_account(client, ledger_id, "Asset", "CNY")
-        liability = await client.post(
+        asset = await _create_account(client, ledger_id, "Asset", "CNY", owner_id=actor.id)
+        liability = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Liability",
@@ -1483,6 +1534,7 @@ async def test_expense_replacement_uses_liability_sign_and_durable_money_boundar
                 "openingBalance": {"amount": "0.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/transactions",
@@ -1548,7 +1600,7 @@ async def test_generic_delete_hides_foreign_and_missing_transaction_identity(
             "/api/finance/ledgers", json={"name": "Private"}, headers=submission_headers(actor.id)
         )
         account = await _create_account(
-            client, ledger.json()["outcome"]["resource"]["id"], "Cash", "CNY"
+            client, ledger.json()["outcome"]["resource"]["id"], "Cash", "CNY", owner_id=actor.id
         )
         transaction = await _post_transaction(
             client,
@@ -1593,9 +1645,9 @@ async def test_ordinary_replacement_projection_failure_restores_original_aggrega
             "/api/finance/ledgers", json={"name": "Rollback"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        first = await _create_account(client, ledger_id, "First", "CNY")
-        second = await _create_account(client, ledger_id, "Second", "CNY")
-        third = await _create_account(client, ledger_id, "Third", "CNY")
+        first = await _create_account(client, ledger_id, "First", "CNY", owner_id=actor.id)
+        second = await _create_account(client, ledger_id, "Second", "CNY", owner_id=actor.id)
+        third = await _create_account(client, ledger_id, "Third", "CNY", owner_id=actor.id)
         income = await _post_transaction(
             client,
             ledger_id=ledger_id,
@@ -1672,7 +1724,8 @@ async def test_future_transactions_apply_immediately_and_bound_tracking_start_ed
             "/api/finance/ledgers", json={"name": "Dates"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -1681,6 +1734,7 @@ async def test_future_transactions_apply_immediately_and_bound_tracking_start_ed
                 "openingBalance": {"amount": "100", "currency": "JPY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         before_tracking = await _post_transaction(
             client,
@@ -1727,7 +1781,8 @@ async def test_internal_transfer_create_detail_balances_and_validation(
             "/api/finance/ledgers", json={"name": "Transfers"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        source = await client.post(
+        source = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Checking",
@@ -1736,8 +1791,10 @@ async def test_internal_transfer_create_detail_balances_and_validation(
                 "openingBalance": {"amount": "5.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        destination = await client.post(
+        destination = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Card",
@@ -1746,6 +1803,7 @@ async def test_internal_transfer_create_detail_balances_and_validation(
                 "openingBalance": {"amount": "0.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-10",
             },
+            owner_id=actor.id,
         )
         command = {
             "kind": "internalTransfer",
@@ -1829,11 +1887,13 @@ async def test_internal_transfer_enforces_currency_archive_and_account_scope(
             "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
         )
         first_id = first.json()["outcome"]["resource"]["id"]
-        source = await _create_account(client, first_id, "Source", "CNY")
-        destination = await _create_account(client, first_id, "Destination", "CNY")
-        usd = await _create_account(client, first_id, "USD", "USD")
+        source = await _create_account(client, first_id, "Source", "CNY", owner_id=actor.id)
+        destination = await _create_account(
+            client, first_id, "Destination", "CNY", owner_id=actor.id
+        )
+        usd = await _create_account(client, first_id, "USD", "USD", owner_id=actor.id)
         out_of_scope = await _create_account(
-            client, second.json()["outcome"]["resource"]["id"], "Private", "CNY"
+            client, second.json()["outcome"]["resource"]["id"], "Private", "CNY", owner_id=actor.id
         )
         command = {
             "kind": "internalTransfer",
@@ -1886,9 +1946,11 @@ async def test_user_can_manage_the_complete_category_lifecycle(
             "/api/finance/ledgers", json={"name": "Personal"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/categories",
             json={"name": "  Food  "},
+            owner_id=actor.id,
         )
         unchanged = await client.patch(
             f"/api/finance/ledgers/{ledger_id}/categories/{created.json()['id']}",
@@ -1943,20 +2005,26 @@ async def test_category_names_remain_unique_while_archived_within_one_ledger(
             "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
         )
         first_ledger_id = first_ledger.json()["outcome"]["resource"]["id"]
-        category = await client.post(
+        category = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{first_ledger_id}/categories",
             json={"name": "Straße"},
+            owner_id=actor.id,
         )
         archived = await client.post(
             f"/api/finance/ledgers/{first_ledger_id}/categories/{category.json()['id']}/archive"
         )
-        duplicate = await client.post(
+        duplicate = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{first_ledger_id}/categories",
             json={"name": "STRASSE"},
+            owner_id=actor.id,
         )
-        other = await client.post(
+        other = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{first_ledger_id}/categories",
             json={"name": "Other"},
+            owner_id=actor.id,
         )
         rename_conflict = await client.patch(
             f"/api/finance/ledgers/{first_ledger_id}/categories/{other.json()['id']}",
@@ -1965,9 +2033,11 @@ async def test_category_names_remain_unique_while_archived_within_one_ledger(
         unarchived = await client.post(
             f"/api/finance/ledgers/{first_ledger_id}/categories/{category.json()['id']}/unarchive"
         )
-        same_name_other_ledger = await client.post(
+        same_name_other_ledger = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{second_ledger.json()['outcome']['resource']['id']}/categories",
             json={"name": "STRASSE"},
+            owner_id=actor.id,
         )
 
     assert archived.json()["status"] == "archived"
@@ -1996,9 +2066,11 @@ async def test_category_lookups_do_not_leak_across_ledger_or_owner_scope(
         second_ledger = await client.post(
             "/api/finance/ledgers", json={"name": "Second"}, headers=submission_headers(actor.id)
         )
-        category = await client.post(
+        category = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{first_ledger.json()['outcome']['resource']['id']}/categories",
             json={"name": "Private"},
+            owner_id=actor.id,
         )
 
     async with finance_client(database_url=postgres_database_url, actor=other_user) as client:
@@ -2040,9 +2112,11 @@ async def test_category_list_order_uses_status_case_folded_name_and_identifier(
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
         created = []
         for name in ("beta", "Alpha", "zebra", "Äpfel"):
-            response = await client.post(
+            response = await create_finance_resource(
+                client,
                 f"/api/finance/ledgers/{ledger_id}/categories",
                 json={"name": name},
+                owner_id=actor.id,
             )
             created.append(response.json())
         archived = await client.post(
@@ -2068,7 +2142,8 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
             headers=submission_headers(actor.id),
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        asset = await client.post(
+        asset = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -2077,8 +2152,10 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
                 "openingBalance": {"amount": "100.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        liability = await client.post(
+        liability = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Card",
@@ -2087,6 +2164,7 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
                 "openingBalance": {"amount": "200.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         await _post_transaction(
             client,
@@ -2225,7 +2303,8 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
             "/api/finance/ledgers", json={"name": "Other"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -2234,8 +2313,10 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
                 "openingBalance": {"amount": "10.00", "currency": "USD"},
                 "trackingStartDate": "2026-08-10",
             },
+            owner_id=actor.id,
         )
-        archived = await client.post(
+        archived = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Unused",
@@ -2244,11 +2325,13 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
                 "openingBalance": {"amount": "0", "currency": "USD"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         archived = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts/{archived.json()['id']}/archive"
         )
-        other_account = await client.post(
+        other_account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{other_ledger.json()['outcome']['resource']['id']}/accounts",
             json={
                 "name": "Elsewhere",
@@ -2257,6 +2340,7 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
                 "openingBalance": {"amount": "0", "currency": "USD"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         ordinary = await _post_transaction(
             client,
@@ -2369,7 +2453,8 @@ async def test_complete_balance_adjustment_result_projection_failure_rolls_back_
             headers=submission_headers(actor.id),
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -2378,6 +2463,7 @@ async def test_complete_balance_adjustment_result_projection_failure_rolls_back_
                 "openingBalance": {"amount": "0.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
 
         monkeypatch.setattr(finance_api, "_to_transaction_response", lambda _detail: object())
@@ -2425,7 +2511,8 @@ async def test_balance_adjustment_persists_exact_delta_above_decimal_context_pre
             "/api/finance/ledgers", json={"name": "Exact"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Large",
@@ -2434,6 +2521,7 @@ async def test_balance_adjustment_persists_exact_delta_above_decimal_context_pre
                 "openingBalance": {"amount": "0.01", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
@@ -2480,7 +2568,8 @@ async def test_postgresql_boundary_persists_and_derived_overflow_returns_validat
             "/api/finance/ledgers", json={"name": "Boundary"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Durable",
@@ -2489,8 +2578,10 @@ async def test_postgresql_boundary_persists_and_derived_overflow_returns_validat
                 "openingBalance": {"amount": f"-{boundary}", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        rejected_account = await client.post(
+        rejected_account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Outside",
@@ -2499,6 +2590,7 @@ async def test_postgresql_boundary_persists_and_derived_overflow_returns_validat
                 "openingBalance": {"amount": outside, "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         adjustment = await client.post(
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
@@ -2540,7 +2632,8 @@ async def test_replace_balance_adjustment_updates_moves_and_removes_exact_old_ef
             headers=submission_headers(actor.id),
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        first = await client.post(
+        first = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -2549,8 +2642,10 @@ async def test_replace_balance_adjustment_updates_moves_and_removes_exact_old_ef
                 "openingBalance": {"amount": "10.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
-        second = await client.post(
+        second = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Card",
@@ -2559,6 +2654,7 @@ async def test_replace_balance_adjustment_updates_moves_and_removes_exact_old_ef
                 "openingBalance": {"amount": "20.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-15",
             },
+            owner_id=actor.id,
         )
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
@@ -2654,7 +2750,8 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
             "/api/finance/ledgers", json={"name": "Rules"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -2663,8 +2760,10 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
                 "openingBalance": {"amount": "0.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-10",
             },
+            owner_id=actor.id,
         )
-        archived_other = await client.post(
+        archived_other = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Old",
@@ -2673,6 +2772,7 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
                 "openingBalance": {"amount": "0.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts/{archived_other.json()['id']}/archive"
@@ -2800,7 +2900,8 @@ async def test_replacement_projection_rolls_back_and_removal_unlocks_semantics(
             "/api/finance/ledgers", json={"name": "Rollback"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Cash",
@@ -2809,6 +2910,7 @@ async def test_replacement_projection_rolls_back_and_removal_unlocks_semantics(
                 "openingBalance": {"amount": "0.00", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         command = {
             "accountId": account.json()["id"],
@@ -2885,7 +2987,8 @@ async def test_replace_balance_adjustment_rejects_derived_delta_outside_durable_
             "/api/finance/ledgers", json={"name": "Range"}, headers=submission_headers(actor.id)
         )
         ledger_id = ledger.json()["outcome"]["resource"]["id"]
-        account = await client.post(
+        account = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/accounts",
             json={
                 "name": "Exact",
@@ -2894,6 +2997,7 @@ async def test_replace_balance_adjustment_rejects_derived_delta_outside_durable_
                 "openingBalance": {"amount": f"-{boundary}", "currency": "CNY"},
                 "trackingStartDate": "2026-08-01",
             },
+            owner_id=actor.id,
         )
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
@@ -2959,9 +3063,12 @@ async def _create_account(
     ledger_id: str,
     name: str,
     currency: str,
+    owner_id: UUID,
 ) -> dict[str, object]:
-    response = await client.post(
+    response = await create_finance_resource(
+        client,
         f"/api/finance/ledgers/{ledger_id}/accounts",
+        owner_id=owner_id,
         json={
             "name": name,
             "nature": "asset",

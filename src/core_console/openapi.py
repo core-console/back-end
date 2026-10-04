@@ -54,6 +54,10 @@ def _use_problem_details_media_type(contract_paths: dict[str, Any]) -> None:
                     _PROBLEM_DETAILS_REF,
                     "#/components/schemas/LedgerConflictResponse",
                     "#/components/schemas/LedgerValidationResponse",
+                    "#/components/schemas/AccountValidationResponse",
+                    "#/components/schemas/CategoryConflictResponse",
+                    "#/components/schemas/CategoryValidationResponse",
+                    "#/components/schemas/SubmissionNonterminalProblem",
                 }:
                     continue
                 content[PROBLEM_MEDIA_TYPE] = content.pop("application/json")

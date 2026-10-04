@@ -256,7 +256,7 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
     )
     assert not {"maximum", "maxLength", "pattern"} & amount_schema.keys()
 
-    create_schema = schema["components"]["schemas"]["CreateAccountRequest"]
+    create_schema = collection_path["post"]["requestBody"]["content"]["application/json"]["schema"]
     assert set(create_schema["properties"]) == {
         "name",
         "nature",
@@ -299,7 +299,9 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
 
     for operation in operations:
         assert operation["security"] == []
-        assert {parameter["name"] for parameter in operation["parameters"]} <= {
+        assert {
+            parameter["name"] for parameter in operation["parameters"] if parameter["in"] == "path"
+        } <= {
             "ledgerId",
             "accountId",
         }
@@ -307,6 +309,8 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
             if status.startswith("2"):
                 continue
             assert set(response["content"]) == {"application/problem+json"}
+            if operation is collection_path["post"]:
+                continue
             assert (
                 response["content"]["application/problem+json"]["schema"]["$ref"]
                 == "#/components/schemas/ProblemDetails"
@@ -344,7 +348,7 @@ def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> 
     assert set(category_schema["required"]) == set(category_schema["properties"])
     assert category_schema["properties"]["status"]["enum"] == ["active", "archived"]
 
-    create_schema = schema["components"]["schemas"]["CreateCategoryRequest"]
+    create_schema = collection_path["post"]["requestBody"]["content"]["application/json"]["schema"]
     update_schema = schema["components"]["schemas"]["UpdateCategoryRequest"]
     assert create_schema["additionalProperties"] is False
     assert update_schema["additionalProperties"] is False
@@ -355,7 +359,9 @@ def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> 
 
     for operation in operations:
         assert operation["security"] == []
-        assert {parameter["name"] for parameter in operation["parameters"]} <= {
+        assert {
+            parameter["name"] for parameter in operation["parameters"] if parameter["in"] == "path"
+        } <= {
             "ledgerId",
             "categoryId",
         }
@@ -363,6 +369,8 @@ def test_openapi_describes_finance_category_lifecycle_contract(app: FastAPI) -> 
             if status.startswith("2"):
                 continue
             assert set(response["content"]) == {"application/problem+json"}
+            if operation is collection_path["post"]:
+                continue
             assert (
                 response["content"]["application/problem+json"]["schema"]["$ref"]
                 == "#/components/schemas/ProblemDetails"

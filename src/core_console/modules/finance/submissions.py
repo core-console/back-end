@@ -1,4 +1,4 @@
-"""Ledger v1 admission and atomic execution; explicit retries own recovery."""
+"""Finance v1 create admission and atomic execution; explicit retries own recovery."""
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC
@@ -7,7 +7,7 @@ from re import fullmatch
 from typing import cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from sqlalchemy import BigInteger, func, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert
@@ -17,17 +17,35 @@ from starlette.datastructures import Headers
 
 from core_console.modules.finance.models import FinanceLedger
 from core_console.modules.finance.service import (
+    FinanceCategoryNameConflictError,
     FinanceLedgerNameConflictError,
+    FinanceLedgerNotFoundError,
+    InvalidFinanceAccountMoneyError,
+    InvalidFinanceAccountNameError,
+    InvalidFinanceAccountTrackingStartDateError,
+    execute_create_finance_account,
+    execute_create_finance_category,
     execute_create_finance_ledger,
+)
+from core_console.modules.finance.submission_commands import (
+    AccountCommandV1,
+    CategoryCommandV1,
+    CreateOperation,
+    LedgerCommandV1,
 )
 from core_console.modules.finance.submission_models import FinanceSubmission
 from core_console.modules.finance.submission_schemas import (
+    AccountCommandValidationRejection,
+    AccountValidationProblem,
+    CategoryCommandValidationRejection,
+    CategoryValidationProblem,
     FinanceSubmissionResponse,
+    FinanceSubmissionTerminal,
     LedgerCommandValidationRejection,
-    LedgerSubmissionReceipt,
-    LedgerSubmissionTerminal,
-    LedgerSubmissionUnfinished,
     LedgerValidationProblem,
+    SubmissionReceipt,
+    SubmissionUnfinished,
+    SubmissionValidationProblem,
 )
 from core_console.modules.users.models import User
 from core_console.problems import ApplicationProblem
@@ -37,21 +55,6 @@ from core_console.problems import ApplicationProblem
 ADMISSION_LOCK_TIMEOUT_MS = 250
 EXECUTION_LOCK_TIMEOUT_MS = 250
 OPEN_ADMISSION_VERSIONS = frozenset({"1"})
-
-
-class LedgerCommandV1(BaseModel):
-    """Frozen v1 validity, independent of mutable Finance request schemas."""
-
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(strict=True, max_length=100)
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, value: str) -> str:
-        name = value.strip()
-        if not name:
-            raise ValueError("Ledger name must not be blank.")
-        return name
 
 
 def submission_problem(status: int, code: str, detail: str) -> ApplicationProblem:
@@ -155,14 +158,14 @@ def _compare(
         )
 
 
-def _receipt(row: FinanceSubmission) -> LedgerSubmissionReceipt:
+def _receipt(row: FinanceSubmission) -> SubmissionReceipt:
     assert row.resolved_at is not None and row.terminal_outcome is not None
-    return LedgerSubmissionReceipt.model_validate(
+    return TypeAdapter(SubmissionReceipt).validate_python(
         {
             "submissionId": row.submission_id,
             "commandVersion": row.command_version,
             "operation": row.canonical_command["operation"],
-            "targetLedgerId": None,
+            "targetLedgerId": row.canonical_command["targetLedgerId"],
             "admittedAt": row.admitted_at.astimezone(UTC),
             "resolvedAt": row.resolved_at.astimezone(UTC),
             "outcome": row.terminal_outcome,
@@ -182,18 +185,38 @@ async def _lock_submission_key(session: AsyncSession, owner_id: UUID, key: UUID)
     await session.execute(select(func.pg_advisory_xact_lock(sql_cast(lock_id, BigInteger))))
 
 
-async def submit_ledger(
+async def _authorize_target(session: AsyncSession, owner_id: UUID, target: UUID | None) -> None:
+    if target is not None:
+        ledger = await session.scalar(
+            select(FinanceLedger.id).where(
+                FinanceLedger.id == target,
+                FinanceLedger.owner_id == owner_id,
+            )
+        )
+        if ledger is None:
+            raise FinanceLedgerNotFoundError
+
+
+async def submit_create(
     session: AsyncSession,
     *,
     owner_id: UUID,
     key: UUID,
     version: str,
+    operation: CreateOperation,
+    target_ledger_id: UUID | None,
     read_body: Callable[[], Awaitable[object]],
-) -> LedgerSubmissionReceipt | LedgerValidationProblem:
+) -> SubmissionReceipt | SubmissionValidationProblem:
     """Commit binding before executing; never use the committing create wrapper."""
     try:
-        return await _submit_ledger(
-            session, owner_id=owner_id, key=key, version=version, read_body=read_body
+        return await _submit_create(
+            session,
+            owner_id=owner_id,
+            key=key,
+            version=version,
+            operation=operation,
+            target_ledger_id=target_ledger_id,
+            read_body=read_body,
         )
     except Exception as exc:
         await session.rollback()
@@ -206,14 +229,17 @@ async def submit_ledger(
         raise
 
 
-async def _submit_ledger(
+async def _submit_create(
     session: AsyncSession,
     *,
     owner_id: UUID,
     key: UUID,
     version: str,
+    operation: CreateOperation,
+    target_ledger_id: UUID | None,
     read_body: Callable[[], Awaitable[object]],
-) -> LedgerSubmissionReceipt | LedgerValidationProblem:
+) -> SubmissionReceipt | SubmissionValidationProblem:
+    await _authorize_target(session, owner_id, target_ledger_id)
     row = await _binding(session, owner_id, key)
     if row is not None:
         await _authorize_binding(session, row)
@@ -228,7 +254,16 @@ async def _submit_ledger(
         )
     attempted_body = await read_body()
     try:
-        body = LedgerCommandV1.model_validate(attempted_body)
+        parsers: dict[
+            CreateOperation,
+            type[LedgerCommandV1] | type[CategoryCommandV1] | type[AccountCommandV1],
+        ] = {
+            "createFinanceLedger": LedgerCommandV1,
+            "createFinanceAccount": AccountCommandV1,
+            "createFinanceCategory": CategoryCommandV1,
+        }
+        parser = parsers[operation]
+        body = parser.model_validate(attempted_body)
     except ValidationError as exc:
         # A known binding blocks Q29, even for an invalid different attempt.
         if row is not None:
@@ -254,6 +289,7 @@ async def _submit_ledger(
                 422, "validation_error", "The request must be a JSON object."
             ) from None
         await _lock_submission_key(session, owner_id, key)
+        await _authorize_target(session, owner_id, target_ledger_id)
         row = await _binding(session, owner_id, key)
         if row is not None:
             await _authorize_binding(session, row)
@@ -263,22 +299,50 @@ async def _submit_ledger(
                 "finance_submission_content_conflict",
                 "Submission is bound to a different command.",
             ) from None
-        problem_data["commandValidationRejection"] = LedgerCommandValidationRejection(
-            kind="definitivelyNotAdmitted",
-            submissionId=key,
-            commandVersion="1",
-            ownerId=owner_id,
-            operation="createFinanceLedger",
-            targetLedgerId=None,
-            attemptedBody=cast(dict[str, JsonValue], attempted_body),
+        proof_models: dict[
+            CreateOperation,
+            (
+                type[LedgerCommandValidationRejection]
+                | type[AccountCommandValidationRejection]
+                | type[CategoryCommandValidationRejection]
+            ),
+        ] = {
+            "createFinanceLedger": LedgerCommandValidationRejection,
+            "createFinanceAccount": AccountCommandValidationRejection,
+            "createFinanceCategory": CategoryCommandValidationRejection,
+        }
+        proof_model = proof_models[operation]
+        problem_data["commandValidationRejection"] = proof_model.model_validate(
+            {
+                "kind": "definitivelyNotAdmitted",
+                "submissionId": key,
+                "commandVersion": "1",
+                "ownerId": owner_id,
+                "operation": operation,
+                "targetLedgerId": target_ledger_id,
+                "attemptedBody": cast(dict[str, JsonValue], attempted_body),
+            }
         )
         await session.rollback()
-        return LedgerValidationProblem.model_validate(problem_data)
+        problem_models: dict[
+            CreateOperation,
+            (
+                type[LedgerValidationProblem]
+                | type[AccountValidationProblem]
+                | type[CategoryValidationProblem]
+            ),
+        ] = {
+            "createFinanceLedger": LedgerValidationProblem,
+            "createFinanceAccount": AccountValidationProblem,
+            "createFinanceCategory": CategoryValidationProblem,
+        }
+        problem_model = problem_models[operation]
+        return problem_model.model_validate(problem_data)
     command: dict[str, object] = {
         "commandVersion": version,
-        "operation": "createFinanceLedger",
-        "targetLedgerId": None,
-        "body": {"name": body.name},
+        "operation": operation,
+        "targetLedgerId": str(target_ledger_id) if target_ledger_id is not None else None,
+        "body": body.canonical() if isinstance(body, AccountCommandV1) else {"name": body.name},
     }
     if row is not None:
         _compare(row, version, command)
@@ -286,6 +350,7 @@ async def _submit_ledger(
             return _receipt(row)
     else:
         await _lock_submission_key(session, owner_id, key)
+        await _authorize_target(session, owner_id, target_ledger_id)
         row = await _binding(session, owner_id, key)
         if row is None:
             await session.execute(
@@ -295,6 +360,7 @@ async def _submit_ledger(
                     submission_id=key,
                     command_version=version,
                     canonical_command=command,
+                    retention_ledger_id=target_ledger_id,
                 )
                 .on_conflict_do_nothing(index_elements=["local_user_id", "submission_id"])
             )
@@ -313,31 +379,76 @@ async def _submit_ledger(
         receipt = _receipt(row)
         await session.rollback()
         return receipt
+    await _authorize_target(session, owner_id, target_ledger_id)
     active = await session.scalar(select(User.status).where(User.id == owner_id))
     if active != "active":
         raise submission_problem(403, "access_denied", "Access is denied.")
     try:
         async with session.begin_nested():
-            ledger = await execute_create_finance_ledger(session, owner_id=owner_id, name=body.name)
-            ledger_id = ledger.id
-    except FinanceLedgerNameConflictError:
-        # The savepoint has rolled back all tentative Finance work, while the
-        # outer transaction retains submission serialization for the rejection.
+            if isinstance(body, AccountCommandV1):
+                assert target_ledger_id is not None
+                balance = await execute_create_finance_account(
+                    session,
+                    owner_id=owner_id,
+                    ledger_id=target_ledger_id,
+                    name=body.name,
+                    nature=body.nature,
+                    currency=body.currency,
+                    opening_balance=body.opening_balance.to_money(),
+                    tracking_start_date=body.tracking_start_date,
+                )
+                resource_id = balance.account.id
+                resource_type = "account"
+            elif operation == "createFinanceCategory":
+                assert target_ledger_id is not None
+                category = await execute_create_finance_category(
+                    session, owner_id=owner_id, ledger_id=target_ledger_id, name=body.name
+                )
+                resource_id = category.id
+                resource_type = "category"
+            else:
+                ledger = await execute_create_finance_ledger(
+                    session, owner_id=owner_id, name=body.name
+                )
+                resource_id = ledger.id
+                resource_type = "ledger"
+    except (FinanceLedgerNameConflictError, FinanceCategoryNameConflictError) as exc:
+        # Only recognized business failures become terminal, after savepoint rollback.
+        resource_type = "ledger" if isinstance(exc, FinanceLedgerNameConflictError) else "category"
         row.terminal_outcome = {
             "kind": "rejected",
             "problem": {
                 "type": "about:blank",
                 "title": "Conflict",
                 "status": 409,
-                "code": "finance_ledger_name_conflict",
-                "detail": "A Finance Ledger with this name already exists.",
+                "code": f"finance_{resource_type}_name_conflict",
+                "detail": f"A Finance {resource_type.title()} with this name already exists.",
+            },
+        }
+    except (
+        InvalidFinanceAccountMoneyError,
+        InvalidFinanceAccountNameError,
+        InvalidFinanceAccountTrackingStartDateError,
+    ) as exc:
+        # Access and unknown failures remain unfinished. These recognized
+        # Account business failures keep their existing stable 422 semantics.
+        if operation != "createFinanceAccount":
+            raise
+        row.terminal_outcome = {
+            "kind": "rejected",
+            "problem": {
+                "type": "about:blank",
+                "title": "Unprocessable Entity",
+                "status": 422,
+                "code": "validation_error",
+                "detail": str(exc),
             },
         }
     else:
-        row.retention_ledger_id = ledger_id
+        row.retention_ledger_id = target_ledger_id or resource_id
         row.terminal_outcome = {
             "kind": "created",
-            "resource": {"type": "ledger", "id": str(ledger_id)},
+            "resource": {"type": resource_type, "id": str(resource_id)},
         }
     with session.no_autoflush:
         row.resolved_at = await session.scalar(select(func.clock_timestamp()))
@@ -357,15 +468,17 @@ async def lookup_submission(
     await _authorize_binding(session, row)
     if row.terminal_outcome is not None:
         return FinanceSubmissionResponse(
-            LedgerSubmissionTerminal(state="terminal", receipt=_receipt(row))
+            FinanceSubmissionTerminal(state="terminal", receipt=_receipt(row))
         )
     return FinanceSubmissionResponse(
-        LedgerSubmissionUnfinished(
-            state="unfinished",
-            submissionId=row.submission_id,
-            commandVersion="1",
-            operation="createFinanceLedger",
-            targetLedgerId=None,
-            admittedAt=row.admitted_at.astimezone(UTC),
+        TypeAdapter(SubmissionUnfinished).validate_python(
+            {
+                "state": "unfinished",
+                "submissionId": row.submission_id,
+                "commandVersion": row.command_version,
+                "operation": row.canonical_command["operation"],
+                "targetLedgerId": row.canonical_command["targetLedgerId"],
+                "admittedAt": row.admitted_at.astimezone(UTC),
+            }
         )
     )

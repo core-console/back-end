@@ -1,5 +1,8 @@
 # T02 Ledger submission implementation notes
 
+This note describes the delivered T02 baseline. The current cumulative extension
+and producer boundary are recorded in [the T04 note](finance-account-category-submission-t04.md).
+
 This note records repository-specific implementation seams for T03/T04. The sole
 normative authority is [the create-submission protocol](finance-create-submission-protocol.md).
 [Backend #20](https://github.com/core-console/back-end/issues/20) scopes T02 to

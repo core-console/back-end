@@ -1,16 +1,13 @@
-"""Durable Finance create command bindings, independent of resource projections."""
+"""Extend retained Finance evidence to Account and Category creates."""
 
-from datetime import datetime
-from uuid import UUID
+from alembic import op
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Text, text
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+revision = "20261004_01"
+down_revision = "20261003_01"
+branch_labels = None
+depends_on = None
 
-from core_console.database.base import Base
-
-# The closed create command and outcome constraints evolve with the wire unions.
-COMMAND_CHECK = r"""
+NEW_COMMAND = r"""
 COALESCE(command_version = '1'
 AND canonical_command = jsonb_build_object(
     'commandVersion', command_version, 'operation', canonical_command->>'operation',
@@ -62,7 +59,7 @@ AND (
   )
 ), FALSE)
 """
-OUTCOME_CHECK = r"""
+NEW_OUTCOME = r"""
 COALESCE(
 (
   (canonical_command->>'operation' = 'createFinanceLedger')
@@ -105,31 +102,52 @@ AND (
     ))
 ), FALSE)
 """
+OLD_COMMAND = """
+command_version = '1'
+AND canonical_command = jsonb_build_object(
+    'commandVersion', command_version, 'operation', 'createFinanceLedger',
+    'targetLedgerId', NULL, 'body', jsonb_build_object('name', canonical_command #> '{body,name}'))
+AND jsonb_typeof(canonical_command #> '{body,name}') = 'string'
+AND char_length(canonical_command #>> '{body,name}') BETWEEN 1 AND 100
+AND canonical_command #>> '{body,name}' = regexp_replace(
+    canonical_command #>> '{body,name}', '^[[:space:]]+|[[:space:]]+$', '', 'g')
+"""
+OLD_OUTCOME = """
+(terminal_outcome IS NULL AND resolved_at IS NULL AND retention_ledger_id IS NULL)
+OR (terminal_outcome IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at >= admitted_at
+    AND (
+      (terminal_outcome = jsonb_build_object('kind', 'created', 'resource',
+          jsonb_build_object('type', 'ledger', 'id', retention_ledger_id::text))
+       AND retention_ledger_id IS NOT NULL)
+      OR (retention_ledger_id IS NULL
+          AND terminal_outcome = jsonb_build_object('kind', 'rejected', 'problem',
+            jsonb_build_object('type', 'about:blank', 'title', 'Conflict', 'status', 409,
+              'code', 'finance_ledger_name_conflict',
+              'detail', 'A Finance Ledger with this name already exists.')))
+    ))
+"""
 
 
-class FinanceSubmission(Base):
-    """Exactly unfinished or terminal, unique across one user's commands."""
+def _replace(command: str, outcome: str) -> None:
+    op.drop_constraint("ck_finance_submissions_command", "finance_submissions", type_="check")
+    op.drop_constraint("ck_finance_submissions_outcome", "finance_submissions", type_="check")
+    op.create_check_constraint("ck_finance_submissions_command", "finance_submissions", command)
+    op.create_check_constraint("ck_finance_submissions_outcome", "finance_submissions", outcome)
 
-    __tablename__ = "finance_submissions"
-    __table_args__ = (
-        CheckConstraint(COMMAND_CHECK, name="ck_finance_submissions_command"),
-        CheckConstraint(OUTCOME_CHECK, name="ck_finance_submissions_outcome"),
-        ForeignKeyConstraint(
-            ["retention_ledger_id", "local_user_id"],
-            ["finance_ledgers.id", "finance_ledgers.owner_id"],
-            name="fk_finance_submissions_retention_owner",
-        ),
-    )
 
-    local_user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", name="fk_finance_submissions_user"), primary_key=True
-    )
-    submission_id: Mapped[UUID] = mapped_column(primary_key=True)
-    command_version: Mapped[str] = mapped_column(Text, nullable=False)
-    canonical_command: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
-    retention_ledger_id: Mapped[UUID | None]
-    admitted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
-    terminal_outcome: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+def upgrade() -> None:
+    _replace(NEW_COMMAND, NEW_OUTCOME)
+
+
+def downgrade() -> None:
+    # Do not remove nested enforcement while any nested evidence remains.
+    op.execute("LOCK TABLE finance_submissions IN ACCESS EXCLUSIVE MODE")
+    op.execute("""
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM finance_submissions
+                   WHERE canonical_command->>'operation' <> 'createFinanceLedger') THEN
+          RAISE EXCEPTION 'Finance submission enforcement must be preserved; repair forward';
+        END IF;
+      END $$;
+    """)
+    _replace(OLD_COMMAND, OLD_OUTCOME)

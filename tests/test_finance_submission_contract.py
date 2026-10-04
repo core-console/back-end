@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.submission_schemas import (
+    AccountCreatedReceipt,
+    CategoryCreatedReceipt,
+    FinanceSubmissionResponse,
     LedgerCreatedReceipt,
     LedgerValidationProblem,
 )
@@ -60,8 +63,6 @@ def test_ledger_protocol_openapi_requires_headers_and_distinguishes_evidence(app
                 assert set(response["content"]) == {"application/problem+json"}
     # Other creates remain on their previously generated resource contracts.
     for path, response in (
-        ("/finance/ledgers/{ledgerId}/accounts", "AccountResponse"),
-        ("/finance/ledgers/{ledgerId}/categories", "CategoryResponse"),
         ("/finance/ledgers/{ledgerId}/transactions", "FinanceTransactionResponse"),
     ):
         operation = schema["paths"][path]["post"]
@@ -144,3 +145,112 @@ async def test_lookup_infrastructure_and_unknown_errors_have_no_store(
     assert response.headers["cache-control"] == "no-store"
     assert "submissionReceipt" not in response.json()
     assert "commandValidationRejection" not in response.json()
+
+
+@pytest.mark.parametrize(
+    ("resource", "name"), [("accounts", "Account"), ("categories", "Category")]
+)
+def test_nested_contract_is_operation_specific_and_requires_protocol(
+    app: FastAPI, resource: str, name: str
+) -> None:
+    schema = app.openapi()
+    create = schema["paths"][f"/finance/ledgers/{{ledgerId}}/{resource}"]["post"]
+    assert create["operationId"] == f"createFinance{name}"
+    assert {(p["name"], p["in"], p["required"]) for p in create["parameters"]} == {
+        ("ledgerId", "path", True),
+        ("Idempotency-Key", "header", True),
+        ("Finance-Command-Version", "header", True),
+        ("Finance-Submission-Owner", "header", True),
+    }
+    assert create["responses"]["201"]["content"]["application/json"]["schema"] == {
+        "$ref": f"#/components/schemas/{name}CreatedReceipt"
+    }
+    for status, response in create["responses"].items():
+        if not status.startswith("2"):
+            assert set(response["content"]) == {"application/problem+json"}
+    components = schema["components"]["schemas"]
+    assert "commandValidationRejection" in components[f"{name}ValidationProblem"]["required"]
+    assert "submissionReceipt" in components[f"{name}TerminalProblem"]["required"]
+    assert (
+        components[f"{name}SubmissionReceipt"]["properties"]["outcome"]["discriminator"][
+            "propertyName"
+        ]
+        == "kind"
+    )
+    assert components[f"{name}CreatedReceipt"]["properties"]["targetLedgerId"]["format"] == "uuid"
+    request = create["requestBody"]["content"]["application/json"]["schema"]
+    assert request["additionalProperties"] is False
+    if resource == "accounts":
+        assert set(request["required"]) == {
+            "name",
+            "nature",
+            "currency",
+            "openingBalance",
+            "trackingStartDate",
+        }
+        assert request["properties"]["openingBalance"]["properties"]["amount"]["type"] == "string"
+        assert request["properties"]["trackingStartDate"]["format"] == "date"
+
+
+def test_cumulative_openapi_references_resolve_and_excluded_creates_remain_unchanged(
+    app: FastAPI,
+) -> None:
+    schema = app.openapi()
+
+    def check(node: Any) -> None:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref = node["$ref"]
+                assert ref.startswith("#/")
+                resolved: Any = schema
+                for part in ref[2:].split("/"):
+                    resolved = resolved[part.replace("~1", "/").replace("~0", "~")]
+            for value in node.values():
+                check(value)
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+
+    check(schema)
+    for resource, status, response in [
+        ("transactions", "201", "FinanceTransactionResponse"),
+        ("balance-adjustments", "200", "BalanceAdjustmentResultResponse"),
+    ]:
+        operation = schema["paths"][f"/finance/ledgers/{{ledgerId}}/{resource}"]["post"]
+        assert all(p["in"] != "header" for p in operation["parameters"])
+        assert operation["responses"][status]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{response}"
+        }
+
+
+@pytest.mark.parametrize("operation", ["createFinanceAccount", "createFinanceCategory"])
+@pytest.mark.parametrize(
+    "invalid", ["null_scope", "wrong_resource", "no_change", "wrong_operation"]
+)
+def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
+    operation: str, invalid: str
+) -> None:
+    resource = "account" if operation == "createFinanceAccount" else "category"
+    now = datetime.now(UTC)
+    receipt: dict[str, object] = {
+        "submissionId": uuid4(),
+        "commandVersion": "1",
+        "operation": operation,
+        "targetLedgerId": uuid4(),
+        "admittedAt": now,
+        "resolvedAt": now,
+        "outcome": {"kind": "created", "resource": {"type": resource, "id": uuid4()}},
+    }
+    if invalid == "null_scope":
+        receipt["targetLedgerId"] = None
+    elif invalid == "wrong_resource":
+        receipt["outcome"] = {"kind": "created", "resource": {"type": "transaction", "id": uuid4()}}
+    elif invalid == "no_change":
+        receipt["outcome"] = {"kind": "noChange"}
+    else:
+        receipt["operation"] = "createFinanceLedger"
+    model = AccountCreatedReceipt if resource == "account" else CategoryCreatedReceipt
+    with pytest.raises(ValidationError):
+        model.model_validate(receipt)
+    with pytest.raises(ValidationError):
+        FinanceSubmissionResponse.model_validate({"state": "terminal", "receipt": receipt})

@@ -46,9 +46,7 @@ from core_console.modules.finance.schemas import (
     CategoryReferenceResponse,
     CategoryResponse,
     CorrectAccountSemanticsRequest,
-    CreateAccountRequest,
     CreateBalanceAdjustmentRequest,
-    CreateCategoryRequest,
     CreateFinanceTransactionRequest,
     CurrencyResponse,
     ExpenseTransactionResponse,
@@ -89,8 +87,6 @@ from core_console.modules.finance.service import (
     archive_finance_category,
     correct_finance_account_semantics,
     create_balance_adjustment,
-    create_finance_account,
-    create_finance_category,
     create_finance_transaction,
     create_internal_transfer_transaction,
     delete_finance_transaction,
@@ -628,45 +624,6 @@ async def get_overview(
     )
 
 
-@router.post(
-    "/ledgers/{ledgerId}/accounts",
-    operation_id="createFinanceAccount",
-    summary="Create a Finance Account",
-    description="Creates one account-relative position inside an owned Finance Ledger.",
-    status_code=HTTPStatus.CREATED,
-    response_model=AccountResponse,
-    responses={
-        403: {"model": ProblemDetails, "description": "Access is denied."},
-        404: {"model": ProblemDetails, "description": "The Ledger does not exist."},
-        422: {"model": ProblemDetails, "description": "The request is invalid."},
-        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
-        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
-    },
-    openapi_extra={"security": []},
-)
-async def post_account(
-    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
-    request: CreateAccountRequest,
-    actor: Annotated[CurrentUser, Depends(require_active_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> AccountResponse:
-    """Create one Account in an owned Ledger."""
-
-    balance = await _run_finance_workflow(
-        create_finance_account(
-            session,
-            owner_id=actor.id,
-            ledger_id=ledger_id,
-            name=request.name,
-            nature=request.nature,
-            currency=request.currency,
-            opening_balance=request.opening_balance.to_money(),
-            tracking_start_date=request.tracking_start_date,
-        )
-    )
-    return _to_account_response(balance)
-
-
 @router.patch(
     "/ledgers/{ledgerId}/accounts/{accountId}",
     operation_id="updateFinanceAccount",
@@ -843,42 +800,6 @@ async def get_categories(
         )
     )
     return [_to_category_response(category) for category in categories]
-
-
-@router.post(
-    "/ledgers/{ledgerId}/categories",
-    operation_id="createFinanceCategory",
-    summary="Create a Finance Category",
-    description="Creates one neutral Category inside an owned Finance Ledger.",
-    status_code=HTTPStatus.CREATED,
-    response_model=CategoryResponse,
-    responses={
-        403: {"model": ProblemDetails, "description": "Access is denied."},
-        404: {"model": ProblemDetails, "description": "The Ledger does not exist."},
-        409: {"model": ProblemDetails, "description": "The Category name conflicts."},
-        422: {"model": ProblemDetails, "description": "The request is invalid."},
-        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
-        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
-    },
-    openapi_extra={"security": []},
-)
-async def post_category(
-    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
-    request: CreateCategoryRequest,
-    actor: Annotated[CurrentUser, Depends(require_active_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> CategoryResponse:
-    """Create one neutral Category in an owned Ledger."""
-
-    category = await _run_finance_workflow(
-        create_finance_category(
-            session,
-            owner_id=actor.id,
-            ledger_id=ledger_id,
-            name=request.name,
-        )
-    )
-    return _to_category_response(category)
 
 
 @router.patch(

@@ -1,4 +1,4 @@
-"""Closed Ledger-specific submission evidence; no resource snapshots."""
+"""Closed operation-specific submission evidence; no resource snapshots."""
 
 from datetime import datetime
 from typing import Annotated, Literal
@@ -11,6 +11,28 @@ from core_console.problems import ProblemDetails
 
 class _Evidence(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class _Receipt(_Evidence):
+    submission_id: UUID = Field(alias="submissionId")
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    admitted_at: datetime = Field(alias="admittedAt")
+    resolved_at: datetime = Field(alias="resolvedAt")
+
+
+class _Unfinished(_Evidence):
+    state: Literal["unfinished"]
+    submission_id: UUID = Field(alias="submissionId")
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    admitted_at: datetime = Field(alias="admittedAt")
+
+
+class _CommandValidationRejection(_Evidence):
+    kind: Literal["definitivelyNotAdmitted"]
+    submission_id: UUID = Field(alias="submissionId")
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    owner_id: UUID = Field(alias="ownerId")
+    attempted_body: dict[str, JsonValue] = Field(alias="attemptedBody")
 
 
 class LedgerCreatedResource(_Evidence):
@@ -36,13 +58,9 @@ class LedgerRejectedOutcome(_Evidence):
     problem: LedgerRejectionProblem
 
 
-class _LedgerReceipt(_Evidence):
-    submission_id: UUID = Field(alias="submissionId")
-    command_version: Literal["1"] = Field(alias="commandVersion")
+class _LedgerReceipt(_Receipt):
     operation: Literal["createFinanceLedger"]
     target_ledger_id: None = Field(alias="targetLedgerId")
-    admitted_at: datetime = Field(alias="admittedAt")
-    resolved_at: datetime = Field(alias="resolvedAt")
 
 
 class LedgerCreatedReceipt(_LedgerReceipt):
@@ -57,38 +75,14 @@ class LedgerSubmissionReceipt(_LedgerReceipt):
     outcome: Annotated[LedgerCreatedOutcome | LedgerRejectedOutcome, Field(discriminator="kind")]
 
 
-class LedgerSubmissionUnfinished(_Evidence):
-    state: Literal["unfinished"]
-    submission_id: UUID = Field(alias="submissionId")
-    command_version: Literal["1"] = Field(alias="commandVersion")
+class LedgerSubmissionUnfinished(_Unfinished):
     operation: Literal["createFinanceLedger"]
     target_ledger_id: None = Field(alias="targetLedgerId")
-    admitted_at: datetime = Field(alias="admittedAt")
 
 
-class LedgerSubmissionTerminal(_Evidence):
-    state: Literal["terminal"]
-    receipt: LedgerSubmissionReceipt
-
-
-class FinanceSubmissionResponse(
-    RootModel[
-        Annotated[
-            LedgerSubmissionUnfinished | LedgerSubmissionTerminal, Field(discriminator="state")
-        ]
-    ]
-):
-    """Known-ID lookup, deliberately excluding canonical content."""
-
-
-class LedgerCommandValidationRejection(_Evidence):
-    kind: Literal["definitivelyNotAdmitted"]
-    submission_id: UUID = Field(alias="submissionId")
-    command_version: Literal["1"] = Field(alias="commandVersion")
-    owner_id: UUID = Field(alias="ownerId")
+class LedgerCommandValidationRejection(_CommandValidationRejection):
     operation: Literal["createFinanceLedger"]
     target_ledger_id: None = Field(alias="targetLedgerId")
-    attempted_body: dict[str, JsonValue] = Field(alias="attemptedBody")
 
 
 class LedgerTerminalProblem(ProblemDetails):
@@ -119,3 +113,178 @@ class LedgerConflictResponse(RootModel[SubmissionNonterminalProblem | LedgerTerm
 
 class LedgerValidationResponse(RootModel[SubmissionNonterminalProblem | LedgerValidationProblem]):
     """Generic validation/version failure or correlated Q29 evidence."""
+
+
+class AccountCreatedResource(_Evidence):
+    type: Literal["account"]
+    id: UUID
+
+
+class AccountCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: AccountCreatedResource
+
+
+class AccountRejectionProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[422]
+    code: Literal["validation_error"]
+    detail: str
+
+
+class AccountRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: AccountRejectionProblem
+
+
+class _AccountReceipt(_Receipt):
+    operation: Literal["createFinanceAccount"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AccountCreatedReceipt(_AccountReceipt):
+    outcome: AccountCreatedOutcome
+
+
+class AccountRejectedReceipt(_AccountReceipt):
+    outcome: AccountRejectedOutcome
+
+
+class AccountSubmissionReceipt(_AccountReceipt):
+    outcome: Annotated[AccountCreatedOutcome | AccountRejectedOutcome, Field(discriminator="kind")]
+
+
+class AccountSubmissionUnfinished(_Unfinished):
+    operation: Literal["createFinanceAccount"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AccountCommandValidationRejection(_CommandValidationRejection):
+    operation: Literal["createFinanceAccount"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AccountTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    submissionReceipt: AccountRejectedReceipt
+
+
+class AccountValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: AccountCommandValidationRejection
+
+
+class AccountValidationResponse(
+    RootModel[SubmissionNonterminalProblem | AccountValidationProblem | AccountTerminalProblem]
+):
+    """Generic validation/version failure or correlated Q29 evidence."""
+
+
+class CategoryCreatedResource(_Evidence):
+    type: Literal["category"]
+    id: UUID
+
+
+class CategoryCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: CategoryCreatedResource
+
+
+class CategoryRejectionProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[409]
+    code: Literal["finance_category_name_conflict"]
+    detail: str
+
+
+class CategoryRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: CategoryRejectionProblem
+
+
+class _CategoryReceipt(_Receipt):
+    operation: Literal["createFinanceCategory"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class CategoryCreatedReceipt(_CategoryReceipt):
+    outcome: CategoryCreatedOutcome
+
+
+class CategoryRejectedReceipt(_CategoryReceipt):
+    outcome: CategoryRejectedOutcome
+
+
+class CategorySubmissionReceipt(_CategoryReceipt):
+    outcome: Annotated[
+        CategoryCreatedOutcome | CategoryRejectedOutcome, Field(discriminator="kind")
+    ]
+
+
+class CategorySubmissionUnfinished(_Unfinished):
+    operation: Literal["createFinanceCategory"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class CategoryCommandValidationRejection(_CommandValidationRejection):
+    operation: Literal["createFinanceCategory"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class CategoryTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[409]
+    code: Literal["finance_category_name_conflict"]
+    submissionReceipt: CategoryRejectedReceipt
+
+
+class CategoryValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: CategoryCommandValidationRejection
+
+
+class CategoryConflictResponse(RootModel[SubmissionNonterminalProblem | CategoryTerminalProblem]):
+    """Nonterminal protocol conflict or terminal business rejection."""
+
+
+class CategoryValidationResponse(
+    RootModel[SubmissionNonterminalProblem | CategoryValidationProblem]
+):
+    """Generic validation/version failure or correlated Q29 evidence."""
+
+
+type SubmissionReceipt = Annotated[
+    LedgerSubmissionReceipt | AccountSubmissionReceipt | CategorySubmissionReceipt,
+    Field(discriminator="operation"),
+]
+type SubmissionValidationProblem = (
+    LedgerValidationProblem | AccountValidationProblem | CategoryValidationProblem
+)
+
+type SubmissionUnfinished = Annotated[
+    LedgerSubmissionUnfinished | AccountSubmissionUnfinished | CategorySubmissionUnfinished,
+    Field(discriminator="operation"),
+]
+
+
+class FinanceSubmissionTerminal(_Evidence):
+    state: Literal["terminal"]
+    receipt: SubmissionReceipt
+
+
+class FinanceSubmissionResponse(
+    RootModel[
+        Annotated[SubmissionUnfinished | FinanceSubmissionTerminal, Field(discriminator="state")]
+    ]
+):
+    """Known-ID lookup, deliberately excluding canonical content."""

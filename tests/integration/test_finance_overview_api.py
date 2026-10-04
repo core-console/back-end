@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -15,7 +16,7 @@ from core_console.app import create_app
 from core_console.config import AuthMode, Environment, Settings
 from core_console.modules.users.models import User
 from core_console.resources import get_application_resources
-from integration.finance_submission_helpers import submission_headers
+from integration.finance_submission_helpers import create_finance_resource, submission_headers
 
 pytestmark = pytest.mark.anyio
 
@@ -119,9 +120,12 @@ async def _create_account(
     nature: str,
     currency: str,
     opening_balance: str,
+    owner_id: UUID,
 ) -> dict[str, Any]:
-    response = await client.post(
+    response = await create_finance_resource(
+        client,
         f"/api/finance/ledgers/{ledger_id}/accounts",
+        owner_id=owner_id,
         json={
             "name": name,
             "nature": nature,
@@ -187,6 +191,7 @@ async def test_overview_returns_present_account_relative_position_and_zero_month
             nature="asset",
             currency="CNY",
             opening_balance="100",
+            owner_id=actor.id,
         )
         card = await _create_account(
             client,
@@ -195,6 +200,7 @@ async def test_overview_returns_present_account_relative_position_and_zero_month
             nature="liability",
             currency="CNY",
             opening_balance="40",
+            owner_id=actor.id,
         )
         dollars = await _create_account(
             client,
@@ -203,6 +209,7 @@ async def test_overview_returns_present_account_relative_position_and_zero_month
             nature="asset",
             currency="USD",
             opening_balance="-5",
+            owner_id=actor.id,
         )
         yen_debt = await _create_account(
             client,
@@ -211,6 +218,7 @@ async def test_overview_returns_present_account_relative_position_and_zero_month
             nature="liability",
             currency="JPY",
             opening_balance="-3",
+            owner_id=actor.id,
         )
         await _create_ordinary(
             client,
@@ -311,6 +319,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             nature="asset",
             currency="CNY",
             opening_balance="0",
+            owner_id=actor.id,
         )
         savings = await _create_account(
             client,
@@ -319,6 +328,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             nature="asset",
             currency="CNY",
             opening_balance="0",
+            owner_id=actor.id,
         )
         dollars = await _create_account(
             client,
@@ -327,6 +337,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             nature="liability",
             currency="USD",
             opening_balance="0",
+            owner_id=actor.id,
         )
         await _create_account(
             client,
@@ -335,6 +346,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             nature="asset",
             currency="JPY",
             opening_balance="0",
+            owner_id=actor.id,
         )
         await _create_ordinary(
             client,
@@ -519,6 +531,7 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
             nature="asset",
             currency="USD",
             opening_balance="999",
+            owner_id=other.id,
         )
         await _create_ordinary(
             client,
@@ -541,6 +554,7 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
             nature="asset",
             currency="CNY",
             opening_balance="1",
+            owner_id=actor.id,
         )
         owned_overview = await client.get(
             f"/api/finance/ledgers/{owned_ledger.json()['outcome']['resource']['id']}/overview",
@@ -611,6 +625,7 @@ async def test_overview_month_boundaries_reflect_replacement_and_deletion_curren
             nature="asset",
             currency="CNY",
             opening_balance="0",
+            owner_id=actor.id,
         )
         income = await _create_ordinary(
             client,
@@ -694,6 +709,7 @@ async def test_overview_reflects_balance_adjustment_replacement_and_removal(
             nature="asset",
             currency="CNY",
             opening_balance="10",
+            owner_id=actor.id,
         )
         created = await client.post(
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",

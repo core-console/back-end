@@ -166,7 +166,7 @@ _OUTSIDE_DURABLE_MONEY_AMOUNT = f"1{'0' * POSTGRESQL_NUMERIC_MAX_INTEGER_DIGITS}
         ),
     ),
 )
-async def test_finance_money_outside_durable_range_returns_422_without_database_work(
+async def test_finance_money_outside_durable_range_returns_422_without_financial_commit(
     app: FastAPI,
     client: AsyncClient,
     method: str,
@@ -178,10 +178,12 @@ async def test_finance_money_outside_durable_range_returns_422_without_database_
     async def fake_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    app.dependency_overrides[get_current_user] = _active_user
+    actor = _active_user()
+    app.dependency_overrides[get_current_user] = lambda: actor
+    cast(AsyncMock, session.scalar).side_effect = [uuid4(), None, uuid4(), None]
     app.dependency_overrides[get_session] = fake_session
 
-    response = await client.request(method, path, json=body)
+    response = await client.request(method, path, json=body, headers=_submission_headers(actor))
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert response.headers["content-type"].startswith("application/problem+json")
@@ -287,10 +289,10 @@ async def test_finance_money_outside_durable_range_returns_422_without_database_
             },
         ),
         (
-            "POST",
-            f"/api/finance/ledgers/{uuid4()}/categories",
+            "PATCH",
+            f"/api/finance/ledgers/{uuid4()}/categories/{uuid4()}",
             {"name": "Food"},
-            "create_finance_category",
+            "update_finance_category",
             FinanceCategoryNameConflictError(),
             {
                 "status": HTTPStatus.CONFLICT,
@@ -461,7 +463,7 @@ async def test_unkeyed_ledger_request_requires_client_update_before_validation(
         {"amount": "10.00", "currency": "USD"},
     ),
 )
-async def test_create_account_rejects_invalid_money_without_database_work(
+async def test_create_account_rejects_invalid_money_without_financial_commit(
     app: FastAPI,
     client: AsyncClient,
     opening_balance: dict[str, object],
@@ -471,11 +473,14 @@ async def test_create_account_rejects_invalid_money_without_database_work(
     async def fake_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    app.dependency_overrides[get_current_user] = _active_user
+    actor = _active_user()
+    app.dependency_overrides[get_current_user] = lambda: actor
+    cast(AsyncMock, session.scalar).side_effect = [uuid4(), None, uuid4(), None]
     app.dependency_overrides[get_session] = fake_session
 
     response = await client.post(
         f"/api/finance/ledgers/{uuid4()}/accounts",
+        headers=_submission_headers(actor),
         json={
             "name": "Cash",
             "nature": "asset",
@@ -563,13 +568,16 @@ async def test_account_requests_require_exact_calendar_tracking_start_dates(
     async def fake_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    app.dependency_overrides[get_current_user] = _active_user
+    actor = _active_user()
+    app.dependency_overrides[get_current_user] = lambda: actor
+    cast(AsyncMock, session.scalar).side_effect = [uuid4(), None, uuid4(), None]
     app.dependency_overrides[get_session] = fake_session
 
     response = await client.request(
         method,
         f"/api/finance/ledgers/{uuid4()}/accounts{path_suffix}",
         json=body,
+        headers=_submission_headers(actor),
     )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
@@ -618,7 +626,7 @@ async def test_overview_requires_an_exact_valid_calendar_month_without_database_
         ("PATCH", f"/{uuid4()}", {"name": "界" * 101}),
     ),
 )
-async def test_category_requests_reject_undeclared_or_invalid_fields_without_database_work(
+async def test_category_requests_reject_undeclared_or_invalid_fields_without_financial_commit(
     app: FastAPI,
     client: AsyncClient,
     method: str,
@@ -630,13 +638,16 @@ async def test_category_requests_reject_undeclared_or_invalid_fields_without_dat
     async def fake_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    app.dependency_overrides[get_current_user] = _active_user
+    actor = _active_user()
+    app.dependency_overrides[get_current_user] = lambda: actor
+    cast(AsyncMock, session.scalar).side_effect = [uuid4(), None, uuid4(), None]
     app.dependency_overrides[get_session] = fake_session
 
     response = await client.request(
         method,
         f"/api/finance/ledgers/{uuid4()}/categories{path_suffix}",
         json=body,
+        headers=_submission_headers(actor),
     )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
@@ -891,3 +902,11 @@ async def test_list_transactions_rejects_invalid_query_without_database_work(
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["code"] == "validation_error"
     cast(AsyncMock, session.execute).assert_not_awaited()
+
+
+def _submission_headers(actor: CurrentUser) -> dict[str, str]:
+    return {
+        "Idempotency-Key": str(uuid4()),
+        "Finance-Command-Version": "1",
+        "Finance-Submission-Owner": str(actor.id),
+    }

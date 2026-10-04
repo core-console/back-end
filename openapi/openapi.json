@@ -1,6 +1,148 @@
 {
   "components": {
     "schemas": {
+      "AccountCommandValidationRejection": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptedBody": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Attemptedbody",
+            "type": "object"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "kind": {
+            "const": "definitivelyNotAdmitted",
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceAccount",
+            "title": "Operation",
+            "type": "string"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "title": "Ownerid",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "submissionId",
+          "commandVersion",
+          "ownerId",
+          "attemptedBody",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "AccountCommandValidationRejection",
+        "type": "object"
+      },
+      "AccountCreatedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "created",
+            "title": "Kind",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/AccountCreatedResource"
+          }
+        },
+        "required": [
+          "kind",
+          "resource"
+        ],
+        "title": "AccountCreatedOutcome",
+        "type": "object"
+      },
+      "AccountCreatedReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceAccount",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AccountCreatedOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AccountCreatedReceipt",
+        "type": "object"
+      },
+      "AccountCreatedResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "account",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "AccountCreatedResource",
+        "type": "object"
+      },
       "AccountReferenceResponse": {
         "additionalProperties": false,
         "description": "Current lightweight Account reference embedded in a Transaction.",
@@ -29,6 +171,110 @@
           "status"
         ],
         "title": "AccountReferenceResponse",
+        "type": "object"
+      },
+      "AccountRejectedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/AccountRejectionProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "AccountRejectedOutcome",
+        "type": "object"
+      },
+      "AccountRejectedReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceAccount",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AccountRejectedOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AccountRejectedReceipt",
+        "type": "object"
+      },
+      "AccountRejectionProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "AccountRejectionProblem",
         "type": "object"
       },
       "AccountResponse": {
@@ -87,6 +333,261 @@
         ],
         "title": "AccountResponse",
         "type": "object"
+      },
+      "AccountSubmissionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceAccount",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "discriminator": {
+              "mapping": {
+                "created": "#/components/schemas/AccountCreatedOutcome",
+                "rejected": "#/components/schemas/AccountRejectedOutcome"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountCreatedOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/AccountRejectedOutcome"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AccountSubmissionReceipt",
+        "type": "object"
+      },
+      "AccountSubmissionUnfinished": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceAccount",
+            "title": "Operation",
+            "type": "string"
+          },
+          "state": {
+            "const": "unfinished",
+            "title": "State",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "AccountSubmissionUnfinished",
+        "type": "object"
+      },
+      "AccountTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/AccountRejectedReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "AccountTerminalProblem",
+        "type": "object"
+      },
+      "AccountValidationProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "commandValidationRejection": {
+            "$ref": "#/components/schemas/AccountCommandValidationRejection"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "errors",
+          "commandValidationRejection"
+        ],
+        "title": "AccountValidationProblem",
+        "type": "object"
+      },
+      "AccountValidationResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/AccountValidationProblem"
+          },
+          {
+            "$ref": "#/components/schemas/AccountTerminalProblem"
+          }
+        ],
+        "description": "Generic validation/version failure or correlated Q29 evidence.",
+        "title": "AccountValidationResponse"
       },
       "ActiveUncategorized": {
         "const": true,
@@ -332,6 +833,160 @@
         "title": "CategoryAllocationResponse",
         "type": "object"
       },
+      "CategoryCommandValidationRejection": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptedBody": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Attemptedbody",
+            "type": "object"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "kind": {
+            "const": "definitivelyNotAdmitted",
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceCategory",
+            "title": "Operation",
+            "type": "string"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "title": "Ownerid",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "submissionId",
+          "commandVersion",
+          "ownerId",
+          "attemptedBody",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "CategoryCommandValidationRejection",
+        "type": "object"
+      },
+      "CategoryConflictResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/CategoryTerminalProblem"
+          }
+        ],
+        "description": "Nonterminal protocol conflict or terminal business rejection.",
+        "title": "CategoryConflictResponse"
+      },
+      "CategoryCreatedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "created",
+            "title": "Kind",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/CategoryCreatedResource"
+          }
+        },
+        "required": [
+          "kind",
+          "resource"
+        ],
+        "title": "CategoryCreatedOutcome",
+        "type": "object"
+      },
+      "CategoryCreatedReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceCategory",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/CategoryCreatedOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "CategoryCreatedReceipt",
+        "type": "object"
+      },
+      "CategoryCreatedResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "category",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "CategoryCreatedResource",
+        "type": "object"
+      },
       "CategoryReferenceResponse": {
         "additionalProperties": false,
         "description": "Current lightweight Category reference embedded in an Allocation.",
@@ -360,6 +1015,110 @@
           "status"
         ],
         "title": "CategoryReferenceResponse",
+        "type": "object"
+      },
+      "CategoryRejectedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/CategoryRejectionProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "CategoryRejectedOutcome",
+        "type": "object"
+      },
+      "CategoryRejectedReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceCategory",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/CategoryRejectedOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "CategoryRejectedReceipt",
+        "type": "object"
+      },
+      "CategoryRejectionProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "finance_category_name_conflict",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 409,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "CategoryRejectionProblem",
         "type": "object"
       },
       "CategoryResponse": {
@@ -392,6 +1151,258 @@
         "title": "CategoryResponse",
         "type": "object"
       },
+      "CategorySubmissionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceCategory",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "discriminator": {
+              "mapping": {
+                "created": "#/components/schemas/CategoryCreatedOutcome",
+                "rejected": "#/components/schemas/CategoryRejectedOutcome"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CategoryCreatedOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/CategoryRejectedOutcome"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "CategorySubmissionReceipt",
+        "type": "object"
+      },
+      "CategorySubmissionUnfinished": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceCategory",
+            "title": "Operation",
+            "type": "string"
+          },
+          "state": {
+            "const": "unfinished",
+            "title": "State",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "CategorySubmissionUnfinished",
+        "type": "object"
+      },
+      "CategoryTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "finance_category_name_conflict",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 409,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/CategoryRejectedReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "CategoryTerminalProblem",
+        "type": "object"
+      },
+      "CategoryValidationProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "commandValidationRejection": {
+            "$ref": "#/components/schemas/CategoryCommandValidationRejection"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "errors",
+          "commandValidationRejection"
+        ],
+        "title": "CategoryValidationProblem",
+        "type": "object"
+      },
+      "CategoryValidationResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/CategoryValidationProblem"
+          }
+        ],
+        "description": "Generic validation/version failure or correlated Q29 evidence.",
+        "title": "CategoryValidationResponse"
+      },
       "CorrectAccountSemanticsRequest": {
         "additionalProperties": false,
         "anyOf": [
@@ -421,43 +1432,6 @@
           }
         },
         "title": "CorrectAccountSemanticsRequest",
-        "type": "object"
-      },
-      "CreateAccountRequest": {
-        "additionalProperties": false,
-        "description": "Explicit creation state for one Finance Account.",
-        "properties": {
-          "currency": {
-            "$ref": "#/components/schemas/CurrencyCode"
-          },
-          "name": {
-            "maxLength": 100,
-            "title": "Name",
-            "type": "string"
-          },
-          "nature": {
-            "enum": [
-              "asset",
-              "liability"
-            ],
-            "title": "Nature",
-            "type": "string"
-          },
-          "openingBalance": {
-            "$ref": "#/components/schemas/MoneyRequest"
-          },
-          "trackingStartDate": {
-            "$ref": "#/components/schemas/FinanceRequestDate"
-          }
-        },
-        "required": [
-          "name",
-          "nature",
-          "currency",
-          "openingBalance",
-          "trackingStartDate"
-        ],
-        "title": "CreateAccountRequest",
         "type": "object"
       },
       "CreateBalanceAdjustmentRequest": {
@@ -507,22 +1481,6 @@
           "targetBalance"
         ],
         "title": "CreateBalanceAdjustmentRequest",
-        "type": "object"
-      },
-      "CreateCategoryRequest": {
-        "additionalProperties": false,
-        "description": "Explicit creation state for one Finance Category.",
-        "properties": {
-          "name": {
-            "maxLength": 100,
-            "title": "Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "title": "CreateCategoryRequest",
         "type": "object"
       },
       "CreateExpenseTransactionRequest": {
@@ -954,20 +1912,39 @@
         "description": "Known-ID lookup, deliberately excluding canonical content.",
         "discriminator": {
           "mapping": {
-            "terminal": "#/components/schemas/LedgerSubmissionTerminal",
-            "unfinished": "#/components/schemas/LedgerSubmissionUnfinished"
+            "terminal": "#/components/schemas/FinanceSubmissionTerminal",
+            "unfinished": "#/components/schemas/SubmissionUnfinished"
           },
           "propertyName": "state"
         },
         "oneOf": [
           {
-            "$ref": "#/components/schemas/LedgerSubmissionUnfinished"
+            "$ref": "#/components/schemas/SubmissionUnfinished"
           },
           {
-            "$ref": "#/components/schemas/LedgerSubmissionTerminal"
+            "$ref": "#/components/schemas/FinanceSubmissionTerminal"
           }
         ],
         "title": "FinanceSubmissionResponse"
+      },
+      "FinanceSubmissionTerminal": {
+        "additionalProperties": false,
+        "properties": {
+          "receipt": {
+            "$ref": "#/components/schemas/SubmissionReceipt"
+          },
+          "state": {
+            "const": "terminal",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "receipt"
+        ],
+        "title": "FinanceSubmissionTerminal",
+        "type": "object"
       },
       "FinanceTransactionResponse": {
         "discriminator": {
@@ -1239,9 +2216,9 @@
           "submissionId",
           "commandVersion",
           "ownerId",
+          "attemptedBody",
           "operation",
-          "targetLedgerId",
-          "attemptedBody"
+          "targetLedgerId"
         ],
         "title": "LedgerCommandValidationRejection",
         "type": "object"
@@ -1316,10 +2293,10 @@
         "required": [
           "submissionId",
           "commandVersion",
-          "operation",
-          "targetLedgerId",
           "admittedAt",
           "resolvedAt",
+          "operation",
+          "targetLedgerId",
           "outcome"
         ],
         "title": "LedgerCreatedReceipt",
@@ -1404,10 +2381,10 @@
         "required": [
           "submissionId",
           "commandVersion",
-          "operation",
-          "targetLedgerId",
           "admittedAt",
           "resolvedAt",
+          "operation",
+          "targetLedgerId",
           "outcome"
         ],
         "title": "LedgerRejectedReceipt",
@@ -1524,32 +2501,13 @@
         "required": [
           "submissionId",
           "commandVersion",
-          "operation",
-          "targetLedgerId",
           "admittedAt",
           "resolvedAt",
+          "operation",
+          "targetLedgerId",
           "outcome"
         ],
         "title": "LedgerSubmissionReceipt",
-        "type": "object"
-      },
-      "LedgerSubmissionTerminal": {
-        "additionalProperties": false,
-        "properties": {
-          "receipt": {
-            "$ref": "#/components/schemas/LedgerSubmissionReceipt"
-          },
-          "state": {
-            "const": "terminal",
-            "title": "State",
-            "type": "string"
-          }
-        },
-        "required": [
-          "state",
-          "receipt"
-        ],
-        "title": "LedgerSubmissionTerminal",
         "type": "object"
       },
       "LedgerSubmissionUnfinished": {
@@ -1589,9 +2547,9 @@
           "state",
           "submissionId",
           "commandVersion",
+          "admittedAt",
           "operation",
-          "targetLedgerId",
-          "admittedAt"
+          "targetLedgerId"
         ],
         "title": "LedgerSubmissionUnfinished",
         "type": "object"
@@ -2195,6 +3153,48 @@
         "title": "SubmissionNonterminalProblem",
         "type": "object"
       },
+      "SubmissionReceipt": {
+        "discriminator": {
+          "mapping": {
+            "createFinanceAccount": "#/components/schemas/AccountSubmissionReceipt",
+            "createFinanceCategory": "#/components/schemas/CategorySubmissionReceipt",
+            "createFinanceLedger": "#/components/schemas/LedgerSubmissionReceipt"
+          },
+          "propertyName": "operation"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LedgerSubmissionReceipt"
+          },
+          {
+            "$ref": "#/components/schemas/AccountSubmissionReceipt"
+          },
+          {
+            "$ref": "#/components/schemas/CategorySubmissionReceipt"
+          }
+        ]
+      },
+      "SubmissionUnfinished": {
+        "discriminator": {
+          "mapping": {
+            "createFinanceAccount": "#/components/schemas/AccountSubmissionUnfinished",
+            "createFinanceCategory": "#/components/schemas/CategorySubmissionUnfinished",
+            "createFinanceLedger": "#/components/schemas/LedgerSubmissionUnfinished"
+          },
+          "propertyName": "operation"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LedgerSubmissionUnfinished"
+          },
+          {
+            "$ref": "#/components/schemas/AccountSubmissionUnfinished"
+          },
+          {
+            "$ref": "#/components/schemas/CategorySubmissionUnfinished"
+          }
+        ]
+      },
       "TransactionCountByKindResponse": {
         "additionalProperties": false,
         "description": "Finance Transaction counts for all four durable kinds.",
@@ -2575,7 +3575,6 @@
             "application/json": {
               "schema": {
                 "additionalProperties": false,
-                "description": "Frozen v1 validity, independent of mutable Finance request schemas.",
                 "properties": {
                   "name": {
                     "maxLength": 100,
@@ -2876,7 +3875,7 @@
         ]
       },
       "post": {
-        "description": "Creates one account-relative position inside an owned Finance Ledger.",
+        "description": "Admits an Account v1 command and returns its immutable terminal receipt.",
         "operationId": "createFinanceAccount",
         "parameters": [
           {
@@ -2888,13 +3887,102 @@
               "title": "Ledgerid",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Command-Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Submission-Owner",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateAccountRequest"
+                "additionalProperties": false,
+                "properties": {
+                  "currency": {
+                    "enum": [
+                      "CNY",
+                      "JPY",
+                      "USD"
+                    ],
+                    "title": "Currency",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "nature": {
+                    "enum": [
+                      "asset",
+                      "liability"
+                    ],
+                    "title": "Nature",
+                    "type": "string"
+                  },
+                  "openingBalance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency": {
+                        "enum": [
+                          "CNY",
+                          "JPY",
+                          "USD"
+                        ],
+                        "title": "Currency",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount",
+                      "currency"
+                    ],
+                    "title": "OpeningBalanceV1",
+                    "type": "object"
+                  },
+                  "trackingStartDate": {
+                    "format": "date",
+                    "title": "Trackingstartdate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "nature",
+                  "currency",
+                  "openingBalance",
+                  "trackingStartDate"
+                ],
+                "title": "AccountCommandV1",
+                "type": "object"
               }
             }
           },
@@ -2905,11 +3993,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountResponse"
+                  "$ref": "#/components/schemas/AccountCreatedReceipt"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Submission headers are required and must be valid."
           },
           "403": {
             "content": {
@@ -2919,7 +4017,7 @@
                 }
               }
             },
-            "description": "Access is denied."
+            "description": "Access or owner assertion denied."
           },
           "404": {
             "content": {
@@ -2929,17 +4027,27 @@
                 }
               }
             },
-            "description": "The Ledger does not exist."
+            "description": "Stored submission scope is unavailable."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+                }
+              }
+            },
+            "description": "Terminal business rejection or nonterminal submission conflict."
           },
           "422": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/AccountValidationResponse"
                 }
               }
             },
-            "description": "The request is invalid."
+            "description": "Unsupported version, generic validation, or guarded Q29 evidence."
           },
           "500": {
             "content": {
@@ -2949,7 +4057,7 @@
                 }
               }
             },
-            "description": "An unexpected error occurred."
+            "description": "Unexpected failure; outcome remains unresolved."
           },
           "503": {
             "content": {
@@ -3721,7 +4829,7 @@
         ]
       },
       "post": {
-        "description": "Creates one neutral Category inside an owned Finance Ledger.",
+        "description": "Admits a Category v1 command and returns its immutable terminal receipt.",
         "operationId": "createFinanceCategory",
         "parameters": [
           {
@@ -3733,13 +4841,51 @@
               "title": "Ledgerid",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Command-Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Submission-Owner",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateCategoryRequest"
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 100,
+                    "title": "Name",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "title": "CategoryCommandV1",
+                "type": "object"
               }
             }
           },
@@ -3750,11 +4896,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CategoryResponse"
+                  "$ref": "#/components/schemas/CategoryCreatedReceipt"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Submission headers are required and must be valid."
           },
           "403": {
             "content": {
@@ -3764,7 +4920,7 @@
                 }
               }
             },
-            "description": "Access is denied."
+            "description": "Access or owner assertion denied."
           },
           "404": {
             "content": {
@@ -3774,27 +4930,27 @@
                 }
               }
             },
-            "description": "The Ledger does not exist."
+            "description": "Stored submission scope is unavailable."
           },
           "409": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/CategoryConflictResponse"
                 }
               }
             },
-            "description": "The Category name conflicts."
+            "description": "Terminal business rejection or nonterminal submission conflict."
           },
           "422": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/CategoryValidationResponse"
                 }
               }
             },
-            "description": "The request is invalid."
+            "description": "Unsupported version, generic validation, or guarded Q29 evidence."
           },
           "500": {
             "content": {
@@ -3804,7 +4960,7 @@
                 }
               }
             },
-            "description": "An unexpected error occurred."
+            "description": "Unexpected failure; outcome remains unresolved."
           },
           "503": {
             "content": {
