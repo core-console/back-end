@@ -141,6 +141,7 @@ async def _create_account(
 async def _create_ordinary(
     client: AsyncClient,
     *,
+    owner_id: UUID,
     ledger_id: str,
     account_id: str,
     kind: str,
@@ -148,8 +149,10 @@ async def _create_ordinary(
     amount: str,
     transaction_date: str,
 ) -> dict[str, Any]:
-    response = await client.post(
+    response = await create_finance_resource(
+        client,
         f"/api/finance/ledgers/{ledger_id}/transactions",
+        owner_id=owner_id,
         json={
             "kind": kind,
             "accountId": account_id,
@@ -228,6 +231,7 @@ async def test_overview_returns_present_account_relative_position_and_zero_month
             currency="CNY",
             amount="10",
             transaction_date="2027-01-01",
+            owner_id=actor.id,
         )
         archived = await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts/{card['id']}/archive"
@@ -356,6 +360,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             currency="CNY",
             amount="10",
             transaction_date="2024-02-01",
+            owner_id=actor.id,
         )
         await _create_ordinary(
             client,
@@ -365,6 +370,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             currency="CNY",
             amount="4",
             transaction_date="2024-02-29",
+            owner_id=actor.id,
         )
         await _create_ordinary(
             client,
@@ -374,9 +380,12 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             currency="USD",
             amount="7",
             transaction_date="2024-02-29",
+            owner_id=actor.id,
         )
-        transfer = await client.post(
+        transfer = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/transactions",
+            owner_id=actor.id,
             json={
                 "kind": "internalTransfer",
                 "sourceAccountId": cash["id"],
@@ -541,6 +550,7 @@ async def test_overview_uses_owned_ledger_scope_and_exact_required_month(
             currency="USD",
             amount="111",
             transaction_date="2026-08-01",
+            owner_id=other.id,
         )
 
     async with _finance_client(database_url=postgres_database_url, actor=actor) as client:
@@ -635,6 +645,7 @@ async def test_overview_month_boundaries_reflect_replacement_and_deletion_curren
             currency="CNY",
             amount="10",
             transaction_date="2026-12-31",
+            owner_id=actor.id,
         )
         await _create_ordinary(
             client,
@@ -644,6 +655,7 @@ async def test_overview_month_boundaries_reflect_replacement_and_deletion_curren
             currency="CNY",
             amount="2",
             transaction_date="2027-01-01",
+            owner_id=actor.id,
         )
         december_before = await client.get(
             f"/api/finance/ledgers/{ledger_id}/overview", params={"month": "2026-12"}

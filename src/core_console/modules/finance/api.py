@@ -47,7 +47,6 @@ from core_console.modules.finance.schemas import (
     CategoryResponse,
     CorrectAccountSemanticsRequest,
     CreateBalanceAdjustmentRequest,
-    CreateFinanceTransactionRequest,
     CurrencyResponse,
     ExpenseTransactionResponse,
     FinanceRequestDate,
@@ -87,8 +86,6 @@ from core_console.modules.finance.service import (
     archive_finance_category,
     correct_finance_account_semantics,
     create_balance_adjustment,
-    create_finance_transaction,
-    create_internal_transfer_transaction,
     delete_finance_transaction,
     get_balance_adjustment_context,
     get_finance_overview,
@@ -1090,62 +1087,6 @@ async def put_balance_adjustment(
             target_balance=request.target_balance.to_money(),
             note=request.note,
             project=_to_replace_balance_adjustment_result_response,
-        )
-    )
-
-
-@router.post(
-    "/ledgers/{ledgerId}/transactions",
-    operation_id="createFinanceTransaction",
-    summary="Create a Finance Transaction",
-    status_code=HTTPStatus.CREATED,
-    response_model=FinanceTransactionResponse,
-    responses={
-        403: {"model": ProblemDetails, "description": "Access is denied."},
-        404: {"model": ProblemDetails, "description": "The resource does not exist."},
-        409: {"model": ProblemDetails, "description": "The resource is archived."},
-        422: {"model": ProblemDetails, "description": "The request is invalid."},
-        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
-        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
-    },
-    openapi_extra={"security": []},
-)
-async def post_transaction(
-    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
-    request: CreateFinanceTransactionRequest,
-    actor: Annotated[CurrentUser, Depends(require_active_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> FinanceTransactionResponse:
-    """Create one supported Finance Transaction."""
-
-    if request.kind == "internalTransfer":
-        return await _run_finance_workflow(
-            create_internal_transfer_transaction(
-                session,
-                owner_id=actor.id,
-                ledger_id=ledger_id,
-                source_account_id=request.source_account_id,
-                destination_account_id=request.destination_account_id,
-                transaction_date=request.transaction_date,
-                amount=request.amount.to_money(),
-                note=request.note,
-                project=_to_transaction_response,
-            )
-        )
-    allocation = request.category_allocations[0]
-    return await _run_finance_workflow(
-        create_finance_transaction(
-            session,
-            owner_id=actor.id,
-            ledger_id=ledger_id,
-            kind=request.kind,
-            account_id=request.account_id,
-            transaction_date=request.transaction_date,
-            economic_amount=request.economic_amount.to_money(),
-            allocation_amount=allocation.amount.to_money(),
-            category_id=allocation.category_id,
-            note=request.note,
-            project=_to_transaction_response,
         )
     )
 

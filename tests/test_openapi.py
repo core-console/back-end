@@ -401,19 +401,15 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
     assert delete_operation["security"] == []
 
     request_union = create_operation["requestBody"]["content"]["application/json"]["schema"]
-    assert request_union["discriminator"] == {
-        "propertyName": "kind",
-        "mapping": {
-            "income": "#/components/schemas/CreateIncomeTransactionRequest",
-            "expense": "#/components/schemas/CreateExpenseTransactionRequest",
-            "internalTransfer": ("#/components/schemas/CreateInternalTransferTransactionRequest"),
-        },
-    }
-    assert request_union["oneOf"] == [
-        {"$ref": "#/components/schemas/CreateIncomeTransactionRequest"},
-        {"$ref": "#/components/schemas/CreateExpenseTransactionRequest"},
-        {"$ref": "#/components/schemas/CreateInternalTransferTransactionRequest"},
+    assert request_union["discriminator"] == {"propertyName": "kind"}
+    assert [branch["properties"]["kind"]["const"] for branch in request_union["oneOf"]] == [
+        "income",
+        "expense",
+        "internalTransfer",
     ]
+    for branch in request_union["oneOf"]:
+        assert branch["additionalProperties"] is False
+        assert branch["properties"]["transactionDate"]["format"] == "date"
     replacement_union = replace_operation["requestBody"]["content"]["application/json"]["schema"]
     assert replacement_union["discriminator"] == {
         "propertyName": "kind",
@@ -462,7 +458,7 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
         "note",
     }
     for kind in ("Income", "Expense"):
-        request_schema = schema["components"]["schemas"][f"Create{kind}TransactionRequest"]
+        request_schema = request_union["oneOf"][0 if kind == "Income" else 1]
         replacement_schema = schema["components"]["schemas"][f"Replace{kind}TransactionRequest"]
         response_schema = schema["components"]["schemas"][f"{kind}TransactionResponse"]
         assert request_schema["additionalProperties"] is False
@@ -480,7 +476,7 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
         assert request_schema["properties"]["note"]["maxLength"] == 500
         assert response_schema["properties"]["note"]["anyOf"][0]["maxLength"] == 500
 
-    transfer_request = schema["components"]["schemas"]["CreateInternalTransferTransactionRequest"]
+    transfer_request = request_union["oneOf"][2]
     transfer_replacement = schema["components"]["schemas"][
         "ReplaceInternalTransferTransactionRequest"
     ]
@@ -495,8 +491,8 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
         "note",
     }
     assert transfer_replacement["additionalProperties"] is False
-    assert transfer_replacement["properties"] == transfer_request["properties"]
-    assert transfer_replacement["required"] == transfer_request["required"]
+    assert set(transfer_replacement["properties"]) == set(transfer_request["properties"])
+    assert set(transfer_replacement["required"]) == set(transfer_request["required"])
     assert transfer_response["additionalProperties"] is False
     assert set(transfer_response["properties"]) == {
         "id",
@@ -514,14 +510,19 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
         for status, response in operation["responses"].items():
             if status.startswith("2"):
                 assert response["content"]["application/json"]["schema"] == {
-                    "$ref": "#/components/schemas/FinanceTransactionResponse"
+                    "$ref": (
+                        "#/components/schemas/TransactionCreatedReceipt"
+                        if operation is create_operation
+                        else "#/components/schemas/FinanceTransactionResponse"
+                    )
                 }
                 continue
             assert set(response["content"]) == {"application/problem+json"}
-            assert (
-                response["content"]["application/problem+json"]["schema"]["$ref"]
-                == "#/components/schemas/ProblemDetails"
-            )
+            if operation is not create_operation:
+                assert (
+                    response["content"]["application/problem+json"]["schema"]["$ref"]
+                    == "#/components/schemas/ProblemDetails"
+                )
     assert delete_operation["responses"]["204"] == {"description": "Successful Response"}
     for status, response in delete_operation["responses"].items():
         if status == "204":

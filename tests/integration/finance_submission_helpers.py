@@ -18,7 +18,7 @@ async def create_finance_resource(
 ) -> Response:
     """Assert a fresh nested-create receipt, then read its current resource.
 
-    Existing lifecycle tests need Account/Category projections for subsequent
+    Existing lifecycle tests need Account/Category/Transaction projections for subsequent
     edits and Transactions. Submission tests use POST directly to test evidence.
     Failed creates retain their real Problem Details, including terminal evidence.
     """
@@ -27,12 +27,20 @@ async def create_finance_resource(
     if response.status_code != 201:
         return response
     receipt = response.json()
-    resource_type = "account" if path.endswith("/accounts") else "category"
+    resource_type = {
+        "accounts": "account",
+        "categories": "category",
+        "transactions": "transaction",
+    }[path.rsplit("/", 1)[1]]
     assert receipt["submissionId"] == headers["Idempotency-Key"]
     assert receipt["operation"] == f"createFinance{resource_type.title()}"
     assert receipt["targetLedgerId"] == path.split("/")[-2]
     resource = receipt["outcome"]["resource"]
     assert resource["type"] == resource_type
+    if resource_type == "transaction":
+        current = await client.get(f"{path}/{resource['id']}")
+        assert current.status_code == 200
+        return Response(201, json=current.json(), request=response.request)
     listed = await client.get(path)
     assert listed.status_code == 200
     current = next(item for item in listed.json() if item["id"] == resource["id"])

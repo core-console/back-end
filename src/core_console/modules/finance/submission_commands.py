@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal
 from re import fullmatch
 from typing import Annotated, Literal, Self
+from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
@@ -112,6 +113,109 @@ class AccountCommandV1(BaseModel):
         }
 
 
+class _TransactionCommandV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    transaction_date: Annotated[date, BeforeValidator(_civil_date_v1)] = Field(
+        alias="transactionDate"
+    )
+    note: str | None = Field(default=None, strict=True, json_schema_extra={"maxLength": 500})
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) > 500:
+            raise ValueError("Transaction note must not exceed 500 characters.")
+        return value or None
+
+
+class AllocationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: OpeningBalanceV1
+    category_id: UUID | None = Field(default=None, alias="categoryId")
+
+
+class OrdinaryTransactionCommandV1(_TransactionCommandV1):
+    kind: Literal["income", "expense"]
+    account_id: UUID = Field(alias="accountId")
+    economic_amount: OpeningBalanceV1 = Field(alias="economicAmount")
+    category_allocations: list[AllocationV1] = Field(
+        alias="categoryAllocations", min_length=1, max_length=1
+    )
+
+    @model_validator(mode="after")
+    def complete_allocation(self) -> Self:
+        allocation = self.category_allocations[0].amount
+        economic = self.economic_amount
+        if Decimal(economic.amount) <= 0 or Decimal(allocation.amount) <= 0:
+            raise ValueError("Economic Amount and Category Allocation amount must be positive.")
+        if allocation.currency != economic.currency or Decimal(allocation.amount) != Decimal(
+            economic.amount
+        ):
+            raise ValueError("The Category Allocation must equal the complete Economic Amount.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "accountId": str(self.account_id),
+            "transactionDate": self.transaction_date.isoformat(),
+            "economicAmount": self.economic_amount.canonical(),
+            "categoryAllocations": [
+                {
+                    "amount": allocation.amount.canonical(),
+                    "categoryId": (
+                        str(allocation.category_id) if allocation.category_id is not None else None
+                    ),
+                }
+                for allocation in self.category_allocations
+            ],
+            "note": self.note,
+        }
+
+
+class IncomeCommandV1(OrdinaryTransactionCommandV1):
+    kind: Literal["income"]
+
+
+class ExpenseCommandV1(OrdinaryTransactionCommandV1):
+    kind: Literal["expense"]
+
+
+class TransferCommandV1(_TransactionCommandV1):
+    kind: Literal["internalTransfer"]
+    source_account_id: UUID = Field(alias="sourceAccountId")
+    destination_account_id: UUID = Field(alias="destinationAccountId")
+    amount: OpeningBalanceV1
+
+    @model_validator(mode="after")
+    def valid_transfer(self) -> Self:
+        if self.source_account_id == self.destination_account_id:
+            raise ValueError("Source and Destination Accounts must be distinct.")
+        if Decimal(self.amount.amount) <= 0:
+            raise ValueError("Transfer amount must be positive.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "sourceAccountId": str(self.source_account_id),
+            "destinationAccountId": str(self.destination_account_id),
+            "amount": self.amount.canonical(),
+            "transactionDate": self.transaction_date.isoformat(),
+            "note": self.note,
+        }
+
+
+type TransactionCommandV1 = Annotated[
+    IncomeCommandV1 | ExpenseCommandV1 | TransferCommandV1, Field(discriminator="kind")
+]
+
 type CreateOperation = Literal[
-    "createFinanceLedger", "createFinanceAccount", "createFinanceCategory"
+    "createFinanceLedger",
+    "createFinanceAccount",
+    "createFinanceCategory",
+    "createFinanceTransaction",
 ]

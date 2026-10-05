@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 from psycopg import OperationalError as PsycopgOperationalError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,7 @@ from core_console.modules.finance.service import (
     FinanceLedgerNotFoundError,
     FinanceTransactionNotFoundError,
 )
+from core_console.modules.finance.submission_commands import TransactionCommandV1
 from core_console.modules.users.dependencies import get_current_user
 from core_console.modules.users.identity import CurrentUser
 
@@ -302,8 +304,8 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
             },
         ),
         (
-            "POST",
-            f"/api/finance/ledgers/{uuid4()}/transactions",
+            "PUT",
+            f"/api/finance/ledgers/{uuid4()}/transactions/{uuid4()}",
             {
                 "kind": "income",
                 "accountId": str(uuid4()),
@@ -311,7 +313,7 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
                 "economicAmount": {"amount": "10.00", "currency": "CNY"},
                 "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
             },
-            "create_finance_transaction",
+            "replace_finance_transaction",
             FinanceAccountArchivedError(),
             {
                 "status": HTTPStatus.CONFLICT,
@@ -321,8 +323,8 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
             },
         ),
         (
-            "POST",
-            f"/api/finance/ledgers/{uuid4()}/transactions",
+            "PUT",
+            f"/api/finance/ledgers/{uuid4()}/transactions/{uuid4()}",
             {
                 "kind": "income",
                 "accountId": str(uuid4()),
@@ -330,7 +332,7 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
                 "economicAmount": {"amount": "10.00", "currency": "CNY"},
                 "categoryAllocations": [{"amount": {"amount": "10.00", "currency": "CNY"}}],
             },
-            "create_finance_transaction",
+            "replace_finance_transaction",
             FinanceCategoryArchivedError(),
             {
                 "status": HTTPStatus.CONFLICT,
@@ -736,27 +738,11 @@ async def test_category_requests_reject_undeclared_or_invalid_fields_without_fin
         },
     ),
 )
-async def test_create_transaction_rejects_invalid_public_contract_without_database_work(
-    app: FastAPI,
-    client: AsyncClient,
+async def test_transaction_v1_rejects_immutable_invalid_public_contract(
     body: dict[str, object],
 ) -> None:
-    session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
-
-    async def fake_session() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    app.dependency_overrides[get_current_user] = _active_user
-    app.dependency_overrides[get_session] = fake_session
-
-    response = await client.post(
-        f"/api/finance/ledgers/{uuid4()}/transactions",
-        json=body,
-    )
-
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-    assert response.headers["content-type"].startswith("application/problem+json")
-    assert response.json()["code"] == "validation_error"
+    with pytest.raises(ValidationError):
+        TypeAdapter(TransactionCommandV1).validate_python(body)
 
 
 @pytest.mark.parametrize(

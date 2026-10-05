@@ -1483,158 +1483,6 @@
         "title": "CreateBalanceAdjustmentRequest",
         "type": "object"
       },
-      "CreateExpenseTransactionRequest": {
-        "additionalProperties": false,
-        "description": "Record value spent outside the Finance Ledger.",
-        "properties": {
-          "accountId": {
-            "format": "uuid",
-            "title": "Accountid",
-            "type": "string"
-          },
-          "categoryAllocations": {
-            "items": {
-              "$ref": "#/components/schemas/CategoryAllocationRequest"
-            },
-            "maxItems": 1,
-            "minItems": 1,
-            "title": "Categoryallocations",
-            "type": "array"
-          },
-          "economicAmount": {
-            "$ref": "#/components/schemas/MoneyRequest"
-          },
-          "kind": {
-            "const": "expense",
-            "title": "Kind",
-            "type": "string"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 500,
-            "title": "Note"
-          },
-          "transactionDate": {
-            "$ref": "#/components/schemas/FinanceRequestDate"
-          }
-        },
-        "required": [
-          "accountId",
-          "transactionDate",
-          "economicAmount",
-          "categoryAllocations",
-          "kind"
-        ],
-        "title": "CreateExpenseTransactionRequest",
-        "type": "object"
-      },
-      "CreateIncomeTransactionRequest": {
-        "additionalProperties": false,
-        "description": "Record value received from outside the Finance Ledger.",
-        "properties": {
-          "accountId": {
-            "format": "uuid",
-            "title": "Accountid",
-            "type": "string"
-          },
-          "categoryAllocations": {
-            "items": {
-              "$ref": "#/components/schemas/CategoryAllocationRequest"
-            },
-            "maxItems": 1,
-            "minItems": 1,
-            "title": "Categoryallocations",
-            "type": "array"
-          },
-          "economicAmount": {
-            "$ref": "#/components/schemas/MoneyRequest"
-          },
-          "kind": {
-            "const": "income",
-            "title": "Kind",
-            "type": "string"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 500,
-            "title": "Note"
-          },
-          "transactionDate": {
-            "$ref": "#/components/schemas/FinanceRequestDate"
-          }
-        },
-        "required": [
-          "accountId",
-          "transactionDate",
-          "economicAmount",
-          "categoryAllocations",
-          "kind"
-        ],
-        "title": "CreateIncomeTransactionRequest",
-        "type": "object"
-      },
-      "CreateInternalTransferTransactionRequest": {
-        "additionalProperties": false,
-        "description": "Record one atomic same-currency Transfer between two Accounts.",
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/MoneyRequest"
-          },
-          "destinationAccountId": {
-            "format": "uuid",
-            "title": "Destinationaccountid",
-            "type": "string"
-          },
-          "kind": {
-            "const": "internalTransfer",
-            "title": "Kind",
-            "type": "string"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 500,
-            "title": "Note"
-          },
-          "sourceAccountId": {
-            "format": "uuid",
-            "title": "Sourceaccountid",
-            "type": "string"
-          },
-          "transactionDate": {
-            "$ref": "#/components/schemas/FinanceRequestDate"
-          }
-        },
-        "required": [
-          "kind",
-          "sourceAccountId",
-          "destinationAccountId",
-          "amount",
-          "transactionDate"
-        ],
-        "title": "CreateInternalTransferTransactionRequest",
-        "type": "object"
-      },
       "CreateUserRequest": {
         "additionalProperties": false,
         "description": "Administrator-supplied profile and immutable external identity.",
@@ -3158,7 +3006,8 @@
           "mapping": {
             "createFinanceAccount": "#/components/schemas/AccountSubmissionReceipt",
             "createFinanceCategory": "#/components/schemas/CategorySubmissionReceipt",
-            "createFinanceLedger": "#/components/schemas/LedgerSubmissionReceipt"
+            "createFinanceLedger": "#/components/schemas/LedgerSubmissionReceipt",
+            "createFinanceTransaction": "#/components/schemas/TransactionSubmissionReceipt"
           },
           "propertyName": "operation"
         },
@@ -3171,6 +3020,9 @@
           },
           {
             "$ref": "#/components/schemas/CategorySubmissionReceipt"
+          },
+          {
+            "$ref": "#/components/schemas/TransactionSubmissionReceipt"
           }
         ]
       },
@@ -3179,7 +3031,8 @@
           "mapping": {
             "createFinanceAccount": "#/components/schemas/AccountSubmissionUnfinished",
             "createFinanceCategory": "#/components/schemas/CategorySubmissionUnfinished",
-            "createFinanceLedger": "#/components/schemas/LedgerSubmissionUnfinished"
+            "createFinanceLedger": "#/components/schemas/LedgerSubmissionUnfinished",
+            "createFinanceTransaction": "#/components/schemas/TransactionSubmissionUnfinished"
           },
           "propertyName": "operation"
         },
@@ -3192,8 +3045,246 @@
           },
           {
             "$ref": "#/components/schemas/CategorySubmissionUnfinished"
+          },
+          {
+            "$ref": "#/components/schemas/TransactionSubmissionUnfinished"
           }
         ]
+      },
+      "TransactionArchivedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/TransactionArchivedProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "TransactionArchivedOutcome",
+        "type": "object"
+      },
+      "TransactionArchivedProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "finance_account_archived",
+              "finance_category_archived"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 409,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "TransactionArchivedProblem",
+        "type": "object"
+      },
+      "TransactionArchivedReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TransactionArchivedOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "TransactionArchivedReceipt",
+        "type": "object"
+      },
+      "TransactionArchivedTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "finance_account_archived",
+              "finance_category_archived"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 409,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/TransactionArchivedReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "TransactionArchivedTerminalProblem",
+        "type": "object"
+      },
+      "TransactionCommandValidationRejection": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptedBody": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Attemptedbody",
+            "type": "object"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "kind": {
+            "const": "definitivelyNotAdmitted",
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "title": "Ownerid",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "submissionId",
+          "commandVersion",
+          "ownerId",
+          "attemptedBody",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "TransactionCommandValidationRejection",
+        "type": "object"
+      },
+      "TransactionConflictResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/TransactionArchivedTerminalProblem"
+          }
+        ],
+        "description": "Unresolved failures or immutable Transaction business rejection.",
+        "title": "TransactionConflictResponse"
       },
       "TransactionCountByKindResponse": {
         "additionalProperties": false,
@@ -3229,6 +3320,95 @@
         "title": "TransactionCountByKindResponse",
         "type": "object"
       },
+      "TransactionCreatedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "created",
+            "title": "Kind",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/TransactionCreatedResource"
+          }
+        },
+        "required": [
+          "kind",
+          "resource"
+        ],
+        "title": "TransactionCreatedOutcome",
+        "type": "object"
+      },
+      "TransactionCreatedReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TransactionCreatedOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "TransactionCreatedReceipt",
+        "type": "object"
+      },
+      "TransactionCreatedResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "transaction",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "TransactionCreatedResource",
+        "type": "object"
+      },
       "TransactionHistoryPageResponse": {
         "additionalProperties": false,
         "description": "One closed cursor page of complete Finance Transactions.",
@@ -3258,6 +3438,587 @@
         ],
         "title": "TransactionHistoryPageResponse",
         "type": "object"
+      },
+      "TransactionInvalidOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/TransactionInvalidProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "TransactionInvalidOutcome",
+        "type": "object"
+      },
+      "TransactionInvalidProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "TransactionInvalidProblem",
+        "type": "object"
+      },
+      "TransactionInvalidReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TransactionInvalidOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "TransactionInvalidReceipt",
+        "type": "object"
+      },
+      "TransactionInvalidTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/TransactionInvalidReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "TransactionInvalidTerminalProblem",
+        "type": "object"
+      },
+      "TransactionMissingOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/TransactionMissingProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "TransactionMissingOutcome",
+        "type": "object"
+      },
+      "TransactionMissingProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "finance_account_not_found",
+              "finance_category_not_found"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 404,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "TransactionMissingProblem",
+        "type": "object"
+      },
+      "TransactionMissingReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TransactionMissingOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "TransactionMissingReceipt",
+        "type": "object"
+      },
+      "TransactionMissingTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "finance_account_not_found",
+              "finance_category_not_found"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 404,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/TransactionMissingReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "TransactionMissingTerminalProblem",
+        "type": "object"
+      },
+      "TransactionNotFoundResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/TransactionMissingTerminalProblem"
+          }
+        ],
+        "description": "Unavailable scope or immutable missing Account/Category rejection.",
+        "title": "TransactionNotFoundResponse"
+      },
+      "TransactionRejectedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "discriminator": {
+              "mapping": {
+                "finance_account_archived": "#/components/schemas/TransactionArchivedProblem",
+                "finance_account_not_found": "#/components/schemas/TransactionMissingProblem",
+                "finance_category_archived": "#/components/schemas/TransactionArchivedProblem",
+                "finance_category_not_found": "#/components/schemas/TransactionMissingProblem",
+                "validation_error": "#/components/schemas/TransactionInvalidProblem"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransactionInvalidProblem"
+              },
+              {
+                "$ref": "#/components/schemas/TransactionArchivedProblem"
+              },
+              {
+                "$ref": "#/components/schemas/TransactionMissingProblem"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "TransactionRejectedOutcome",
+        "type": "object"
+      },
+      "TransactionSubmissionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "discriminator": {
+              "mapping": {
+                "created": "#/components/schemas/TransactionCreatedOutcome",
+                "rejected": "#/components/schemas/TransactionRejectedOutcome"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransactionCreatedOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/TransactionRejectedOutcome"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "TransactionSubmissionReceipt",
+        "type": "object"
+      },
+      "TransactionSubmissionUnfinished": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createFinanceTransaction",
+            "title": "Operation",
+            "type": "string"
+          },
+          "state": {
+            "const": "unfinished",
+            "title": "State",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "TransactionSubmissionUnfinished",
+        "type": "object"
+      },
+      "TransactionValidationProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "commandValidationRejection": {
+            "$ref": "#/components/schemas/TransactionCommandValidationRejection"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "errors",
+          "commandValidationRejection"
+        ],
+        "title": "TransactionValidationProblem",
+        "type": "object"
+      },
+      "TransactionValidationResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/TransactionValidationProblem"
+          },
+          {
+            "$ref": "#/components/schemas/TransactionInvalidTerminalProblem"
+          }
+        ],
+        "description": "Distinguish unresolved validation, Q29, and terminal business evidence.",
+        "title": "TransactionValidationResponse"
       },
       "UpdateAccountRequest": {
         "additionalProperties": false,
@@ -5605,7 +6366,7 @@
         ]
       },
       "post": {
-        "description": "Create one supported Finance Transaction.",
+        "description": "Admits Income, Expense, or Internal Transfer v1 and returns an immutable receipt.",
         "operationId": "createFinanceTransaction",
         "parameters": [
           {
@@ -5617,6 +6378,32 @@
               "title": "Ledgerid",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Command-Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Submission-Owner",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5624,25 +6411,319 @@
             "application/json": {
               "schema": {
                 "discriminator": {
-                  "mapping": {
-                    "expense": "#/components/schemas/CreateExpenseTransactionRequest",
-                    "income": "#/components/schemas/CreateIncomeTransactionRequest",
-                    "internalTransfer": "#/components/schemas/CreateInternalTransferTransactionRequest"
-                  },
                   "propertyName": "kind"
                 },
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/CreateIncomeTransactionRequest"
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountId": {
+                        "format": "uuid",
+                        "title": "Accountid",
+                        "type": "string"
+                      },
+                      "categoryAllocations": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "amount": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "amount": {
+                                  "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                  "title": "Amount",
+                                  "type": "string"
+                                },
+                                "currency": {
+                                  "enum": [
+                                    "CNY",
+                                    "JPY",
+                                    "USD"
+                                  ],
+                                  "title": "Currency",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "amount",
+                                "currency"
+                              ],
+                              "title": "OpeningBalanceV1",
+                              "type": "object"
+                            },
+                            "categoryId": {
+                              "anyOf": [
+                                {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Categoryid"
+                            }
+                          },
+                          "required": [
+                            "amount"
+                          ],
+                          "title": "AllocationV1",
+                          "type": "object"
+                        },
+                        "maxItems": 1,
+                        "minItems": 1,
+                        "title": "Categoryallocations",
+                        "type": "array"
+                      },
+                      "economicAmount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "income",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "transactionDate",
+                      "kind",
+                      "accountId",
+                      "economicAmount",
+                      "categoryAllocations"
+                    ],
+                    "title": "IncomeCommandV1",
+                    "type": "object"
                   },
                   {
-                    "$ref": "#/components/schemas/CreateExpenseTransactionRequest"
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountId": {
+                        "format": "uuid",
+                        "title": "Accountid",
+                        "type": "string"
+                      },
+                      "categoryAllocations": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "amount": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "amount": {
+                                  "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                  "title": "Amount",
+                                  "type": "string"
+                                },
+                                "currency": {
+                                  "enum": [
+                                    "CNY",
+                                    "JPY",
+                                    "USD"
+                                  ],
+                                  "title": "Currency",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "amount",
+                                "currency"
+                              ],
+                              "title": "OpeningBalanceV1",
+                              "type": "object"
+                            },
+                            "categoryId": {
+                              "anyOf": [
+                                {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Categoryid"
+                            }
+                          },
+                          "required": [
+                            "amount"
+                          ],
+                          "title": "AllocationV1",
+                          "type": "object"
+                        },
+                        "maxItems": 1,
+                        "minItems": 1,
+                        "title": "Categoryallocations",
+                        "type": "array"
+                      },
+                      "economicAmount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "expense",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "transactionDate",
+                      "kind",
+                      "accountId",
+                      "economicAmount",
+                      "categoryAllocations"
+                    ],
+                    "title": "ExpenseCommandV1",
+                    "type": "object"
                   },
                   {
-                    "$ref": "#/components/schemas/CreateInternalTransferTransactionRequest"
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "destinationAccountId": {
+                        "format": "uuid",
+                        "title": "Destinationaccountid",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "internalTransfer",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "sourceAccountId": {
+                        "format": "uuid",
+                        "title": "Sourceaccountid",
+                        "type": "string"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "transactionDate",
+                      "kind",
+                      "sourceAccountId",
+                      "destinationAccountId",
+                      "amount"
+                    ],
+                    "title": "TransferCommandV1",
+                    "type": "object"
                   }
-                ],
-                "title": "Request"
+                ]
               }
             }
           },
@@ -5653,11 +6734,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FinanceTransactionResponse"
+                  "$ref": "#/components/schemas/TransactionCreatedReceipt"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Submission headers are required and valid."
           },
           "403": {
             "content": {
@@ -5667,37 +6758,37 @@
                 }
               }
             },
-            "description": "Access is denied."
+            "description": "Access or owner assertion denied."
           },
           "404": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/TransactionNotFoundResponse"
                 }
               }
             },
-            "description": "The resource does not exist."
+            "description": "Unavailable scope or terminal reference rejection."
           },
           "409": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/TransactionConflictResponse"
                 }
               }
             },
-            "description": "The resource is archived."
+            "description": "Terminal archived rejection or unresolved conflict/busy."
           },
           "422": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/TransactionValidationResponse"
                 }
               }
             },
-            "description": "The request is invalid."
+            "description": "Terminal rejection, guarded Q29, or unresolved validation/version."
           },
           "500": {
             "content": {
@@ -5707,7 +6798,7 @@
                 }
               }
             },
-            "description": "An unexpected error occurred."
+            "description": "Unexpected failure; outcome remains unresolved."
           },
           "503": {
             "content": {

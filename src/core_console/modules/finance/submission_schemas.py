@@ -263,16 +263,171 @@ class CategoryValidationResponse(
     """Generic validation/version failure or correlated Q29 evidence."""
 
 
+class TransactionCreatedResource(_Evidence):
+    type: Literal["transaction"]
+    id: UUID
+
+
+class TransactionCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: TransactionCreatedResource
+
+
+class TransactionInvalidProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[422]
+    code: Literal["validation_error"]
+    detail: str
+
+
+class TransactionArchivedProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[409]
+    code: Literal["finance_account_archived", "finance_category_archived"]
+    detail: str
+
+
+class TransactionMissingProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[404]
+    code: Literal["finance_account_not_found", "finance_category_not_found"]
+    detail: str
+
+
+class TransactionRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: Annotated[
+        TransactionInvalidProblem | TransactionArchivedProblem | TransactionMissingProblem,
+        Field(discriminator="code"),
+    ]
+
+
+class _TransactionReceipt(_Receipt):
+    operation: Literal["createFinanceTransaction"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class TransactionCreatedReceipt(_TransactionReceipt):
+    outcome: TransactionCreatedOutcome
+
+
+class TransactionRejectedReceipt(_TransactionReceipt):
+    outcome: TransactionRejectedOutcome
+
+
+class TransactionSubmissionReceipt(_TransactionReceipt):
+    outcome: Annotated[
+        TransactionCreatedOutcome | TransactionRejectedOutcome, Field(discriminator="kind")
+    ]
+
+
+class TransactionSubmissionUnfinished(_Unfinished):
+    operation: Literal["createFinanceTransaction"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class TransactionCommandValidationRejection(_CommandValidationRejection):
+    operation: Literal["createFinanceTransaction"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class TransactionInvalidOutcome(TransactionRejectedOutcome):
+    problem: TransactionInvalidProblem
+
+
+class TransactionArchivedOutcome(TransactionRejectedOutcome):
+    problem: TransactionArchivedProblem
+
+
+class TransactionMissingOutcome(TransactionRejectedOutcome):
+    problem: TransactionMissingProblem
+
+
+class TransactionInvalidReceipt(TransactionRejectedReceipt):
+    outcome: TransactionInvalidOutcome
+
+
+class TransactionArchivedReceipt(TransactionRejectedReceipt):
+    outcome: TransactionArchivedOutcome
+
+
+class TransactionMissingReceipt(TransactionRejectedReceipt):
+    outcome: TransactionMissingOutcome
+
+
+class TransactionInvalidTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    submissionReceipt: TransactionInvalidReceipt
+
+
+class TransactionArchivedTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[409]
+    code: Literal["finance_account_archived", "finance_category_archived"]
+    submissionReceipt: TransactionArchivedReceipt
+
+
+class TransactionMissingTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[404]
+    code: Literal["finance_account_not_found", "finance_category_not_found"]
+    submissionReceipt: TransactionMissingReceipt
+
+
+class TransactionValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: TransactionCommandValidationRejection
+
+
+class TransactionConflictResponse(
+    RootModel[SubmissionNonterminalProblem | TransactionArchivedTerminalProblem]
+):
+    """Unresolved failures or immutable Transaction business rejection."""
+
+
+class TransactionNotFoundResponse(
+    RootModel[SubmissionNonterminalProblem | TransactionMissingTerminalProblem]
+):
+    """Unavailable scope or immutable missing Account/Category rejection."""
+
+
+class TransactionValidationResponse(
+    RootModel[
+        SubmissionNonterminalProblem
+        | TransactionValidationProblem
+        | TransactionInvalidTerminalProblem
+    ]
+):
+    """Distinguish unresolved validation, Q29, and terminal business evidence."""
+
+
 type SubmissionReceipt = Annotated[
-    LedgerSubmissionReceipt | AccountSubmissionReceipt | CategorySubmissionReceipt,
+    LedgerSubmissionReceipt
+    | AccountSubmissionReceipt
+    | CategorySubmissionReceipt
+    | TransactionSubmissionReceipt,
     Field(discriminator="operation"),
 ]
 type SubmissionValidationProblem = (
-    LedgerValidationProblem | AccountValidationProblem | CategoryValidationProblem
+    LedgerValidationProblem
+    | AccountValidationProblem
+    | CategoryValidationProblem
+    | TransactionValidationProblem
 )
 
 type SubmissionUnfinished = Annotated[
-    LedgerSubmissionUnfinished | AccountSubmissionUnfinished | CategorySubmissionUnfinished,
+    LedgerSubmissionUnfinished
+    | AccountSubmissionUnfinished
+    | CategorySubmissionUnfinished
+    | TransactionSubmissionUnfinished,
     Field(discriminator="operation"),
 ]
 

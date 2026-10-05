@@ -19,6 +19,7 @@ from core_console.modules.finance.submission_schemas import (
     FinanceSubmissionResponse,
     LedgerCreatedReceipt,
     LedgerValidationProblem,
+    TransactionCreatedReceipt,
 )
 from core_console.modules.users.dependencies import get_current_user
 from core_console.modules.users.identity import CurrentUser
@@ -61,16 +62,15 @@ def test_ledger_protocol_openapi_requires_headers_and_distinguishes_evidence(app
         for status, response in operation["responses"].items():
             if not status.startswith("2"):
                 assert set(response["content"]) == {"application/problem+json"}
-    # Other creates remain on their previously generated resource contracts.
-    for path, response in (
-        ("/finance/ledgers/{ledgerId}/transactions", "FinanceTransactionResponse"),
-    ):
-        operation = schema["paths"][path]["post"]
-        assert all(parameter["in"] != "header" for parameter in operation.get("parameters", []))
-        assert (
-            operation["responses"]["201"]["content"]["application/json"]["schema"]["$ref"]
-            == f"#/components/schemas/{response}"
-        )
+    transaction = schema["paths"]["/finance/ledgers/{ledgerId}/transactions"]["post"]
+    assert transaction["responses"]["201"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/TransactionCreatedReceipt"
+    }
+    assert {header["name"] for header in transaction["parameters"] if header["in"] == "header"} == {
+        "Idempotency-Key",
+        "Finance-Command-Version",
+        "Finance-Submission-Owner",
+    }
 
 
 @pytest.mark.parametrize(
@@ -213,7 +213,6 @@ def test_cumulative_openapi_references_resolve_and_excluded_creates_remain_uncha
 
     check(schema)
     for resource, status, response in [
-        ("transactions", "201", "FinanceTransactionResponse"),
         ("balance-adjustments", "200", "BalanceAdjustmentResultResponse"),
     ]:
         operation = schema["paths"][f"/finance/ledgers/{{ledgerId}}/{resource}"]["post"]
@@ -223,14 +222,20 @@ def test_cumulative_openapi_references_resolve_and_excluded_creates_remain_uncha
         }
 
 
-@pytest.mark.parametrize("operation", ["createFinanceAccount", "createFinanceCategory"])
+@pytest.mark.parametrize(
+    "operation", ["createFinanceAccount", "createFinanceCategory", "createFinanceTransaction"]
+)
 @pytest.mark.parametrize(
     "invalid", ["null_scope", "wrong_resource", "no_change", "wrong_operation"]
 )
 def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
     operation: str, invalid: str
 ) -> None:
-    resource = "account" if operation == "createFinanceAccount" else "category"
+    resource = {
+        "createFinanceAccount": "account",
+        "createFinanceCategory": "category",
+        "createFinanceTransaction": "transaction",
+    }[operation]
     now = datetime.now(UTC)
     receipt: dict[str, object] = {
         "submissionId": uuid4(),
@@ -244,12 +249,22 @@ def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
     if invalid == "null_scope":
         receipt["targetLedgerId"] = None
     elif invalid == "wrong_resource":
-        receipt["outcome"] = {"kind": "created", "resource": {"type": "transaction", "id": uuid4()}}
+        receipt["outcome"] = {"kind": "created", "resource": {"type": "ledger", "id": uuid4()}}
     elif invalid == "no_change":
         receipt["outcome"] = {"kind": "noChange"}
     else:
         receipt["operation"] = "createFinanceLedger"
-    model = AccountCreatedReceipt if resource == "account" else CategoryCreatedReceipt
+    models: dict[
+        str,
+        type[AccountCreatedReceipt]
+        | type[CategoryCreatedReceipt]
+        | type[TransactionCreatedReceipt],
+    ] = {
+        "account": AccountCreatedReceipt,
+        "category": CategoryCreatedReceipt,
+        "transaction": TransactionCreatedReceipt,
+    }
+    model = models[resource]
     with pytest.raises(ValidationError):
         model.model_validate(receipt)
     with pytest.raises(ValidationError):

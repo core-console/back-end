@@ -110,8 +110,10 @@ async def test_history_pages_same_date_transactions_without_duplicates_or_omissi
         )
         created_ids: list[str] = []
         for index in range(5):
-            created = await client.post(
+            created = await create_finance_resource(
+                client,
                 f"/api/finance/ledgers/{ledger_id}/transactions",
+                owner_id=actor.id,
                 json={
                     "kind": "income",
                     "accountId": account.json()["id"],
@@ -223,6 +225,7 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
             account_id=cash["id"],
             transaction_date="2026-08-24",
             category_id=food.json()["id"],
+            owner_id=actor.id,
         )
         expense = await _create_ordinary(
             client,
@@ -230,9 +233,12 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
             kind="expense",
             account_id=cash["id"],
             transaction_date="2026-08-23",
+            owner_id=actor.id,
         )
-        transfer = await client.post(
+        transfer = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/transactions",
+            owner_id=actor.id,
             json={
                 "kind": "internalTransfer",
                 "sourceAccountId": cash["id"],
@@ -381,6 +387,7 @@ async def test_history_cursor_is_opaque_validated_and_bound_to_filters(
                 kind="income",
                 account_id=account["id"],
                 transaction_date=f"2026-08-{day}",
+                owner_id=actor.id,
             )
         first = await client.get(
             f"/api/finance/ledgers/{ledger_id}/transactions",
@@ -446,6 +453,7 @@ async def test_history_reads_current_mutation_aftermath_without_writing(
             kind="income",
             account_id=cash["id"],
             transaction_date="2026-08-20",
+            owner_id=actor.id,
         )
         deleted = await _create_ordinary(
             client,
@@ -453,6 +461,7 @@ async def test_history_reads_current_mutation_aftermath_without_writing(
             kind="expense",
             account_id=cash["id"],
             transaction_date="2026-08-19",
+            owner_id=actor.id,
         )
         replaced = await client.put(
             f"/api/finance/ledgers/{ledger_id}/transactions/{kept.json()['id']}",
@@ -594,14 +603,17 @@ async def _create_account(
 async def _create_ordinary(
     client: AsyncClient,
     *,
+    owner_id: UUID,
     ledger_id: str,
     kind: str,
     account_id: str,
     transaction_date: str,
     category_id: str | None = None,
 ) -> Response:
-    response = await client.post(
+    response = await create_finance_resource(
+        client,
         f"/api/finance/ledgers/{ledger_id}/transactions",
+        owner_id=owner_id,
         json={
             "kind": kind,
             "accountId": account_id,

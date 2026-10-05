@@ -17,21 +17,31 @@ from starlette.datastructures import Headers
 
 from core_console.modules.finance.models import FinanceLedger
 from core_console.modules.finance.service import (
+    FinanceAccountArchivedError,
+    FinanceAccountNotFoundError,
+    FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
+    FinanceCategoryNotFoundError,
     FinanceLedgerNameConflictError,
     FinanceLedgerNotFoundError,
     InvalidFinanceAccountMoneyError,
     InvalidFinanceAccountNameError,
     InvalidFinanceAccountTrackingStartDateError,
+    InvalidFinanceTransactionError,
     execute_create_finance_account,
     execute_create_finance_category,
     execute_create_finance_ledger,
+    execute_create_finance_transaction,
+    execute_create_internal_transfer_transaction,
 )
 from core_console.modules.finance.submission_commands import (
     AccountCommandV1,
     CategoryCommandV1,
     CreateOperation,
     LedgerCommandV1,
+    OrdinaryTransactionCommandV1,
+    TransactionCommandV1,
+    TransferCommandV1,
 )
 from core_console.modules.finance.submission_models import FinanceSubmission
 from core_console.modules.finance.submission_schemas import (
@@ -46,6 +56,8 @@ from core_console.modules.finance.submission_schemas import (
     SubmissionReceipt,
     SubmissionUnfinished,
     SubmissionValidationProblem,
+    TransactionCommandValidationRejection,
+    TransactionValidationProblem,
 )
 from core_console.modules.users.models import User
 from core_console.problems import ApplicationProblem
@@ -262,8 +274,11 @@ async def _submit_create(
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,
         }
-        parser = parsers[operation]
-        body = parser.model_validate(attempted_body)
+        body = (
+            TypeAdapter(TransactionCommandV1).validate_python(attempted_body)
+            if operation == "createFinanceTransaction"
+            else parsers[operation].model_validate(attempted_body)
+        )
     except ValidationError as exc:
         # A known binding blocks Q29, even for an invalid different attempt.
         if row is not None:
@@ -305,11 +320,13 @@ async def _submit_create(
                 type[LedgerCommandValidationRejection]
                 | type[AccountCommandValidationRejection]
                 | type[CategoryCommandValidationRejection]
+                | type[TransactionCommandValidationRejection]
             ),
         ] = {
             "createFinanceLedger": LedgerCommandValidationRejection,
             "createFinanceAccount": AccountCommandValidationRejection,
             "createFinanceCategory": CategoryCommandValidationRejection,
+            "createFinanceTransaction": TransactionCommandValidationRejection,
         }
         proof_model = proof_models[operation]
         problem_data["commandValidationRejection"] = proof_model.model_validate(
@@ -330,11 +347,13 @@ async def _submit_create(
                 type[LedgerValidationProblem]
                 | type[AccountValidationProblem]
                 | type[CategoryValidationProblem]
+                | type[TransactionValidationProblem]
             ),
         ] = {
             "createFinanceLedger": LedgerValidationProblem,
             "createFinanceAccount": AccountValidationProblem,
             "createFinanceCategory": CategoryValidationProblem,
+            "createFinanceTransaction": TransactionValidationProblem,
         }
         problem_model = problem_models[operation]
         return problem_model.model_validate(problem_data)
@@ -342,7 +361,9 @@ async def _submit_create(
         "commandVersion": version,
         "operation": operation,
         "targetLedgerId": str(target_ledger_id) if target_ledger_id is not None else None,
-        "body": body.canonical() if isinstance(body, AccountCommandV1) else {"name": body.name},
+        "body": body.canonical()
+        if isinstance(body, (AccountCommandV1, OrdinaryTransactionCommandV1, TransferCommandV1))
+        else {"name": body.name},
     }
     if row is not None:
         _compare(row, version, command)
@@ -385,7 +406,42 @@ async def _submit_create(
         raise submission_problem(403, "access_denied", "Access is denied.")
     try:
         async with session.begin_nested():
-            if isinstance(body, AccountCommandV1):
+            if isinstance(body, (OrdinaryTransactionCommandV1, TransferCommandV1)):
+                # Project the existing public Transaction inside the savepoint.
+                # Projection failures must roll back all Finance work, never terminalize.
+                from core_console.modules.finance.api import _to_transaction_response
+
+                assert target_ledger_id is not None
+                if isinstance(body, TransferCommandV1):
+                    transaction = await execute_create_internal_transfer_transaction(
+                        session,
+                        owner_id=owner_id,
+                        ledger_id=target_ledger_id,
+                        source_account_id=body.source_account_id,
+                        destination_account_id=body.destination_account_id,
+                        transaction_date=body.transaction_date,
+                        amount=body.amount.to_money(),
+                        note=body.note,
+                        project=_to_transaction_response,
+                    )
+                else:
+                    allocation = body.category_allocations[0]
+                    transaction = await execute_create_finance_transaction(
+                        session,
+                        owner_id=owner_id,
+                        ledger_id=target_ledger_id,
+                        kind=body.kind,
+                        account_id=body.account_id,
+                        transaction_date=body.transaction_date,
+                        economic_amount=body.economic_amount.to_money(),
+                        allocation_amount=allocation.amount.to_money(),
+                        category_id=allocation.category_id,
+                        note=body.note,
+                        project=_to_transaction_response,
+                    )
+                resource_id = transaction.id
+                resource_type = "transaction"
+            elif isinstance(body, AccountCommandV1):
                 assert target_ledger_id is not None
                 balance = await execute_create_finance_account(
                     session,
@@ -442,6 +498,29 @@ async def _submit_create(
                 "status": 422,
                 "code": "validation_error",
                 "detail": str(exc),
+            },
+        }
+    except (
+        InvalidFinanceTransactionError,
+        FinanceAccountArchivedError,
+        FinanceCategoryArchivedError,
+        FinanceAccountNotFoundError,
+        FinanceCategoryNotFoundError,
+    ) as exc:
+        if operation != "createFinanceTransaction":
+            raise
+        from core_console.modules.finance.api import _finance_problem_for
+
+        problem = _finance_problem_for(exc)
+        # begin_nested has rolled back tentative movements/allocations first.
+        row.terminal_outcome = {
+            "kind": "rejected",
+            "problem": {
+                "type": "about:blank",
+                "title": problem.title,
+                "status": problem.status,
+                "code": problem.code,
+                "detail": problem.detail,
             },
         }
     else:

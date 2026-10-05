@@ -2,11 +2,12 @@
 
 import json
 from math import isfinite
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -17,6 +18,7 @@ from core_console.modules.finance.submission_commands import (
     CategoryCommandV1,
     CreateOperation,
     LedgerCommandV1,
+    TransactionCommandV1,
 )
 from core_console.modules.finance.submission_schemas import (
     AccountCreatedReceipt,
@@ -38,6 +40,15 @@ from core_console.modules.finance.submission_schemas import (
     LedgerValidationProblem,
     LedgerValidationResponse,
     SubmissionNonterminalProblem,
+    TransactionArchivedTerminalProblem,
+    TransactionConflictResponse,
+    TransactionCreatedReceipt,
+    TransactionInvalidTerminalProblem,
+    TransactionMissingTerminalProblem,
+    TransactionNotFoundResponse,
+    TransactionRejectedOutcome,
+    TransactionValidationProblem,
+    TransactionValidationResponse,
 )
 from core_console.modules.finance.submissions import (
     assert_submission_owner,
@@ -229,6 +240,73 @@ async def post_category(
     return await _post_create(request, actor, session, "createFinanceCategory", ledger_id)
 
 
+def _transaction_request_schema() -> dict[str, object]:
+    schema = TypeAdapter(TransactionCommandV1).json_schema()
+    definitions = schema.pop("$defs")
+
+    def inline(value: object) -> object:
+        if isinstance(value, dict):
+            if "$ref" in value:
+                return inline(definitions[value["$ref"].rsplit("/", 1)[1]])
+            # Inlined oneOf branches do not have component-reference mappings.
+            return {key: inline(item) for key, item in value.items() if key != "mapping"}
+        if isinstance(value, list):
+            return [inline(item) for item in value]
+        return value
+
+    return cast(dict[str, object], inline(schema))
+
+
+@router.post(
+    "/ledgers/{ledgerId}/transactions",
+    operation_id="createFinanceTransaction",
+    summary="Create a Finance Transaction",
+    description="Admits Income, Expense, or Internal Transfer v1 and returns an immutable receipt.",
+    status_code=201,
+    response_model=TransactionCreatedReceipt,
+    responses={
+        400: {"model": ProblemDetails, "description": "Submission headers are required and valid."},
+        403: {"model": ProblemDetails, "description": "Access or owner assertion denied."},
+        404: {
+            "model": TransactionNotFoundResponse,
+            "description": "Unavailable scope or terminal reference rejection.",
+        },
+        409: {
+            "model": TransactionConflictResponse,
+            "description": "Terminal archived rejection or unresolved conflict/busy.",
+        },
+        422: {
+            "model": TransactionValidationResponse,
+            "description": "Terminal rejection, guarded Q29, or unresolved validation/version.",
+        },
+        500: {
+            "model": ProblemDetails,
+            "description": "Unexpected failure; outcome remains unresolved.",
+        },
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={
+        "security": [],
+        "parameters": [
+            _header_parameter("Idempotency-Key", format="uuid"),
+            _header_parameter("Finance-Command-Version"),
+            _header_parameter("Finance-Submission-Owner", format="uuid"),
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": _transaction_request_schema()}},
+        },
+    },
+)
+async def post_transaction(
+    request: Request,
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> JSONResponse:
+    return await _post_create(request, actor, session, "createFinanceTransaction", ledger_id)
+
+
 async def _post_create(
     request: Request,
     actor: CurrentUser,
@@ -263,24 +341,50 @@ async def _post_create(
         )
     )
     if isinstance(
-        evidence, (LedgerValidationProblem, AccountValidationProblem, CategoryValidationProblem)
+        evidence,
+        (
+            LedgerValidationProblem,
+            AccountValidationProblem,
+            CategoryValidationProblem,
+            TransactionValidationProblem,
+        ),
     ):
         return problem_response(evidence.model_copy(update={"instance": request.url.path}))
     if isinstance(
-        evidence.outcome, (LedgerRejectedOutcome, AccountRejectedOutcome, CategoryRejectedOutcome)
+        evidence.outcome,
+        (
+            LedgerRejectedOutcome,
+            AccountRejectedOutcome,
+            CategoryRejectedOutcome,
+            TransactionRejectedOutcome,
+        ),
     ):
         problem = evidence.outcome.problem
+        transaction_problem_models: dict[
+            int,
+            type[TransactionMissingTerminalProblem]
+            | type[TransactionArchivedTerminalProblem]
+            | type[TransactionInvalidTerminalProblem],
+        ] = {
+            404: TransactionMissingTerminalProblem,
+            409: TransactionArchivedTerminalProblem,
+            422: TransactionInvalidTerminalProblem,
+        }
         problem_models: dict[
             CreateOperation,
             (
                 type[LedgerTerminalProblem]
                 | type[AccountTerminalProblem]
                 | type[CategoryTerminalProblem]
+                | type[TransactionArchivedTerminalProblem]
+                | type[TransactionMissingTerminalProblem]
+                | type[TransactionInvalidTerminalProblem]
             ),
         ] = {
             "createFinanceLedger": LedgerTerminalProblem,
             "createFinanceAccount": AccountTerminalProblem,
             "createFinanceCategory": CategoryTerminalProblem,
+            "createFinanceTransaction": transaction_problem_models[problem.status],
         }
         problem_model = problem_models[operation]
         return problem_response(

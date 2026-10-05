@@ -22,6 +22,7 @@ from core_console.modules.finance.money import Money
 from core_console.modules.finance.service import (
     create_finance_account,
     create_finance_category,
+    create_finance_transaction,
     execute_create_finance_ledger,
 )
 from core_console.modules.finance.submission_models import FinanceSubmission
@@ -649,22 +650,24 @@ async def test_submission_migration_preserves_populated_finance_and_refuses_evid
         category = await create_finance_category(
             postgres_session, owner_id=actor.id, ledger_id=ledger.id, name="Food"
         )
-        transaction = await client.post(
-            f"/api/finance/ledgers/{ledger.id}/transactions",
-            json={
-                "kind": "expense",
-                "accountId": str(account.account.id),
-                "transactionDate": "2026-08-01",
-                "economicAmount": {"amount": "12.34", "currency": "CNY"},
-                "categoryAllocations": [
-                    {
-                        "categoryId": str(category.id),
-                        "amount": {"amount": "12.34", "currency": "CNY"},
-                    }
-                ],
-            },
+        # Historical events have no reliable submission identity. Seed through
+        # the existing service seam so the additive relation remains empty.
+        transaction_id = await create_finance_transaction(
+            postgres_session,
+            owner_id=actor.id,
+            ledger_id=ledger.id,
+            kind="expense",
+            account_id=account.account.id,
+            transaction_date=date(2026, 8, 1),
+            economic_amount=Money.parse(amount="12.34", currency="CNY"),
+            allocation_amount=Money.parse(amount="12.34", currency="CNY"),
+            category_id=category.id,
+            note=None,
+            project=lambda detail: detail.transaction.id,
         )
-        assert transaction.status_code == 201
+        assert (
+            await client.get(f"/api/finance/ledgers/{ledger.id}/transactions/{transaction_id}")
+        ).status_code == 200
         paths = [
             "/api/finance/ledgers",
             *(
