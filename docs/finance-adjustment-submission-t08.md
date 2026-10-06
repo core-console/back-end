@@ -11,9 +11,10 @@ after separately authorized backend delivery and before frontend synchronization
 `createBalanceAdjustment` and requires the three submission headers in
 [protocol section 3](finance-create-submission-protocol.md#3-identity-headers-and-user-binding).
 Created and `noChange` receipts both return HTTP 200 on initial execution and
-identical replay. Created evidence identifies a `transaction` UUID; `noChange`
-contains only `kind: noChange`, with no resource, Transaction, or rejection
-fields. Neither success variant contains a resource or balance snapshot.
+identical replay. A `created` receipt includes an `outcome.resource` with
+`type: transaction` and the created Transaction `id`. The `noChange` outcome
+contains only `kind: noChange`, with no resource or rejection fields, and creates
+no Transaction. Neither success variant contains a balance snapshot.
 Current detail, history and Account balances must be fetched separately.
 
 The original Account, target Ledger, target balance, expected derived balance,
