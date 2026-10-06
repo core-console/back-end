@@ -399,7 +399,8 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
             f"/api/finance/ledgers/{ledger_id}/accounts/{savings['id']}/balance-adjustment-context",
             params={"transactionDate": "2024-02-29"},
         )
-        adjustment = await client.post(
+        adjustment = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": savings["id"],
@@ -408,6 +409,7 @@ async def test_overview_separates_month_economics_and_counts_all_transaction_kin
                 "expectedAccountNature": context.json()["accountNature"],
                 "targetBalance": {"amount": "5", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         assert adjustment.status_code == HTTPStatus.OK
         overview = await client.get(
@@ -723,7 +725,8 @@ async def test_overview_reflects_balance_adjustment_replacement_and_removal(
             opening_balance="10",
             owner_id=actor.id,
         )
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account["id"],
@@ -732,6 +735,7 @@ async def test_overview_reflects_balance_adjustment_replacement_and_removal(
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "15.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         transaction_id = created.json()["transaction"]["id"]
         before = await client.get(

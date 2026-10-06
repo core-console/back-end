@@ -409,11 +409,169 @@ class TransactionValidationResponse(
     """Distinguish unresolved validation, Q29, and terminal business evidence."""
 
 
+class AdjustmentCreatedResource(_Evidence):
+    type: Literal["transaction"]
+    id: UUID
+
+
+class AdjustmentCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: AdjustmentCreatedResource
+
+
+class AdjustmentInvalidProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[422]
+    code: Literal["validation_error"]
+    detail: str
+
+
+class AdjustmentConflictProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[409]
+    code: Literal[
+        "finance_account_archived", "account_balance_changed", "finance_account_semantics_changed"
+    ]
+    detail: str
+
+
+class AdjustmentMissingProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[404]
+    code: Literal["finance_account_not_found"]
+    detail: str
+
+
+class AdjustmentRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: Annotated[
+        AdjustmentInvalidProblem | AdjustmentConflictProblem | AdjustmentMissingProblem,
+        Field(discriminator="code"),
+    ]
+
+
+class _AdjustmentReceipt(_Receipt):
+    operation: Literal["createBalanceAdjustment"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdjustmentNoChangeOutcome(_Evidence):
+    kind: Literal["noChange"]
+
+
+class AdjustmentSuccessReceipt(_AdjustmentReceipt):
+    outcome: Annotated[
+        AdjustmentCreatedOutcome | AdjustmentNoChangeOutcome, Field(discriminator="kind")
+    ]
+
+
+class AdjustmentRejectedReceipt(_AdjustmentReceipt):
+    outcome: AdjustmentRejectedOutcome
+
+
+class AdjustmentSubmissionReceipt(_AdjustmentReceipt):
+    outcome: Annotated[
+        AdjustmentCreatedOutcome | AdjustmentNoChangeOutcome | AdjustmentRejectedOutcome,
+        Field(discriminator="kind"),
+    ]
+
+
+class AdjustmentSubmissionUnfinished(_Unfinished):
+    operation: Literal["createBalanceAdjustment"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdjustmentCommandValidationRejection(_CommandValidationRejection):
+    operation: Literal["createBalanceAdjustment"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdjustmentInvalidOutcome(AdjustmentRejectedOutcome):
+    problem: AdjustmentInvalidProblem
+
+
+class AdjustmentConflictOutcome(AdjustmentRejectedOutcome):
+    problem: AdjustmentConflictProblem
+
+
+class AdjustmentMissingOutcome(AdjustmentRejectedOutcome):
+    problem: AdjustmentMissingProblem
+
+
+class AdjustmentInvalidReceipt(AdjustmentRejectedReceipt):
+    outcome: AdjustmentInvalidOutcome
+
+
+class AdjustmentConflictReceipt(AdjustmentRejectedReceipt):
+    outcome: AdjustmentConflictOutcome
+
+
+class AdjustmentMissingReceipt(AdjustmentRejectedReceipt):
+    outcome: AdjustmentMissingOutcome
+
+
+class AdjustmentInvalidTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    submissionReceipt: AdjustmentInvalidReceipt
+
+
+class AdjustmentConflictTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[409]
+    code: Literal[
+        "finance_account_archived", "account_balance_changed", "finance_account_semantics_changed"
+    ]
+    submissionReceipt: AdjustmentConflictReceipt
+
+
+class AdjustmentMissingTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[404]
+    code: Literal["finance_account_not_found"]
+    submissionReceipt: AdjustmentMissingReceipt
+
+
+class AdjustmentValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: AdjustmentCommandValidationRejection
+
+
+class AdjustmentConflictResponse(
+    RootModel[SubmissionNonterminalProblem | AdjustmentConflictTerminalProblem]
+):
+    """Unresolved failures or immutable Adjustment business rejection."""
+
+
+class AdjustmentNotFoundResponse(
+    RootModel[SubmissionNonterminalProblem | AdjustmentMissingTerminalProblem]
+):
+    """Unavailable scope or immutable missing Account rejection."""
+
+
+class AdjustmentValidationResponse(
+    RootModel[
+        SubmissionNonterminalProblem
+        | AdjustmentValidationProblem
+        | AdjustmentInvalidTerminalProblem
+    ]
+):
+    """Distinguish unresolved validation, Q29, and terminal business evidence."""
+
+
 type SubmissionReceipt = Annotated[
     LedgerSubmissionReceipt
     | AccountSubmissionReceipt
     | CategorySubmissionReceipt
-    | TransactionSubmissionReceipt,
+    | TransactionSubmissionReceipt
+    | AdjustmentSubmissionReceipt,
     Field(discriminator="operation"),
 ]
 type SubmissionValidationProblem = (
@@ -421,13 +579,15 @@ type SubmissionValidationProblem = (
     | AccountValidationProblem
     | CategoryValidationProblem
     | TransactionValidationProblem
+    | AdjustmentValidationProblem
 )
 
 type SubmissionUnfinished = Annotated[
     LedgerSubmissionUnfinished
     | AccountSubmissionUnfinished
     | CategorySubmissionUnfinished
-    | TransactionSubmissionUnfinished,
+    | TransactionSubmissionUnfinished
+    | AdjustmentSubmissionUnfinished,
     Field(discriminator="operation"),
 ]
 

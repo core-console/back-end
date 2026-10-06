@@ -18,7 +18,9 @@ from starlette.datastructures import Headers
 from core_console.modules.finance.models import FinanceLedger
 from core_console.modules.finance.service import (
     FinanceAccountArchivedError,
+    FinanceAccountBalanceChangedError,
     FinanceAccountNotFoundError,
+    FinanceAccountSemanticsChangedError,
     FinanceCategoryArchivedError,
     FinanceCategoryNameConflictError,
     FinanceCategoryNotFoundError,
@@ -28,6 +30,7 @@ from core_console.modules.finance.service import (
     InvalidFinanceAccountNameError,
     InvalidFinanceAccountTrackingStartDateError,
     InvalidFinanceTransactionError,
+    execute_create_balance_adjustment,
     execute_create_finance_account,
     execute_create_finance_category,
     execute_create_finance_ledger,
@@ -36,6 +39,7 @@ from core_console.modules.finance.service import (
 )
 from core_console.modules.finance.submission_commands import (
     AccountCommandV1,
+    AdjustmentCommandV1,
     CategoryCommandV1,
     CreateOperation,
     LedgerCommandV1,
@@ -47,6 +51,8 @@ from core_console.modules.finance.submission_models import FinanceSubmission
 from core_console.modules.finance.submission_schemas import (
     AccountCommandValidationRejection,
     AccountValidationProblem,
+    AdjustmentCommandValidationRejection,
+    AdjustmentValidationProblem,
     CategoryCommandValidationRejection,
     CategoryValidationProblem,
     FinanceSubmissionResponse,
@@ -268,11 +274,15 @@ async def _submit_create(
     try:
         parsers: dict[
             CreateOperation,
-            type[LedgerCommandV1] | type[CategoryCommandV1] | type[AccountCommandV1],
+            type[LedgerCommandV1]
+            | type[CategoryCommandV1]
+            | type[AccountCommandV1]
+            | type[AdjustmentCommandV1],
         ] = {
             "createFinanceLedger": LedgerCommandV1,
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,
+            "createBalanceAdjustment": AdjustmentCommandV1,
         }
         body = (
             TypeAdapter(TransactionCommandV1).validate_python(attempted_body)
@@ -321,12 +331,14 @@ async def _submit_create(
                 | type[AccountCommandValidationRejection]
                 | type[CategoryCommandValidationRejection]
                 | type[TransactionCommandValidationRejection]
+                | type[AdjustmentCommandValidationRejection]
             ),
         ] = {
             "createFinanceLedger": LedgerCommandValidationRejection,
             "createFinanceAccount": AccountCommandValidationRejection,
             "createFinanceCategory": CategoryCommandValidationRejection,
             "createFinanceTransaction": TransactionCommandValidationRejection,
+            "createBalanceAdjustment": AdjustmentCommandValidationRejection,
         }
         proof_model = proof_models[operation]
         problem_data["commandValidationRejection"] = proof_model.model_validate(
@@ -348,12 +360,14 @@ async def _submit_create(
                 | type[AccountValidationProblem]
                 | type[CategoryValidationProblem]
                 | type[TransactionValidationProblem]
+                | type[AdjustmentValidationProblem]
             ),
         ] = {
             "createFinanceLedger": LedgerValidationProblem,
             "createFinanceAccount": AccountValidationProblem,
             "createFinanceCategory": CategoryValidationProblem,
             "createFinanceTransaction": TransactionValidationProblem,
+            "createBalanceAdjustment": AdjustmentValidationProblem,
         }
         problem_model = problem_models[operation]
         return problem_model.model_validate(problem_data)
@@ -362,7 +376,15 @@ async def _submit_create(
         "operation": operation,
         "targetLedgerId": str(target_ledger_id) if target_ledger_id is not None else None,
         "body": body.canonical()
-        if isinstance(body, (AccountCommandV1, OrdinaryTransactionCommandV1, TransferCommandV1))
+        if isinstance(
+            body,
+            (
+                AccountCommandV1,
+                OrdinaryTransactionCommandV1,
+                TransferCommandV1,
+                AdjustmentCommandV1,
+            ),
+        )
         else {"name": body.name},
     }
     if row is not None:
@@ -406,7 +428,29 @@ async def _submit_create(
         raise submission_problem(403, "access_denied", "Access is denied.")
     try:
         async with session.begin_nested():
-            if isinstance(body, (OrdinaryTransactionCommandV1, TransferCommandV1)):
+            no_change = False
+            resource_id: UUID | None = None
+            if isinstance(body, AdjustmentCommandV1):
+                from core_console.modules.finance.api import _to_balance_adjustment_result_response
+
+                assert target_ledger_id is not None
+                adjustment = await execute_create_balance_adjustment(
+                    session,
+                    owner_id=owner_id,
+                    ledger_id=target_ledger_id,
+                    account_id=body.account_id,
+                    transaction_date=body.transaction_date,
+                    expected_derived_balance=body.expected_derived_balance.to_money(),
+                    expected_account_nature=body.expected_account_nature,
+                    target_balance=body.target_balance.to_money(),
+                    note=body.note,
+                    project=_to_balance_adjustment_result_response,
+                )
+                no_change = adjustment.root.outcome == "noChange"
+                if adjustment.root.transaction is not None:
+                    resource_id = adjustment.root.transaction.id
+                resource_type = "transaction"
+            elif isinstance(body, (OrdinaryTransactionCommandV1, TransferCommandV1)):
                 # Project the existing public Transaction inside the savepoint.
                 # Projection failures must roll back all Finance work, never terminalize.
                 from core_console.modules.finance.api import _to_transaction_response
@@ -506,8 +550,10 @@ async def _submit_create(
         FinanceCategoryArchivedError,
         FinanceAccountNotFoundError,
         FinanceCategoryNotFoundError,
+        FinanceAccountBalanceChangedError,
+        FinanceAccountSemanticsChangedError,
     ) as exc:
-        if operation != "createFinanceTransaction":
+        if operation not in ("createFinanceTransaction", "createBalanceAdjustment"):
             raise
         from core_console.modules.finance.api import _finance_problem_for
 
@@ -525,10 +571,14 @@ async def _submit_create(
         }
     else:
         row.retention_ledger_id = target_ledger_id or resource_id
-        row.terminal_outcome = {
-            "kind": "created",
-            "resource": {"type": resource_type, "id": str(resource_id)},
-        }
+        if no_change:
+            row.terminal_outcome = {"kind": "noChange"}
+        else:
+            assert resource_id is not None
+            row.terminal_outcome = {
+                "kind": "created",
+                "resource": {"type": resource_type, "id": str(resource_id)},
+            }
     with session.no_autoflush:
         row.resolved_at = await session.scalar(select(func.clock_timestamp()))
     await session.flush()

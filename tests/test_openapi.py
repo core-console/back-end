@@ -697,7 +697,7 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
         "derivedComparisonBalance",
         "accountNature",
     }
-    request_schema = schema["components"]["schemas"]["CreateBalanceAdjustmentRequest"]
+    request_schema = create["requestBody"]["content"]["application/json"]["schema"]
     assert request_schema["additionalProperties"] is False
     assert set(request_schema["properties"]) == {
         "accountId",
@@ -716,8 +716,8 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
     }
     replacement_request_schema = schema["components"]["schemas"]["ReplaceBalanceAdjustmentRequest"]
     assert replacement_request_schema["additionalProperties"] is False
-    assert replacement_request_schema["properties"] == request_schema["properties"]
-    assert replacement_request_schema["required"] == request_schema["required"]
+    assert set(replacement_request_schema["properties"]) == set(request_schema["properties"])
+    assert set(replacement_request_schema["required"]) == set(request_schema["required"])
     transaction_schema = schema["components"]["schemas"]["BalanceAdjustmentTransactionResponse"]
     assert transaction_schema["additionalProperties"] is False
     assert set(transaction_schema["properties"]) == {
@@ -729,18 +729,6 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
         "account",
         "correctionDelta",
     }
-    result_schema = schema["components"]["schemas"]["BalanceAdjustmentResultResponse"]
-    assert result_schema["discriminator"] == {
-        "propertyName": "outcome",
-        "mapping": {
-            "created": "#/components/schemas/BalanceAdjustmentCreatedResultResponse",
-            "noChange": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse",
-        },
-    }
-    assert result_schema["oneOf"] == [
-        {"$ref": "#/components/schemas/BalanceAdjustmentCreatedResultResponse"},
-        {"$ref": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse"},
-    ]
     replacement_result_schema = schema["components"]["schemas"][
         "ReplaceBalanceAdjustmentResultResponse"
     ]
@@ -755,18 +743,10 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
         {"$ref": "#/components/schemas/BalanceAdjustmentUpdatedResultResponse"},
         {"$ref": "#/components/schemas/BalanceAdjustmentRemovedResultResponse"},
     ]
-    created_result = schema["components"]["schemas"]["BalanceAdjustmentCreatedResultResponse"]
-    no_change_result = schema["components"]["schemas"]["BalanceAdjustmentNoChangeResultResponse"]
     updated_result = schema["components"]["schemas"]["BalanceAdjustmentUpdatedResultResponse"]
     removed_result = schema["components"]["schemas"]["BalanceAdjustmentRemovedResultResponse"]
-    assert created_result["required"] == ["outcome", "transaction"]
-    assert no_change_result["required"] == ["outcome", "transaction"]
     assert updated_result["required"] == ["outcome", "transaction"]
     assert removed_result["required"] == ["outcome", "transaction"]
-    assert created_result["properties"]["transaction"] == {
-        "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
-    }
-    assert no_change_result["properties"]["transaction"]["type"] == "null"
     assert updated_result["properties"]["transaction"] == {
         "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
     }
@@ -775,7 +755,7 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
         "$ref": "#/components/schemas/BalanceAdjustmentContextResponse"
     }
     assert create["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/BalanceAdjustmentResultResponse"
+        "$ref": "#/components/schemas/AdjustmentSuccessReceipt"
     }
     assert replace["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ReplaceBalanceAdjustmentResultResponse"
@@ -789,9 +769,18 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
             if status.startswith("2"):
                 continue
             assert set(response["content"]) == {"application/problem+json"}
+            expected = (
+                {
+                    "404": "AdjustmentNotFoundResponse",
+                    "409": "AdjustmentConflictResponse",
+                    "422": "AdjustmentValidationResponse",
+                }.get(status, "ProblemDetails")
+                if operation is create
+                else "ProblemDetails"
+            )
             assert (
                 response["content"]["application/problem+json"]["schema"]["$ref"]
-                == "#/components/schemas/ProblemDetails"
+                == f"#/components/schemas/{expected}"
             )
 
 

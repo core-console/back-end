@@ -1197,7 +1197,8 @@ async def test_generic_deletion_removes_all_four_kinds_and_unlocks_account_seman
                 "transactionDate": "2026-08-21",
             },
         )
-        adjustment = await client.post(
+        adjustment = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": adjustment_account["id"],
@@ -1206,6 +1207,7 @@ async def test_generic_deletion_removes_all_four_kinds_and_unlocks_account_seman
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "3.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts/{income_account['id']}/archive"
@@ -1303,7 +1305,8 @@ async def test_ordinary_replacement_preserves_scope_kind_and_archived_reference_
                 ],
             },
         )
-        adjustment = await client.post(
+        adjustment = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account["id"],
@@ -1312,6 +1315,7 @@ async def test_ordinary_replacement_preserves_scope_kind_and_archived_reference_
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "6.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         became_categorized = await client.put(
             f"/api/finance/ledgers/{ledger_id}/transactions/{uncategorized.json()['id']}",
@@ -2262,7 +2266,8 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
             "/balance-adjustment-context",
             params={"transactionDate": "2030-01-01"},
         )
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": asset.json()["id"],
@@ -2272,8 +2277,10 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
                 "targetBalance": {"amount": "130.00", "currency": "CNY"},
                 "note": "  count correction  ",
             },
+            owner_id=actor.id,
         )
-        liability_created = await client.post(
+        liability_created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": liability.json()["id"],
@@ -2282,11 +2289,13 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
                 "expectedAccountNature": "liability",
                 "targetBalance": {"amount": "210.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         detail = await client.get(
             f"/api/finance/ledgers/{ledger_id}/transactions/{created.json()['transaction']['id']}"
         )
-        no_change = await client.post(
+        no_change = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": asset.json()["id"],
@@ -2296,6 +2305,7 @@ async def test_balance_adjustment_context_create_and_no_change_use_historical_ac
                 "targetBalance": {"amount": "130", "currency": "CNY"},
                 "note": "must not persist",
             },
+            owner_id=actor.id,
         )
 
     assert asset_context.json() == {
@@ -2416,20 +2426,27 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
             "targetBalance": {"amount": "15.00", "currency": "USD"},
             "note": None,
         }
-        balance_first = await client.post(
+        balance_first = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 **command,
                 "expectedDerivedBalance": {"amount": "11.00", "currency": "USD"},
                 "expectedAccountNature": "liability",
             },
+            owner_id=actor.id,
         )
-        nature_second = await client.post(
+        nature_second = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={**command, "expectedAccountNature": "liability"},
+            owner_id=actor.id,
         )
-        created = await client.post(
-            f"/api/finance/ledgers/{ledger_id}/balance-adjustments", json=command
+        created = await create_finance_resource(
+            client,
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json=command,
+            owner_id=actor.id,
         )
         normal_context = await client.get(
             f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}"
@@ -2462,13 +2479,17 @@ async def test_balance_adjustment_stale_order_scope_archive_and_replacement_cont
             "/balance-adjustment-context",
             params={"transactionDate": "2026-08-10"},
         )
-        archived_create = await client.post(
+        archived_create = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={**command, "accountId": archived.json()["id"]},
+            owner_id=actor.id,
         )
-        before_tracking = await client.post(
+        before_tracking = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={**command, "transactionDate": "2026-08-09"},
+            owner_id=actor.id,
         )
         wrong_scope = await client.get(
             f"/api/finance/ledgers/{ledger_id}/accounts/{other_account.json()['id']}"
@@ -2525,7 +2546,8 @@ async def test_complete_balance_adjustment_result_projection_failure_rolls_back_
         )
 
         monkeypatch.setattr(finance_api, "_to_transaction_response", lambda _detail: object())
-        failed = await client.post(
+        failed = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account.json()["id"],
@@ -2534,6 +2556,7 @@ async def test_complete_balance_adjustment_result_projection_failure_rolls_back_
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "1.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         semantics_correction = await client.patch(
             f"/api/finance/ledgers/{ledger_id}/accounts/{account.json()['id']}",
@@ -2581,7 +2604,8 @@ async def test_balance_adjustment_persists_exact_delta_above_decimal_context_pre
             },
             owner_id=actor.id,
         )
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account.json()["id"],
@@ -2590,6 +2614,7 @@ async def test_balance_adjustment_persists_exact_delta_above_decimal_context_pre
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": target, "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         accounts = await client.get(f"/api/finance/ledgers/{ledger_id}/accounts")
 
@@ -2650,7 +2675,8 @@ async def test_postgresql_boundary_persists_and_derived_overflow_returns_validat
             },
             owner_id=actor.id,
         )
-        adjustment = await client.post(
+        adjustment = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account.json()["id"],
@@ -2659,6 +2685,7 @@ async def test_postgresql_boundary_persists_and_derived_overflow_returns_validat
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": boundary, "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
 
     counts = [
@@ -2714,7 +2741,8 @@ async def test_replace_balance_adjustment_updates_moves_and_removes_exact_old_ef
             },
             owner_id=actor.id,
         )
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": first.json()["id"],
@@ -2723,6 +2751,7 @@ async def test_replace_balance_adjustment_updates_moves_and_removes_exact_old_ef
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "15.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         old_id = created.json()["transaction"]["id"]
         same_account = await client.put(
@@ -2835,7 +2864,8 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
         await client.post(
             f"/api/finance/ledgers/{ledger_id}/accounts/{archived_other.json()['id']}/archive"
         )
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account.json()["id"],
@@ -2844,6 +2874,7 @@ async def test_replace_balance_adjustment_preserves_scope_kind_stale_and_archive
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "2.00", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         adjustment_id = created.json()["transaction"]["id"]
         ordinary = await _post_transaction(
@@ -2978,8 +3009,11 @@ async def test_replacement_projection_rolls_back_and_removal_unlocks_semantics(
             "expectedAccountNature": "asset",
             "targetBalance": {"amount": "1.00", "currency": "CNY"},
         }
-        created = await client.post(
-            f"/api/finance/ledgers/{ledger_id}/balance-adjustments", json=command
+        created = await create_finance_resource(
+            client,
+            f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
+            json=command,
+            owner_id=actor.id,
         )
         transaction_id = created.json()["transaction"]["id"]
 
@@ -3058,7 +3092,8 @@ async def test_replace_balance_adjustment_rejects_derived_delta_outside_durable_
             },
             owner_id=actor.id,
         )
-        created = await client.post(
+        created = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": account.json()["id"],
@@ -3070,6 +3105,7 @@ async def test_replace_balance_adjustment_rejects_derived_delta_outside_durable_
                     "currency": "CNY",
                 },
             },
+            owner_id=actor.id,
         )
         rejected = await client.put(
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments/{created.json()['transaction']['id']}",

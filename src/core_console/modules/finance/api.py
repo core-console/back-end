@@ -46,7 +46,6 @@ from core_console.modules.finance.schemas import (
     CategoryReferenceResponse,
     CategoryResponse,
     CorrectAccountSemanticsRequest,
-    CreateBalanceAdjustmentRequest,
     CurrencyResponse,
     ExpenseTransactionResponse,
     FinanceRequestDate,
@@ -85,7 +84,6 @@ from core_console.modules.finance.service import (
     archive_finance_account,
     archive_finance_category,
     correct_finance_account_semantics,
-    create_balance_adjustment,
     delete_finance_transaction,
     get_balance_adjustment_context,
     get_finance_overview,
@@ -1008,45 +1006,6 @@ async def get_adjustment_context(
         transactionDate=transaction_date,
         derivedComparisonBalance=_to_money_response(balance.current_balance, account.currency),
         accountNature=cast(Literal["asset", "liability"], account.nature),
-    )
-
-
-@router.post(
-    "/ledgers/{ledgerId}/balance-adjustments",
-    operation_id="createBalanceAdjustment",
-    summary="Create a Balance Adjustment",
-    response_model=BalanceAdjustmentResultResponse,
-    responses={
-        403: {"model": ProblemDetails, "description": "Access is denied."},
-        404: {"model": ProblemDetails, "description": "The resource does not exist."},
-        409: {"model": ProblemDetails, "description": "The context is stale or archived."},
-        422: {"model": ProblemDetails, "description": "The request is invalid."},
-        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
-        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
-    },
-    openapi_extra={"security": []},
-)
-async def post_balance_adjustment(
-    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
-    request: CreateBalanceAdjustmentRequest,
-    actor: Annotated[CurrentUser, Depends(require_active_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> BalanceAdjustmentResultResponse:
-    """Create only the required non-zero account-relative correction delta."""
-
-    return await _run_finance_workflow(
-        create_balance_adjustment(
-            session,
-            owner_id=actor.id,
-            ledger_id=ledger_id,
-            account_id=request.account_id,
-            transaction_date=request.transaction_date,
-            expected_derived_balance=request.expected_derived_balance.to_money(),
-            expected_account_nature=request.expected_account_nature,
-            target_balance=request.target_balance.to_money(),
-            note=request.note,
-            project=_to_balance_adjustment_result_response,
-        )
     )
 
 

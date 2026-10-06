@@ -200,7 +200,7 @@ async def test_t06_migration_preserves_prior_evidence_and_positions_and_blocks_u
         async with postgres_engine.connect() as connection:
             assert (
                 await connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261005_01"
+                == "20261006_01"
             )
         key = unfinished.submission_id
         resumed = await client.post(

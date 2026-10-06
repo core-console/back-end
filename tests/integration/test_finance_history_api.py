@@ -252,7 +252,8 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
             params={"transactionDate": "2026-08-21"},
         )
         context = adjustment_context.json()
-        adjustment = await client.post(
+        adjustment = await create_finance_resource(
+            client,
             f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
             json={
                 "accountId": card["id"],
@@ -261,6 +262,7 @@ async def test_history_filters_all_kinds_archived_references_and_owned_resources
                 "expectedAccountNature": context["accountNature"],
                 "targetBalance": {"amount": "5", "currency": "CNY"},
             },
+            owner_id=actor.id,
         )
         await client.post(f"/api/finance/ledgers/{ledger_id}/accounts/{cash['id']}/archive")
         await client.post(
@@ -484,6 +486,7 @@ async def test_history_reads_current_mutation_aftermath_without_writing(
         )
         updated_adjustment = await _create_adjustment(
             client,
+            owner_id=actor.id,
             ledger_id=ledger_id,
             account_id=reserve["id"],
             transaction_date="2026-08-18",
@@ -491,6 +494,7 @@ async def test_history_reads_current_mutation_aftermath_without_writing(
         )
         removed_adjustment = await _create_adjustment(
             client,
+            owner_id=actor.id,
             ledger_id=ledger_id,
             account_id=cash["id"],
             transaction_date="2026-08-17",
@@ -635,6 +639,7 @@ async def _create_adjustment(
     client: AsyncClient,
     *,
     ledger_id: str,
+    owner_id: UUID,
     account_id: str,
     transaction_date: str,
     target_amount: str,
@@ -645,7 +650,8 @@ async def _create_adjustment(
     )
     assert context.status_code == HTTPStatus.OK
     payload = context.json()
-    response = await client.post(
+    response = await create_finance_resource(
+        client,
         f"/api/finance/ledgers/{ledger_id}/balance-adjustments",
         json={
             "accountId": account_id,
@@ -654,6 +660,7 @@ async def _create_adjustment(
             "expectedAccountNature": payload["accountNature"],
             "targetBalance": {"amount": target_amount, "currency": "CNY"},
         },
+        owner_id=owner_id,
     )
     assert response.status_code == HTTPStatus.OK
     return cast(dict[str, Any], response.json()["transaction"])

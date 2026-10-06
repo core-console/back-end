@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.submission_schemas import (
     AccountCreatedReceipt,
+    AdjustmentSuccessReceipt,
     CategoryCreatedReceipt,
     FinanceSubmissionResponse,
     LedgerCreatedReceipt,
@@ -192,7 +193,7 @@ def test_nested_contract_is_operation_specific_and_requires_protocol(
         assert request["properties"]["trackingStartDate"]["format"] == "date"
 
 
-def test_cumulative_openapi_references_resolve_and_excluded_creates_remain_unchanged(
+def test_cumulative_openapi_references_resolve(
     app: FastAPI,
 ) -> None:
     schema = app.openapi()
@@ -212,14 +213,6 @@ def test_cumulative_openapi_references_resolve_and_excluded_creates_remain_uncha
                 check(value)
 
     check(schema)
-    for resource, status, response in [
-        ("balance-adjustments", "200", "BalanceAdjustmentResultResponse"),
-    ]:
-        operation = schema["paths"][f"/finance/ledgers/{{ledgerId}}/{resource}"]["post"]
-        assert all(p["in"] != "header" for p in operation["parameters"])
-        assert operation["responses"][status]["content"]["application/json"]["schema"] == {
-            "$ref": f"#/components/schemas/{response}"
-        }
 
 
 @pytest.mark.parametrize(
@@ -267,5 +260,99 @@ def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
     model = models[resource]
     with pytest.raises(ValidationError):
         model.model_validate(receipt)
+    with pytest.raises(ValidationError):
+        FinanceSubmissionResponse.model_validate({"state": "terminal", "receipt": receipt})
+
+
+@pytest.mark.parametrize(
+    ("path", "operation", "status", "receipt"),
+    [
+        ("/finance/ledgers", "createFinanceLedger", "201", "LedgerCreatedReceipt"),
+        (
+            "/finance/ledgers/{ledgerId}/accounts",
+            "createFinanceAccount",
+            "201",
+            "AccountCreatedReceipt",
+        ),
+        (
+            "/finance/ledgers/{ledgerId}/categories",
+            "createFinanceCategory",
+            "201",
+            "CategoryCreatedReceipt",
+        ),
+        (
+            "/finance/ledgers/{ledgerId}/transactions",
+            "createFinanceTransaction",
+            "201",
+            "TransactionCreatedReceipt",
+        ),
+        (
+            "/finance/ledgers/{ledgerId}/balance-adjustments",
+            "createBalanceAdjustment",
+            "200",
+            "AdjustmentSuccessReceipt",
+        ),
+    ],
+)
+def test_final_five_create_schema_header_status_and_lookup_matrix(
+    app: FastAPI, path: str, operation: str, status: str, receipt: str
+) -> None:
+    schema = app.openapi()
+    post = schema["paths"][path]["post"]
+    assert post["operationId"] == operation
+    assert {(p["name"], p["required"]) for p in post["parameters"] if p["in"] == "header"} == {
+        ("Idempotency-Key", True),
+        ("Finance-Command-Version", True),
+        ("Finance-Submission-Owner", True),
+    }
+    assert post["responses"][status]["content"]["application/json"]["schema"] == {
+        "$ref": f"#/components/schemas/{receipt}"
+    }
+    assert {"400", "403", "404", "409", "422", "500", "503"} <= post["responses"].keys()
+    for code, response in post["responses"].items():
+        if not code.startswith("2"):
+            assert set(response["content"]) == {"application/problem+json"}
+    terminal = schema["components"]["schemas"]["SubmissionReceipt"]
+    assert set(terminal["discriminator"]["mapping"]) == {
+        "createFinanceLedger",
+        "createFinanceAccount",
+        "createFinanceCategory",
+        "createFinanceTransaction",
+        "createBalanceAdjustment",
+    }
+    components = schema["components"]["schemas"]
+    assert set(
+        components["AdjustmentSubmissionReceipt"]["properties"]["outcome"]["discriminator"][
+            "mapping"
+        ]
+    ) == {"created", "noChange", "rejected"}
+    assert "submissionReceipt" in components["AdjustmentConflictTerminalProblem"]["required"]
+    assert "commandValidationRejection" in components["AdjustmentValidationProblem"]["required"]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        {"kind": "noChange", "resource": {"type": "transaction", "id": str(uuid4())}},
+        {"kind": "noChange", "problem": {}},
+        {"kind": "created", "resource": {"type": "account", "id": str(uuid4())}},
+        {"kind": "rejected", "problem": {}},
+    ],
+)
+def test_adjustment_success_and_lookup_refuse_impossible_outcomes(
+    outcome: dict[str, object],
+) -> None:
+    now = datetime.now(UTC)
+    receipt = {
+        "submissionId": uuid4(),
+        "commandVersion": "1",
+        "operation": "createBalanceAdjustment",
+        "targetLedgerId": uuid4(),
+        "admittedAt": now,
+        "resolvedAt": now,
+        "outcome": outcome,
+    }
+    with pytest.raises(ValidationError):
+        AdjustmentSuccessReceipt.model_validate(receipt)
     with pytest.raises(ValidationError):
         FinanceSubmissionResponse.model_validate({"state": "terminal", "receipt": receipt})

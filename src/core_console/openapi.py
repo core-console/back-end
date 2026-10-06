@@ -60,6 +60,9 @@ def _use_problem_details_media_type(contract_paths: dict[str, Any]) -> None:
                     "#/components/schemas/TransactionConflictResponse",
                     "#/components/schemas/TransactionNotFoundResponse",
                     "#/components/schemas/TransactionValidationResponse",
+                    "#/components/schemas/AdjustmentConflictResponse",
+                    "#/components/schemas/AdjustmentNotFoundResponse",
+                    "#/components/schemas/AdjustmentValidationResponse",
                     "#/components/schemas/SubmissionNonterminalProblem",
                 }:
                     continue

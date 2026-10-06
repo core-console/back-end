@@ -15,6 +15,7 @@ from core_console.database.dependencies import get_session
 from core_console.modules.finance.api import _run_finance_workflow
 from core_console.modules.finance.submission_commands import (
     AccountCommandV1,
+    AdjustmentCommandV1,
     CategoryCommandV1,
     CreateOperation,
     LedgerCommandV1,
@@ -26,6 +27,15 @@ from core_console.modules.finance.submission_schemas import (
     AccountTerminalProblem,
     AccountValidationProblem,
     AccountValidationResponse,
+    AdjustmentConflictResponse,
+    AdjustmentConflictTerminalProblem,
+    AdjustmentInvalidTerminalProblem,
+    AdjustmentMissingTerminalProblem,
+    AdjustmentNotFoundResponse,
+    AdjustmentRejectedOutcome,
+    AdjustmentSuccessReceipt,
+    AdjustmentValidationProblem,
+    AdjustmentValidationResponse,
     CategoryConflictResponse,
     CategoryCreatedReceipt,
     CategoryRejectedOutcome,
@@ -307,6 +317,64 @@ async def post_transaction(
     return await _post_create(request, actor, session, "createFinanceTransaction", ledger_id)
 
 
+def _adjustment_request_schema() -> dict[str, object]:
+    schema = AdjustmentCommandV1.model_json_schema()
+    definitions = schema.pop("$defs")
+    for field in ("expectedDerivedBalance", "targetBalance"):
+        schema["properties"][field] = definitions["OpeningBalanceV1"]
+    return schema
+
+
+@router.post(
+    "/ledgers/{ledgerId}/balance-adjustments",
+    operation_id="createBalanceAdjustment",
+    summary="Create a Balance Adjustment",
+    description="Admits an Adjustment v1 command and returns immutable success evidence.",
+    status_code=200,
+    response_model=AdjustmentSuccessReceipt,
+    responses={
+        400: {"model": ProblemDetails, "description": "Submission headers are required and valid."},
+        403: {"model": ProblemDetails, "description": "Access or owner assertion denied."},
+        404: {
+            "model": AdjustmentNotFoundResponse,
+            "description": "Unavailable scope or terminal reference rejection.",
+        },
+        409: {
+            "model": AdjustmentConflictResponse,
+            "description": "Terminal stale/archived rejection or unresolved conflict/busy.",
+        },
+        422: {
+            "model": AdjustmentValidationResponse,
+            "description": "Terminal rejection, guarded Q29, or unresolved validation/version.",
+        },
+        500: {
+            "model": ProblemDetails,
+            "description": "Unexpected failure; outcome remains unresolved.",
+        },
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={
+        "security": [],
+        "parameters": [
+            _header_parameter("Idempotency-Key", format="uuid"),
+            _header_parameter("Finance-Command-Version"),
+            _header_parameter("Finance-Submission-Owner", format="uuid"),
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": _adjustment_request_schema()}},
+        },
+    },
+)
+async def post_adjustment(
+    request: Request,
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> JSONResponse:
+    return await _post_create(request, actor, session, "createBalanceAdjustment", ledger_id)
+
+
 async def _post_create(
     request: Request,
     actor: CurrentUser,
@@ -347,6 +415,7 @@ async def _post_create(
             AccountValidationProblem,
             CategoryValidationProblem,
             TransactionValidationProblem,
+            AdjustmentValidationProblem,
         ),
     ):
         return problem_response(evidence.model_copy(update={"instance": request.url.path}))
@@ -357,6 +426,7 @@ async def _post_create(
             AccountRejectedOutcome,
             CategoryRejectedOutcome,
             TransactionRejectedOutcome,
+            AdjustmentRejectedOutcome,
         ),
     ):
         problem = evidence.outcome.problem
@@ -370,6 +440,16 @@ async def _post_create(
             409: TransactionArchivedTerminalProblem,
             422: TransactionInvalidTerminalProblem,
         }
+        adjustment_problem_models: dict[
+            int,
+            type[AdjustmentMissingTerminalProblem]
+            | type[AdjustmentConflictTerminalProblem]
+            | type[AdjustmentInvalidTerminalProblem],
+        ] = {
+            404: AdjustmentMissingTerminalProblem,
+            409: AdjustmentConflictTerminalProblem,
+            422: AdjustmentInvalidTerminalProblem,
+        }
         problem_models: dict[
             CreateOperation,
             (
@@ -379,12 +459,16 @@ async def _post_create(
                 | type[TransactionArchivedTerminalProblem]
                 | type[TransactionMissingTerminalProblem]
                 | type[TransactionInvalidTerminalProblem]
+                | type[AdjustmentMissingTerminalProblem]
+                | type[AdjustmentConflictTerminalProblem]
+                | type[AdjustmentInvalidTerminalProblem]
             ),
         ] = {
             "createFinanceLedger": LedgerTerminalProblem,
             "createFinanceAccount": AccountTerminalProblem,
             "createFinanceCategory": CategoryTerminalProblem,
             "createFinanceTransaction": transaction_problem_models[problem.status],
+            "createBalanceAdjustment": adjustment_problem_models[problem.status],
         }
         problem_model = problem_models[operation]
         return problem_response(
@@ -396,7 +480,10 @@ async def _post_create(
                 }
             )
         )
-    return JSONResponse(status_code=201, content=evidence.model_dump(mode="json", by_alias=True))
+    return JSONResponse(
+        status_code=200 if operation == "createBalanceAdjustment" else 201,
+        content=evidence.model_dump(mode="json", by_alias=True),
+    )
 
 
 @router.get(

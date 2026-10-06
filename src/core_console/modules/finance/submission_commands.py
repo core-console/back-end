@@ -213,9 +213,28 @@ type TransactionCommandV1 = Annotated[
     IncomeCommandV1 | ExpenseCommandV1 | TransferCommandV1, Field(discriminator="kind")
 ]
 
+
+class AdjustmentCommandV1(_TransactionCommandV1):
+    account_id: UUID = Field(alias="accountId")
+    expected_derived_balance: OpeningBalanceV1 = Field(alias="expectedDerivedBalance")
+    expected_account_nature: Literal["asset", "liability"] = Field(alias="expectedAccountNature")
+    target_balance: OpeningBalanceV1 = Field(alias="targetBalance")
+
+    def canonical(self) -> dict[str, object]:
+        return {
+            "accountId": str(self.account_id),
+            "transactionDate": self.transaction_date.isoformat(),
+            "expectedDerivedBalance": self.expected_derived_balance.canonical(),
+            "expectedAccountNature": self.expected_account_nature,
+            "targetBalance": self.target_balance.canonical(),
+            "note": self.note,
+        }
+
+
 type CreateOperation = Literal[
     "createFinanceLedger",
     "createFinanceAccount",
     "createFinanceCategory",
     "createFinanceTransaction",
+    "createBalanceAdjustment",
 ]

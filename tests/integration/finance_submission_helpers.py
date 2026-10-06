@@ -24,6 +24,26 @@ async def create_finance_resource(
     """
     headers = submission_headers(owner_id)
     response = await client.post(path, json=json, headers=headers)
+    if path.endswith("/balance-adjustments"):
+        if response.status_code != 200:
+            return response
+        receipt = response.json()
+        assert receipt["submissionId"] == headers["Idempotency-Key"]
+        assert receipt["operation"] == "createBalanceAdjustment"
+        assert receipt["targetLedgerId"] == path.split("/")[-2]
+        if receipt["outcome"]["kind"] == "noChange":
+            return Response(
+                200, json={"outcome": "noChange", "transaction": None}, request=response.request
+            )
+        resource = receipt["outcome"]["resource"]
+        assert resource["type"] == "transaction"
+        current = await client.get(f"{path.rsplit('/', 1)[0]}/transactions/{resource['id']}")
+        assert current.status_code == 200
+        return Response(
+            200,
+            json={"outcome": "created", "transaction": current.json()},
+            request=response.request,
+        )
     if response.status_code != 201:
         return response
     receipt = response.json()

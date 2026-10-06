@@ -198,8 +198,8 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
     ("method", "path", "body", "workflow_name", "failure", "expected"),
     (
         (
-            "POST",
-            f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
+            "PUT",
+            f"/api/finance/ledgers/{uuid4()}/balance-adjustments/{uuid4()}",
             {
                 "accountId": str(uuid4()),
                 "transactionDate": "2026-08-21",
@@ -207,7 +207,7 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "12.00", "currency": "CNY"},
             },
-            "create_balance_adjustment",
+            "replace_balance_adjustment",
             FinanceAccountBalanceChangedError(),
             {
                 "status": HTTPStatus.CONFLICT,
@@ -217,8 +217,8 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
             },
         ),
         (
-            "POST",
-            f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
+            "PUT",
+            f"/api/finance/ledgers/{uuid4()}/balance-adjustments/{uuid4()}",
             {
                 "accountId": str(uuid4()),
                 "transactionDate": "2026-08-21",
@@ -226,7 +226,7 @@ async def test_finance_money_outside_durable_range_returns_422_without_financial
                 "expectedAccountNature": "asset",
                 "targetBalance": {"amount": "12.00", "currency": "CNY"},
             },
-            "create_balance_adjustment",
+            "replace_balance_adjustment",
             FinanceAccountSemanticsChangedError(),
             {
                 "status": HTTPStatus.CONFLICT,
@@ -794,7 +794,7 @@ async def test_transaction_v1_rejects_immutable_invalid_public_contract(
         },
     ),
 )
-async def test_create_balance_adjustment_rejects_invalid_contract_without_database_work(
+async def test_create_balance_adjustment_rejects_invalid_contract_without_financial_work(
     app: FastAPI,
     client: AsyncClient,
     body: dict[str, object],
@@ -804,12 +804,15 @@ async def test_create_balance_adjustment_rejects_invalid_contract_without_databa
     async def fake_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    app.dependency_overrides[get_current_user] = _active_user
+    actor = _active_user()
+    app.dependency_overrides[get_current_user] = lambda: actor
+    cast(AsyncMock, session.scalar).side_effect = [uuid4(), None, uuid4(), None]
     app.dependency_overrides[get_session] = fake_session
 
     response = await client.post(
         f"/api/finance/ledgers/{uuid4()}/balance-adjustments",
         json=body,
+        headers=_submission_headers(actor),
     )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY

@@ -593,6 +593,941 @@
         "const": true,
         "type": "boolean"
       },
+      "AdjustmentCommandValidationRejection": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptedBody": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Attemptedbody",
+            "type": "object"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "kind": {
+            "const": "definitivelyNotAdmitted",
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "title": "Ownerid",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "submissionId",
+          "commandVersion",
+          "ownerId",
+          "attemptedBody",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "AdjustmentCommandValidationRejection",
+        "type": "object"
+      },
+      "AdjustmentConflictOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/AdjustmentConflictProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "AdjustmentConflictOutcome",
+        "type": "object"
+      },
+      "AdjustmentConflictProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "finance_account_archived",
+              "account_balance_changed",
+              "finance_account_semantics_changed"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 409,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "AdjustmentConflictProblem",
+        "type": "object"
+      },
+      "AdjustmentConflictReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AdjustmentConflictOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AdjustmentConflictReceipt",
+        "type": "object"
+      },
+      "AdjustmentConflictResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/AdjustmentConflictTerminalProblem"
+          }
+        ],
+        "description": "Unresolved failures or immutable Adjustment business rejection.",
+        "title": "AdjustmentConflictResponse"
+      },
+      "AdjustmentConflictTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "finance_account_archived",
+              "account_balance_changed",
+              "finance_account_semantics_changed"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 409,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/AdjustmentConflictReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "AdjustmentConflictTerminalProblem",
+        "type": "object"
+      },
+      "AdjustmentCreatedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "created",
+            "title": "Kind",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/AdjustmentCreatedResource"
+          }
+        },
+        "required": [
+          "kind",
+          "resource"
+        ],
+        "title": "AdjustmentCreatedOutcome",
+        "type": "object"
+      },
+      "AdjustmentCreatedResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "transaction",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "AdjustmentCreatedResource",
+        "type": "object"
+      },
+      "AdjustmentInvalidOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/AdjustmentInvalidProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "AdjustmentInvalidOutcome",
+        "type": "object"
+      },
+      "AdjustmentInvalidProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "AdjustmentInvalidProblem",
+        "type": "object"
+      },
+      "AdjustmentInvalidReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AdjustmentInvalidOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AdjustmentInvalidReceipt",
+        "type": "object"
+      },
+      "AdjustmentInvalidTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/AdjustmentInvalidReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "AdjustmentInvalidTerminalProblem",
+        "type": "object"
+      },
+      "AdjustmentMissingOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/AdjustmentMissingProblem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "AdjustmentMissingOutcome",
+        "type": "object"
+      },
+      "AdjustmentMissingProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "finance_account_not_found",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "const": 404,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "title": "AdjustmentMissingProblem",
+        "type": "object"
+      },
+      "AdjustmentMissingReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AdjustmentMissingOutcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AdjustmentMissingReceipt",
+        "type": "object"
+      },
+      "AdjustmentMissingTerminalProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "finance_account_not_found",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 404,
+            "title": "Status",
+            "type": "integer"
+          },
+          "submissionReceipt": {
+            "$ref": "#/components/schemas/AdjustmentMissingReceipt"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "submissionReceipt"
+        ],
+        "title": "AdjustmentMissingTerminalProblem",
+        "type": "object"
+      },
+      "AdjustmentNoChangeOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "noChange",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AdjustmentNoChangeOutcome",
+        "type": "object"
+      },
+      "AdjustmentNotFoundResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/AdjustmentMissingTerminalProblem"
+          }
+        ],
+        "description": "Unavailable scope or immutable missing Account rejection.",
+        "title": "AdjustmentNotFoundResponse"
+      },
+      "AdjustmentRejectedOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rejected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "problem": {
+            "discriminator": {
+              "mapping": {
+                "account_balance_changed": "#/components/schemas/AdjustmentConflictProblem",
+                "finance_account_archived": "#/components/schemas/AdjustmentConflictProblem",
+                "finance_account_not_found": "#/components/schemas/AdjustmentMissingProblem",
+                "finance_account_semantics_changed": "#/components/schemas/AdjustmentConflictProblem",
+                "validation_error": "#/components/schemas/AdjustmentInvalidProblem"
+              },
+              "propertyName": "code"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AdjustmentInvalidProblem"
+              },
+              {
+                "$ref": "#/components/schemas/AdjustmentConflictProblem"
+              },
+              {
+                "$ref": "#/components/schemas/AdjustmentMissingProblem"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "required": [
+          "kind",
+          "problem"
+        ],
+        "title": "AdjustmentRejectedOutcome",
+        "type": "object"
+      },
+      "AdjustmentSubmissionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "discriminator": {
+              "mapping": {
+                "created": "#/components/schemas/AdjustmentCreatedOutcome",
+                "noChange": "#/components/schemas/AdjustmentNoChangeOutcome",
+                "rejected": "#/components/schemas/AdjustmentRejectedOutcome"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AdjustmentCreatedOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/AdjustmentNoChangeOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/AdjustmentRejectedOutcome"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AdjustmentSubmissionReceipt",
+        "type": "object"
+      },
+      "AdjustmentSubmissionUnfinished": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "state": {
+            "const": "unfinished",
+            "title": "State",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "operation",
+          "targetLedgerId"
+        ],
+        "title": "AdjustmentSubmissionUnfinished",
+        "type": "object"
+      },
+      "AdjustmentSuccessReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "title": "Admittedat",
+            "type": "string"
+          },
+          "commandVersion": {
+            "const": "1",
+            "title": "Commandversion",
+            "type": "string"
+          },
+          "operation": {
+            "const": "createBalanceAdjustment",
+            "title": "Operation",
+            "type": "string"
+          },
+          "outcome": {
+            "discriminator": {
+              "mapping": {
+                "created": "#/components/schemas/AdjustmentCreatedOutcome",
+                "noChange": "#/components/schemas/AdjustmentNoChangeOutcome"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AdjustmentCreatedOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/AdjustmentNoChangeOutcome"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "title": "Resolvedat",
+            "type": "string"
+          },
+          "submissionId": {
+            "format": "uuid",
+            "title": "Submissionid",
+            "type": "string"
+          },
+          "targetLedgerId": {
+            "format": "uuid",
+            "title": "Targetledgerid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submissionId",
+          "commandVersion",
+          "admittedAt",
+          "resolvedAt",
+          "operation",
+          "targetLedgerId",
+          "outcome"
+        ],
+        "title": "AdjustmentSuccessReceipt",
+        "type": "object"
+      },
+      "AdjustmentValidationProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "validation_error",
+            "title": "Code",
+            "type": "string"
+          },
+          "commandValidationRejection": {
+            "$ref": "#/components/schemas/AdjustmentCommandValidationRejection"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "uri-reference",
+            "title": "Instance"
+          },
+          "status": {
+            "const": 422,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "errors",
+          "commandValidationRejection"
+        ],
+        "title": "AdjustmentValidationProblem",
+        "type": "object"
+      },
+      "AdjustmentValidationResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SubmissionNonterminalProblem"
+          },
+          {
+            "$ref": "#/components/schemas/AdjustmentValidationProblem"
+          },
+          {
+            "$ref": "#/components/schemas/AdjustmentInvalidTerminalProblem"
+          }
+        ],
+        "description": "Distinguish unresolved validation, Q29, and terminal business evidence.",
+        "title": "AdjustmentValidationResponse"
+      },
       "BalanceAdjustmentContextResponse": {
         "additionalProperties": false,
         "description": "Authoritative inputs for one stale-safe target-balance command.",
@@ -626,47 +1561,6 @@
         "title": "BalanceAdjustmentContextResponse",
         "type": "object"
       },
-      "BalanceAdjustmentCreatedResultResponse": {
-        "additionalProperties": false,
-        "description": "A command result containing the newly created Adjustment.",
-        "properties": {
-          "outcome": {
-            "const": "created",
-            "title": "Outcome",
-            "type": "string"
-          },
-          "transaction": {
-            "$ref": "#/components/schemas/BalanceAdjustmentTransactionResponse"
-          }
-        },
-        "required": [
-          "outcome",
-          "transaction"
-        ],
-        "title": "BalanceAdjustmentCreatedResultResponse",
-        "type": "object"
-      },
-      "BalanceAdjustmentNoChangeResultResponse": {
-        "additionalProperties": false,
-        "description": "A write-free command result with no durable Transaction.",
-        "properties": {
-          "outcome": {
-            "const": "noChange",
-            "title": "Outcome",
-            "type": "string"
-          },
-          "transaction": {
-            "title": "Transaction",
-            "type": "null"
-          }
-        },
-        "required": [
-          "outcome",
-          "transaction"
-        ],
-        "title": "BalanceAdjustmentNoChangeResultResponse",
-        "type": "object"
-      },
       "BalanceAdjustmentRemovedResultResponse": {
         "additionalProperties": false,
         "description": "A zero-delta replacement result after removing the old Adjustment.",
@@ -687,25 +1581,6 @@
         ],
         "title": "BalanceAdjustmentRemovedResultResponse",
         "type": "object"
-      },
-      "BalanceAdjustmentResultResponse": {
-        "description": "Exact outcome-discriminated Balance Adjustment command result.",
-        "discriminator": {
-          "mapping": {
-            "created": "#/components/schemas/BalanceAdjustmentCreatedResultResponse",
-            "noChange": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse"
-          },
-          "propertyName": "outcome"
-        },
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/BalanceAdjustmentCreatedResultResponse"
-          },
-          {
-            "$ref": "#/components/schemas/BalanceAdjustmentNoChangeResultResponse"
-          }
-        ],
-        "title": "BalanceAdjustmentResultResponse"
       },
       "BalanceAdjustmentTransactionResponse": {
         "additionalProperties": false,
@@ -1432,55 +2307,6 @@
           }
         },
         "title": "CorrectAccountSemanticsRequest",
-        "type": "object"
-      },
-      "CreateBalanceAdjustmentRequest": {
-        "additionalProperties": false,
-        "description": "Stale-safe target-balance command for one active Account.",
-        "properties": {
-          "accountId": {
-            "format": "uuid",
-            "title": "Accountid",
-            "type": "string"
-          },
-          "expectedAccountNature": {
-            "enum": [
-              "asset",
-              "liability"
-            ],
-            "title": "Expectedaccountnature",
-            "type": "string"
-          },
-          "expectedDerivedBalance": {
-            "$ref": "#/components/schemas/MoneyRequest"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 500,
-            "title": "Note"
-          },
-          "targetBalance": {
-            "$ref": "#/components/schemas/MoneyRequest"
-          },
-          "transactionDate": {
-            "$ref": "#/components/schemas/FinanceRequestDate"
-          }
-        },
-        "required": [
-          "accountId",
-          "transactionDate",
-          "expectedDerivedBalance",
-          "expectedAccountNature",
-          "targetBalance"
-        ],
-        "title": "CreateBalanceAdjustmentRequest",
         "type": "object"
       },
       "CreateUserRequest": {
@@ -3004,6 +3830,7 @@
       "SubmissionReceipt": {
         "discriminator": {
           "mapping": {
+            "createBalanceAdjustment": "#/components/schemas/AdjustmentSubmissionReceipt",
             "createFinanceAccount": "#/components/schemas/AccountSubmissionReceipt",
             "createFinanceCategory": "#/components/schemas/CategorySubmissionReceipt",
             "createFinanceLedger": "#/components/schemas/LedgerSubmissionReceipt",
@@ -3023,12 +3850,16 @@
           },
           {
             "$ref": "#/components/schemas/TransactionSubmissionReceipt"
+          },
+          {
+            "$ref": "#/components/schemas/AdjustmentSubmissionReceipt"
           }
         ]
       },
       "SubmissionUnfinished": {
         "discriminator": {
           "mapping": {
+            "createBalanceAdjustment": "#/components/schemas/AdjustmentSubmissionUnfinished",
             "createFinanceAccount": "#/components/schemas/AccountSubmissionUnfinished",
             "createFinanceCategory": "#/components/schemas/CategorySubmissionUnfinished",
             "createFinanceLedger": "#/components/schemas/LedgerSubmissionUnfinished",
@@ -3048,6 +3879,9 @@
           },
           {
             "$ref": "#/components/schemas/TransactionSubmissionUnfinished"
+          },
+          {
+            "$ref": "#/components/schemas/AdjustmentSubmissionUnfinished"
           }
         ]
       },
@@ -5283,7 +6117,7 @@
     },
     "/finance/ledgers/{ledgerId}/balance-adjustments": {
       "post": {
-        "description": "Create only the required non-zero account-relative correction delta.",
+        "description": "Admits an Adjustment v1 command and returns immutable success evidence.",
         "operationId": "createBalanceAdjustment",
         "parameters": [
           {
@@ -5295,13 +6129,130 @@
               "title": "Ledgerid",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Command-Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Finance-Submission-Owner",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateBalanceAdjustmentRequest"
+                "additionalProperties": false,
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "title": "Accountid",
+                    "type": "string"
+                  },
+                  "expectedAccountNature": {
+                    "enum": [
+                      "asset",
+                      "liability"
+                    ],
+                    "title": "Expectedaccountnature",
+                    "type": "string"
+                  },
+                  "expectedDerivedBalance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency": {
+                        "enum": [
+                          "CNY",
+                          "JPY",
+                          "USD"
+                        ],
+                        "title": "Currency",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount",
+                      "currency"
+                    ],
+                    "title": "OpeningBalanceV1",
+                    "type": "object"
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "maxLength": 500,
+                    "title": "Note"
+                  },
+                  "targetBalance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency": {
+                        "enum": [
+                          "CNY",
+                          "JPY",
+                          "USD"
+                        ],
+                        "title": "Currency",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount",
+                      "currency"
+                    ],
+                    "title": "OpeningBalanceV1",
+                    "type": "object"
+                  },
+                  "transactionDate": {
+                    "format": "date",
+                    "title": "Transactiondate",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "transactionDate",
+                  "accountId",
+                  "expectedDerivedBalance",
+                  "expectedAccountNature",
+                  "targetBalance"
+                ],
+                "title": "AdjustmentCommandV1",
+                "type": "object"
               }
             }
           },
@@ -5312,11 +6263,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BalanceAdjustmentResultResponse"
+                  "$ref": "#/components/schemas/AdjustmentSuccessReceipt"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Submission headers are required and valid."
           },
           "403": {
             "content": {
@@ -5326,37 +6287,37 @@
                 }
               }
             },
-            "description": "Access is denied."
+            "description": "Access or owner assertion denied."
           },
           "404": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/AdjustmentNotFoundResponse"
                 }
               }
             },
-            "description": "The resource does not exist."
+            "description": "Unavailable scope or terminal reference rejection."
           },
           "409": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/AdjustmentConflictResponse"
                 }
               }
             },
-            "description": "The context is stale or archived."
+            "description": "Terminal stale/archived rejection or unresolved conflict/busy."
           },
           "422": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/AdjustmentValidationResponse"
                 }
               }
             },
-            "description": "The request is invalid."
+            "description": "Terminal rejection, guarded Q29, or unresolved validation/version."
           },
           "500": {
             "content": {
@@ -5366,7 +6327,7 @@
                 }
               }
             },
-            "description": "An unexpected error occurred."
+            "description": "Unexpected failure; outcome remains unresolved."
           },
           "503": {
             "content": {

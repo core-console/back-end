@@ -218,7 +218,7 @@ async def test_additive_migration_preserves_old_receipts_positions_and_nested_en
     async with postgres_engine.connect() as connection:
         assert (
             await connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261005_01"
+            == "20261006_01"
         )
     async with finance_client(database_url=postgres_database_url, actor=actor) as client:
         assert (
