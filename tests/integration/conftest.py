@@ -27,6 +27,7 @@ from core_console.modules.finance.models import (
     FinanceCategory,
     FinanceCategoryAllocation,
     FinanceLedger,
+    FinanceParticipant,
     FinanceTransaction,
 )
 from core_console.modules.finance.submission_models import FinanceSubmission
@@ -211,6 +212,7 @@ async def postgres_session(
             await session.execute(delete(FinanceAccountMovement))
             await session.execute(delete(FinanceTransaction))
             await session.execute(delete(FinanceCategory))
+            await session.execute(delete(FinanceParticipant))
             await session.execute(delete(FinanceAccount))
             await session.execute(delete(FinanceLedger))
             await session.execute(delete(User))

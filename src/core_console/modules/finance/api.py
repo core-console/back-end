@@ -16,7 +16,7 @@ from core_console.modules.finance.history_schemas import (
     TransactionHistoryFilters,
     TransactionHistoryPageResponse,
 )
-from core_console.modules.finance.models import FinanceCategory, FinanceLedger
+from core_console.modules.finance.models import FinanceCategory, FinanceLedger, FinanceParticipant
 from core_console.modules.finance.money import CurrencyCode, Money
 from core_console.modules.finance.overview_schemas import (
     DayActivityByCurrencyResponse,
@@ -54,6 +54,8 @@ from core_console.modules.finance.schemas import (
     InternalTransferTransactionResponse,
     LedgerResponse,
     MoneyResponse,
+    ParticipantNameRequest,
+    ParticipantResponse,
     ReplaceBalanceAdjustmentRequest,
     ReplaceBalanceAdjustmentResultResponse,
     ReplaceFinanceTransactionRequest,
@@ -73,6 +75,7 @@ from core_console.modules.finance.service import (
     FinanceCategoryNotFoundError,
     FinanceLedgerNameConflictError,
     FinanceLedgerNotFoundError,
+    FinanceParticipantNotFoundError,
     FinanceTransactionKindImmutableError,
     FinanceTransactionNotFoundError,
     InvalidFinanceAccountMoneyError,
@@ -80,17 +83,23 @@ from core_console.modules.finance.service import (
     InvalidFinanceAccountTrackingStartDateError,
     InvalidFinanceCategoryNameError,
     InvalidFinanceLedgerNameError,
+    InvalidFinanceParticipantNameError,
     InvalidFinanceTransactionError,
     archive_finance_account,
     archive_finance_category,
+    archive_finance_participant,
     correct_finance_account_semantics,
+    create_finance_participant,
     delete_finance_transaction,
     get_balance_adjustment_context,
     get_finance_overview,
     get_finance_transaction,
+    inspect_finance_participant,
     list_finance_accounts,
     list_finance_categories_for_ledger,
+    list_finance_participants_for_ledger,
     list_finance_transactions,
+    rename_finance_participant,
     replace_balance_adjustment,
     replace_finance_transaction,
     replace_internal_transfer_transaction,
@@ -117,6 +126,7 @@ type _FinanceApplicationError = (
     | FinanceCategoryNotFoundError
     | FinanceLedgerNameConflictError
     | FinanceLedgerNotFoundError
+    | FinanceParticipantNotFoundError
     | FinanceTransactionNotFoundError
     | FinanceTransactionKindImmutableError
     | InvalidFinanceAccountMoneyError
@@ -124,6 +134,7 @@ type _FinanceApplicationError = (
     | InvalidFinanceAccountTrackingStartDateError
     | InvalidFinanceCategoryNameError
     | InvalidFinanceLedgerNameError
+    | InvalidFinanceParticipantNameError
     | InvalidFinanceTransactionError
 )
 
@@ -334,6 +345,7 @@ async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
         FinanceCategoryNotFoundError,
         FinanceLedgerNameConflictError,
         FinanceLedgerNotFoundError,
+        FinanceParticipantNotFoundError,
         FinanceTransactionNotFoundError,
         FinanceTransactionKindImmutableError,
         InvalidFinanceAccountMoneyError,
@@ -341,6 +353,7 @@ async def _run_finance_workflow[Result](workflow: Awaitable[Result]) -> Result:
         InvalidFinanceAccountTrackingStartDateError,
         InvalidFinanceCategoryNameError,
         InvalidFinanceLedgerNameError,
+        InvalidFinanceParticipantNameError,
         InvalidFinanceTransactionError,
     ) as exc:
         raise _finance_problem_for(exc) from None
@@ -357,6 +370,7 @@ def _finance_problem_for(error: _FinanceApplicationError) -> ApplicationProblem:
             InvalidFinanceAccountTrackingStartDateError,
             InvalidFinanceCategoryNameError,
             InvalidFinanceLedgerNameError,
+            InvalidFinanceParticipantNameError,
             InvalidFinanceTransactionError,
         ),
     ):
@@ -403,6 +417,13 @@ def _finance_problem_for(error: _FinanceApplicationError) -> ApplicationProblem:
             title="Conflict",
             detail="The Finance Account Nature changed; refresh the adjustment context.",
             code="finance_account_semantics_changed",
+        )
+    if isinstance(error, FinanceParticipantNotFoundError):
+        return ApplicationProblem(
+            status=HTTPStatus.NOT_FOUND,
+            title="Not Found",
+            detail="The requested Finance Participant does not exist.",
+            code="finance_participant_not_found",
         )
     if isinstance(error, FinanceCategoryNotFoundError):
         return ApplicationProblem(
@@ -1215,3 +1236,188 @@ async def delete_transaction(
             transaction_id=transaction_id,
         )
     )
+
+
+def _to_participant_response(participant: FinanceParticipant) -> ParticipantResponse:
+    """Expose stable identity separately from the editable display name."""
+
+    return ParticipantResponse(
+        id=participant.id,
+        ledgerId=participant.ledger_id,
+        name=participant.name,
+        status=cast(Literal["active", "archived"], participant.status),
+    )
+
+
+@router.post(
+    "/ledgers/{ledgerId}/participants",
+    operation_id="createFinanceParticipant",
+    summary="Create a private Ledger Participant",
+    description=(
+        "Creates an independent Ledger-local UUID identity. Display names may repeat. "
+        "This metadata operation has no financial effects and does not use the "
+        "Finance submission protocol."
+    ),
+    response_model=ParticipantResponse,
+    status_code=201,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_participant(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    request: ParticipantNameRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ParticipantResponse:
+    """Create a private Ledger Participant."""
+
+    result = await _run_finance_workflow(
+        create_finance_participant(
+            session, owner_id=actor.id, ledger_id=ledger_id, name=request.name
+        )
+    )
+    return _to_participant_response(result)
+
+
+@router.get(
+    "/ledgers/{ledgerId}/participants",
+    operation_id="listFinanceParticipants",
+    summary="List active and archived Ledger Participants",
+    description=(
+        "Returns active then archived identities, ordered by case-folded name and UUID. "
+        "Only the owner of the addressed Ledger can access these records."
+    ),
+    response_model=list[ParticipantResponse],
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def get_participants(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[ParticipantResponse]:
+    """List active and archived Ledger Participants."""
+
+    result = await _run_finance_workflow(
+        list_finance_participants_for_ledger(session, owner_id=actor.id, ledger_id=ledger_id)
+    )
+    return [_to_participant_response(item) for item in result]
+
+
+@router.get(
+    "/ledgers/{ledgerId}/participants/{participantId}",
+    operation_id="getFinanceParticipant",
+    summary="Inspect a private Ledger Participant",
+    description=(
+        "Includes archived identities for historical attribution. "
+        "Only the owner of the addressed Ledger can access these records."
+    ),
+    response_model=ParticipantResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def get_participant(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    participant_id: Annotated[UUID, Path(alias="participantId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ParticipantResponse:
+    """Inspect a private Ledger Participant."""
+
+    result = await _run_finance_workflow(
+        inspect_finance_participant(
+            session, owner_id=actor.id, ledger_id=ledger_id, participant_id=participant_id
+        )
+    )
+    return _to_participant_response(result)
+
+
+@router.patch(
+    "/ledgers/{ledgerId}/participants/{participantId}",
+    operation_id="renameFinanceParticipant",
+    summary="Rename a private Ledger Participant",
+    description=(
+        "Renames active or archived identity metadata without changing its UUID, Ledger, "
+        "status, historical attribution, or financial effects."
+    ),
+    response_model=ParticipantResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def patch_participant(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    participant_id: Annotated[UUID, Path(alias="participantId")],
+    request: ParticipantNameRequest,
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ParticipantResponse:
+    """Rename a private Ledger Participant."""
+
+    result = await _run_finance_workflow(
+        rename_finance_participant(
+            session,
+            owner_id=actor.id,
+            ledger_id=ledger_id,
+            participant_id=participant_id,
+            name=request.name,
+        )
+    )
+    return _to_participant_response(result)
+
+
+@router.post(
+    "/ledgers/{ledgerId}/participants/{participantId}/archive",
+    operation_id="archiveFinanceParticipant",
+    summary="Archive a private Ledger Participant",
+    description=(
+        "Idempotently archives without deleting identity or changing financial effects. "
+        "Archived Participants remain inspectable and must not be offered for new Advances."
+    ),
+    response_model=ParticipantResponse,
+    responses={
+        403: {"model": ProblemDetails, "description": "Access is denied."},
+        404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        422: {"model": ProblemDetails, "description": "The request is invalid."},
+        500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
+        503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
+    },
+    openapi_extra={"security": []},
+)
+async def post_participant_archive(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    participant_id: Annotated[UUID, Path(alias="participantId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ParticipantResponse:
+    """Archive a private Ledger Participant."""
+
+    result = await _run_finance_workflow(
+        archive_finance_participant(
+            session, owner_id=actor.id, ledger_id=ledger_id, participant_id=participant_id
+        )
+    )
+    return _to_participant_response(result)

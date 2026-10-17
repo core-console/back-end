@@ -784,6 +784,50 @@ def test_openapi_describes_balance_adjustment_context_and_command_contract(
             )
 
 
+def test_openapi_describes_private_ledger_participant_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    paths = schema["paths"]
+    base = "/finance/ledgers/{ledgerId}/participants"
+    detail = f"{base}/{{participantId}}"
+    expected = [
+        (base, "post", "createFinanceParticipant", "201"),
+        (base, "get", "listFinanceParticipants", "200"),
+        (detail, "get", "getFinanceParticipant", "200"),
+        (detail, "patch", "renameFinanceParticipant", "200"),
+        (f"{detail}/archive", "post", "archiveFinanceParticipant", "200"),
+    ]
+    assert set(paths[detail]) == {"get", "patch"}
+    assert f"{detail}/unarchive" not in paths
+    for path, method, operation_id, success in expected:
+        operation = paths[path][method]
+        assert operation["operationId"] == operation_id
+        assert operation["security"] == []
+        assert set(operation["responses"]) == {success, "403", "404", "422", "500", "503"}
+        assert all(parameter["in"] == "path" for parameter in operation["parameters"])
+        for status, response in operation["responses"].items():
+            if status != success:
+                assert set(response["content"]) == {"application/problem+json"}
+                assert response["content"]["application/problem+json"]["schema"] == {
+                    "$ref": "#/components/schemas/ProblemDetails"
+                }
+        result_schema = operation["responses"][success]["content"]["application/json"]["schema"]
+        if operation_id == "listFinanceParticipants":
+            assert result_schema["type"] == "array"
+            result_schema = result_schema["items"]
+        assert result_schema == {"$ref": "#/components/schemas/ParticipantResponse"}
+    participant = schema["components"]["schemas"]["ParticipantResponse"]
+    assert participant["additionalProperties"] is False
+    assert set(participant["properties"]) == {"id", "ledgerId", "name", "status"}
+    assert set(participant["required"]) == {"id", "ledgerId", "name", "status"}
+    assert participant["properties"]["status"]["enum"] == ["active", "archived"]
+    request = schema["components"]["schemas"]["ParticipantNameRequest"]
+    assert request["additionalProperties"] is False
+    assert set(request["properties"]) == {"name"}
+    assert request["required"] == ["name"]
+    assert request["properties"]["name"]["minLength"] == 1
+    assert request["properties"]["name"]["maxLength"] == 100
+
+
 def test_openapi_converts_problem_details_for_any_operation(app: FastAPI) -> None:
     @app.get(
         "/api/__test_problem",

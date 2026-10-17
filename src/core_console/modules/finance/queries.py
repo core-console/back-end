@@ -17,6 +17,7 @@ from core_console.modules.finance.models import (
     FinanceCategory,
     FinanceCategoryAllocation,
     FinanceLedger,
+    FinanceParticipant,
     FinanceTransaction,
 )
 
@@ -139,6 +140,43 @@ async def get_finance_ledger(
     )
     result = await session.execute(statement)
     return result.scalar_one_or_none()
+
+
+async def list_finance_participants(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+) -> Sequence[FinanceParticipant]:
+    """List active then archived identities, with stable name/UUID ordering."""
+
+    result = await session.scalars(
+        select(FinanceParticipant)
+        .where(FinanceParticipant.ledger_id == ledger_id)
+        .order_by(
+            case((FinanceParticipant.status == "active", 0), else_=1),
+            FinanceParticipant.name_key,
+            FinanceParticipant.id,
+        )
+    )
+    return result.all()
+
+
+async def get_finance_participant(
+    session: AsyncSession,
+    *,
+    ledger_id: UUID,
+    participant_id: UUID,
+    for_update: bool = False,
+) -> FinanceParticipant | None:
+    """Resolve only within the addressed Ledger, including archived identities."""
+
+    statement = select(FinanceParticipant).where(
+        FinanceParticipant.ledger_id == ledger_id,
+        FinanceParticipant.id == participant_id,
+    )
+    if for_update:
+        statement = statement.execution_options(populate_existing=True).with_for_update()
+    return (await session.execute(statement)).scalar_one_or_none()
 
 
 async def list_finance_account_balances(

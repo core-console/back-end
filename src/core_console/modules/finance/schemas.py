@@ -53,6 +53,17 @@ class LedgerResponse(BaseModel):
     name: str
 
 
+class ParticipantResponse(BaseModel):
+    """Stable Ledger-local identity; names are descriptive and may be duplicated."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    name: str
+    status: Literal["active", "archived"]
+
+
 class MoneyResponse(BaseModel):
     """Closed public projection of exact Finance Money."""
 
@@ -274,6 +285,19 @@ class UpdateLedgerRequest(_RequestModel):
     """Name-only partial Ledger update."""
 
     name: str = Field(default_factory=str, max_length=100)
+
+
+class ParticipantNameRequest(_RequestModel):
+    """Create or rename a Participant without changing identity or lifecycle."""
+
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value: object) -> object:
+        """Apply the same trimmed display-name boundary as other Finance names."""
+
+        return value.strip() if isinstance(value, str) else value
 
 
 class CreateCategoryRequest(_RequestModel):
