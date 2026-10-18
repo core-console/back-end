@@ -11,10 +11,10 @@ repository overrides:
 1. Use Matt's TDD loop where possible at agreed seams, with targeted tests and
    typechecking during implementation. Use protected harness validation below as
    the final complete suite, rather than running a second standalone full suite.
-2. Generate `review-state`, then run Matt `code-review`'s parallel Standards and Spec
-   reviews against that canonical artifact. Pin its resolved base SHA, HEAD SHA,
-   snapshot digest, changed-file inventory, and validation/review receipt paths.
-   Supply the approved user spec or ticket and repository standards to the reviewers.
+2. After protected validation, generate `review-state`. Use Matt `code-review`'s
+   parallel Standards and Spec sub-agents against that canonical artifact, or reuse
+   their existing reports when they meet the review evidence policy below. Supply
+   the approved user spec or ticket and repository standards to the reviewers.
    Review all committed, staged, unstaged, and untracked candidate content; Matt's
    default `git diff <fixed-point>...HEAD` alone omits uncommitted work and is not the
    review input here. Resolve findings and regenerate evidence after candidate changes.
@@ -24,11 +24,10 @@ repository overrides:
 Matt skills own implementation and independent Standards/Spec judgement. The harness
 owns snapshot identity, protected validation, canonical review evidence, and separately
 authorized publication. A READY review-state artifact is preparation evidence, not a
-Standards or Spec approval. A fresh session independently reviews the complete
-uncommitted candidate from the canonical artifact; user approval comes after that
-review and before commit or publication. In-session Matt reviews do not replace this
-approval boundary. Installed skills remain unchanged; this repository needs no separate
-candidate implementation skill.
+Standards or Spec approval. Valid independent Matt reviews satisfy the review gate in
+the implementation session; a separate fresh-session review is optional. User approval
+is still required after review and before commit or publication. Installed skills
+remain unchanged; this repository needs no separate candidate implementation skill.
 
 Committing changes the snapshot identity, even when the worktree bytes are unchanged.
 Before publication, generate fresh protected validation and review-state evidence for
@@ -95,6 +94,42 @@ infrastructure changed, dependencies or configuration changed materially, databa
 protection/migrations/CI behavior changed, or environment-sensitive behavior is under
 review. A receipt never replaces Standards and Spec reasoning.
 
+### Standards and Spec evidence
+
+Retain both sub-agent reports in the conversation or a durable local file under
+`.agent/reviews/`, with a reference to each report in the candidate handoff. The harness
+does not generate or verify these judgements. Each axis must record:
+
+- its independent reviewer identity (sub-agent/session reference) and axis;
+- the resolved base SHA, HEAD SHA, snapshot digest, complete changed-file inventory,
+  canonical artifact path, and validation/review receipt paths it reviewed;
+- its sources: repository standards for Standards, and the approved user request or
+  ticket/spec for Spec;
+- its verdict, findings, and disposition of every finding. Blocking findings must be
+  resolved and reviewed on the final candidate; retain any non-blocking notes.
+
+Existing reports qualify only when both axes cover the complete current candidate,
+their sources still describe the approved scope and applicable standards, and the
+current receipt shows matching protected validation PASS with PostgreSQL requested
+and exercised. A skipped Spec review, self-review by the implementer, empty fixed-point
+diff, summary claiming PASS without the reports, or READY artifact alone is insufficient.
+
+Before handoff or relying on previous reviews for approval, rerun `review-state` with
+the pinned base and compare its identity and inventory with both reports. Reuse them
+only if these still match. Candidate changes, including staging or a changed base/HEAD,
+invalidate the old review binding. Regenerate protected validation and the artifact,
+then obtain replacement Standards and Spec reviews of the complete candidate. Do the
+same when scope or standards changes make the earlier review insufficient.
+
+When reports are missing or incomplete, obtain the missing or replacement independent
+axis reviews against the current canonical artifact. If validation is absent, stale,
+failed, or unprotected, first rerun the protected gate and regenerate `review-state`.
+A fresh session can perform this recovery or an additional review at the user's request;
+opening a new session alone never establishes coverage. Stop before handoff as
+`READY_FOR_REVIEW` or requesting delivery approval until both axes and validation qualify.
+The handoff includes the pinned candidate, evidence/report references, and separate
+Standards and Spec outcomes. Evidence reuse never supplies delivery authorization.
+
 ## Explicit publication
 
 Publication is a separate, explicitly invoked operation. Validation and review receipts
@@ -109,6 +144,11 @@ Add `--issue <number>` only when publication includes that issue. Without it, th
 harness neither looks up nor closes an issue, and publication needs no invented tracker
 item. Both paths require the same approved candidate and all validation, review,
 destination, push, exact-SHA CI/job, final remote equality, and receipt evidence.
+
+Issue-specific cross-repository gates also remain required. Backend publication alone
+does not satisfy a ticket that requires delivered producer and consumer revisions and
+pair verification. Omit `--issue` until those requirements and explicit closure
+authorization are satisfied; the publication harness does not infer consumer readiness.
 
 The approved SHA must be the current HEAD and the single child of the resolved base.
 The expected branch must be checked out, the worktree must be clean, local

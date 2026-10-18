@@ -56,8 +56,11 @@
   protected validation is the final suite, Standards and Spec review cover the
   complete identity-bound candidate, and handoff stops uncommitted at
   `READY_FOR_REVIEW`.
-- A fresh session independently reviews an uncommitted candidate from the
-  canonical harness artifact. Approval is required before commit or publication.
+- Reuse independent Standards and Spec reviews only when they cover the unchanged
+  complete candidate and meet the evidence policy in `docs/agents/harness.md`.
+  Otherwise obtain the missing or replacement reviews from the canonical harness
+  artifact. A separate fresh session is optional; explicit user approval is still
+  required before commit or publication.
 - A commit changes snapshot identity. Regenerate protected validation and
   review-state evidence for that committed snapshot before publication; do not
   reuse or promote the uncommitted receipts.
