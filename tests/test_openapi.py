@@ -9,6 +9,35 @@ from core_console.openapi import CoreConsoleApp
 from core_console.problems import ProblemDetails
 
 
+def test_openapi_describes_pure_advance_and_recovery_as_additive_contract(app: FastAPI) -> None:
+    schema = app.openapi()
+    base = "/finance/ledgers/{ledgerId}"
+    for method, path, operation_id in [
+        ("post", "/advances/preview", "previewFinanceAdvance"),
+        ("post", "/advances", "createFinanceAdvance"),
+        ("get", "/advances/{advanceId}", "getFinanceAdvance"),
+        ("get", "/participants/{participantId}/obligations", "listFinanceParticipantObligations"),
+    ]:
+        operation = schema["paths"][base + path][method]
+        assert operation["operationId"] == operation_id
+        assert operation["security"] == []
+        for status, response in operation["responses"].items():
+            if int(status) >= 400:
+                assert set(response["content"]) == {"application/problem+json"}
+    create = schema["paths"][base + "/advances"]["post"]
+    assert {p["name"] for p in create["parameters"] if p["in"] == "header"} == {
+        "Idempotency-Key",
+        "Finance-Command-Version",
+        "Finance-Submission-Owner",
+    }
+    command = create["requestBody"]["content"]["application/json"]["schema"]
+    assert command["additionalProperties"] is False
+    assert "previewToken" in command["required"]
+    assert command["properties"]["amount"]["additionalProperties"] is False
+    receipt = schema["components"]["schemas"]["SubmissionReceipt"]
+    assert "createFinanceAdvance" in receipt["discriminator"]["mapping"]
+
+
 def test_openapi_preserves_frontend_hello_contract(app: FastAPI) -> None:
     schema = app.openapi()
     operation = schema["paths"]["/helloWorld"]["get"]
@@ -213,6 +242,12 @@ def test_openapi_describes_finance_account_lifecycle_contract(app: FastAPI) -> N
     assert account_path["patch"]["operationId"] == "updateFinanceAccount"
     assert archive_path["post"]["operationId"] == "archiveFinanceAccount"
     assert unarchive_path["post"]["operationId"] == "unarchiveFinanceAccount"
+    for lifecycle_operation in (archive_path["post"], unarchive_path["post"]):
+        assert "409" in lifecycle_operation["responses"]
+        assert (
+            "finance_linked_record_protected"
+            in lifecycle_operation["responses"]["409"]["description"]
+        )
     assert set(collection_path) == {"get", "post"}
     assert set(account_path) == {"patch"}
     assert set(archive_path) == {"post"}
@@ -524,6 +559,8 @@ def test_openapi_describes_transaction_create_detail_replace_and_delete_contract
                     == "#/components/schemas/ProblemDetails"
                 )
     assert delete_operation["responses"]["204"] == {"description": "Successful Response"}
+    assert "409" in delete_operation["responses"]
+    assert "finance_linked_record_protected" in delete_operation["responses"]["409"]["description"]
     for status, response in delete_operation["responses"].items():
         if status == "204":
             continue

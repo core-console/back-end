@@ -10,6 +10,7 @@ from core_console.database.resources import DatabaseResources
 from core_console.health.api import router as health_router
 from core_console.http_logging import HttpRequestLoggingMiddleware
 from core_console.logging_config import configure_logging
+from core_console.modules.finance.advance_api import router as advance_router
 from core_console.modules.finance.api import router as finance_router
 from core_console.modules.finance.submission_api import (
     SubmissionLookupNoStoreMiddleware,
@@ -60,5 +61,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(users_router)
     app.include_router(finance_router)
     app.include_router(submission_router)
+    app.include_router(advance_router)
     app.include_router(health_router)
     return app

@@ -18,6 +18,10 @@ from psycopg.errors import UniqueViolation
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core_console.modules.finance.advance_protection import (
+    require_unlinked_transaction,
+    require_unmanaged_accounts,
+)
 from core_console.modules.finance.history import (
     InvalidTransactionHistoryCursor,
     TransactionHistoryKind,
@@ -886,6 +890,7 @@ async def execute_create_internal_transfer_transaction[Result](
     )
     if len(balances) != 2:
         raise FinanceAccountNotFoundError
+    await require_unmanaged_accounts(session, [balance.account.id for balance in balances])
     by_id = {balance.account.id: balance.account for balance in balances}
     source = by_id[source_account_id]
     destination = by_id[destination_account_id]
@@ -985,6 +990,7 @@ async def replace_finance_transaction[Result](
         ledger_id=ledger_id,
         account_ids=frozenset((old_account_id, account_id)),
     )
+    await require_unmanaged_accounts(session, [balance.account.id for balance in balances])
     accounts_by_id = {balance.account.id: balance.account for balance in balances}
     account = accounts_by_id.get(account_id)
     if account is None:
@@ -1108,6 +1114,7 @@ async def replace_internal_transfer_transaction[Result](
             )
         ),
     )
+    await require_unmanaged_accounts(session, [balance.account.id for balance in balances])
     accounts_by_id = {balance.account.id: balance.account for balance in balances}
     source = accounts_by_id.get(source_account_id)
     destination = accounts_by_id.get(destination_account_id)
@@ -1329,6 +1336,7 @@ async def execute_create_balance_adjustment[Result](
     )
     if account is None:
         raise FinanceAccountNotFoundError
+    await require_unmanaged_accounts(session, [account_id])
     if account.status != "active":
         raise FinanceAccountArchivedError
     correction_delta = await _validate_and_derive_balance_adjustment_delta(
@@ -1407,6 +1415,7 @@ async def replace_balance_adjustment[Result](
         ledger_id=ledger_id,
         account_ids=frozenset((old_account_id, account_id)),
     )
+    await require_unmanaged_accounts(session, [balance.account.id for balance in locked_accounts])
     accounts_by_id = {balance.account.id: balance.account for balance in locked_accounts}
     account = accounts_by_id.get(account_id)
     if account is None:
@@ -1750,6 +1759,8 @@ async def _require_finance_account_balance(
     )
     if balance is None:
         raise FinanceAccountNotFoundError
+    if for_update:
+        await require_unmanaged_accounts(session, [account_id])
     return balance
 
 
@@ -1817,6 +1828,7 @@ async def _require_finance_transaction_for_serialized_mutation(
             transaction_id=transaction_id,
         )
         if transaction is not None:
+            await require_unlinked_transaction(session, transaction_id)
             return transaction
         if not await finance_transaction_exists(
             session,

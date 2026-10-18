@@ -731,6 +731,12 @@ async def _change_account_status(
     responses={
         403: {"model": ProblemDetails, "description": "Access is denied."},
         404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {
+            "model": ProblemDetails,
+            "description": (
+                "The Account belongs to a confirmed Advance (finance_linked_record_protected)."
+            ),
+        },
         422: {"model": ProblemDetails, "description": "The path is invalid."},
         500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
         503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
@@ -763,6 +769,12 @@ async def post_account_archive(
     responses={
         403: {"model": ProblemDetails, "description": "Access is denied."},
         404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {
+            "model": ProblemDetails,
+            "description": (
+                "The Account belongs to a confirmed Advance (finance_linked_record_protected)."
+            ),
+        },
         422: {"model": ProblemDetails, "description": "The path is invalid."},
         500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
         503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},
@@ -1214,6 +1226,12 @@ async def put_transaction(
     responses={
         403: {"model": ProblemDetails, "description": "Access is denied."},
         404: {"model": ProblemDetails, "description": "The resource does not exist."},
+        409: {
+            "model": ProblemDetails,
+            "description": (
+                "The Transaction belongs to a confirmed Advance (finance_linked_record_protected)."
+            ),
+        },
         422: {"model": ProblemDetails, "description": "The path is invalid."},
         500: {"model": ProblemDetails, "description": "An unexpected error occurred."},
         503: {"model": ProblemDetails, "description": "PostgreSQL is unavailable."},

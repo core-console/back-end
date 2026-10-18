@@ -11,7 +11,7 @@ from core_console.database.base import Base
 
 # The closed create command and outcome constraints evolve with the wire unions.
 COMMAND_CHECK = r"""
-((COALESCE(command_version = '1'
+(((COALESCE(command_version = '1'
 AND canonical_command = jsonb_build_object(
     'commandVersion', command_version, 'operation', canonical_command->>'operation',
     'targetLedgerId', canonical_command->'targetLedgerId', 'body', canonical_command->'body')
@@ -180,10 +180,54 @@ AND CASE WHEN canonical_command #>> '{body,targetBalance,currency}' = 'JPY' THEN
 AND canonical_command #>> '{body,targetBalance,amount}' NOT IN ('-0', '-0.00')
 AND char_length(split_part(
     ltrim(canonical_command #>> '{body,targetBalance,amount}', '-'), '.', 1)) <= 131072
-), FALSE))
+), FALSE))) OR (COALESCE(command_version = '1'
+AND canonical_command = jsonb_build_object('commandVersion', command_version,
+ 'operation', 'createFinanceAdvance', 'targetLedgerId', canonical_command->'targetLedgerId',
+ 'body', canonical_command->'body')
+AND jsonb_typeof(canonical_command->'targetLedgerId') = 'string'
+AND canonical_command->>'targetLedgerId' ~ '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+AND canonical_command->'body' = jsonb_build_object(
+ 'fundingAccountId', canonical_command #> '{body,fundingAccountId}',
+ 'participantId', canonical_command #> '{body,participantId}',
+ 'transactionDate', canonical_command #> '{body,transactionDate}',
+ 'amount', canonical_command #> '{body,amount}',
+ 'ownerShare', canonical_command #> '{body,ownerShare}',
+ 'participantShare', canonical_command #> '{body,participantShare}',
+ 'note', canonical_command #> '{body,note}',
+ 'previewToken', canonical_command #> '{body,previewToken}')
+AND jsonb_typeof(canonical_command #> '{body,fundingAccountId}') = 'string'
+AND canonical_command #>> '{body,fundingAccountId}' ~ '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+AND jsonb_typeof(canonical_command #> '{body,participantId}') = 'string'
+AND canonical_command #>> '{body,participantId}' ~ '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+AND jsonb_typeof(canonical_command #> '{body,previewToken}') = 'string'
+AND canonical_command #>> '{body,previewToken}' ~ '^[0-9a-f]{64}$'
+AND jsonb_typeof(canonical_command #> '{body,transactionDate}') = 'string'
+AND canonical_command #>> '{body,transactionDate}' ~
+    '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+AND (canonical_command #>> '{body,transactionDate}' )::date BETWEEN DATE '0001-01-01' AND DATE
+    '9999-12-31'
+AND (canonical_command #> '{body,note}' = 'null'::jsonb OR
+ (jsonb_typeof(canonical_command #> '{body,note}') = 'string'
+ AND char_length(canonical_command #>> '{body,note}') BETWEEN 1 AND 500
+AND canonical_command #>> '{body,note}' = regexp_replace(canonical_command #>> '{body,note}' ,
+    '^[[:space:]]+|[[:space:]]+$' , '' , 'g' )))
+AND canonical_command #> '{body,amount}' = jsonb_build_object('amount', canonical_command #>
+    '{body,amount,amount}' , 'currency' , canonical_command #> '{body,amount,currency}' )
+AND jsonb_typeof(canonical_command #> '{body,amount,amount}') = 'string'
+AND canonical_command #>> '{body,amount,currency}' IN ('CNY', 'USD', 'JPY')
+AND CASE WHEN canonical_command #>> '{body,amount,currency}' = 'JPY' THEN
+ canonical_command #>> '{body,amount,amount}' ~ '^(0|[1-9][0-9]*)$'
+ ELSE canonical_command #>> '{body,amount,amount}' ~ '^(0|[1-9][0-9]*)[.][0-9]{2}$' END
+AND canonical_command #>> '{body,amount,amount}' NOT IN ('0', '0.00')
+AND char_length(split_part(canonical_command #>> '{body,amount,amount}', '.', 1)) <= 131072
+AND canonical_command #> '{body,participantShare}' = canonical_command #> '{body,amount}'
+AND canonical_command #> '{body,ownerShare}' = jsonb_build_object('currency', canonical_command
+    #> '{body,amount,currency}' , 'amount' , CASE WHEN canonical_command #>>
+    '{body,amount,currency}' = 'JPY' THEN '0' ELSE '0.00' END)
+, FALSE))
 """
 OUTCOME_CHECK = r"""
-COALESCE(
+(COALESCE(
 (
   (canonical_command->>'operation' = 'createFinanceLedger')
   OR (retention_ledger_id IS NOT NULL
@@ -201,7 +245,8 @@ AND (
           WHEN 'createFinanceAccount' THEN 'account'
           WHEN 'createFinanceCategory' THEN 'category'
           WHEN 'createFinanceTransaction' THEN 'transaction'
-          WHEN 'createBalanceAdjustment' THEN 'transaction' END,
+          WHEN 'createBalanceAdjustment' THEN 'transaction'
+          WHEN 'createFinanceAdvance' THEN 'advance' END,
         'id', terminal_outcome #> '{resource,id}'))
        AND jsonb_typeof(terminal_outcome #> '{resource,id}') = 'string'
        AND terminal_outcome #>> '{resource,id}' ~ '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
@@ -250,7 +295,32 @@ AND (
       OR (canonical_command->>'operation' = 'createBalanceAdjustment'
         AND terminal_outcome = jsonb_build_object('kind', 'noChange'))
     ))
-), FALSE)
+), FALSE)) OR (COALESCE(canonical_command->>'operation' = 'createFinanceAdvance'
+AND retention_ledger_id::text = canonical_command->>'targetLedgerId'
+AND resolved_at IS NOT NULL AND resolved_at >= admitted_at
+AND jsonb_typeof(terminal_outcome #> '{problem,detail}') = 'string'
+AND terminal_outcome = jsonb_build_object('kind', 'rejected', 'problem', jsonb_build_object(
+ 'type', 'about:blank', 'title', CASE terminal_outcome #>> '{problem,code}'
+ WHEN 'validation_error' THEN 'Unprocessable Entity'
+ WHEN 'finance_account_not_found' THEN 'Not Found'
+ WHEN 'finance_participant_not_found' THEN 'Not Found' ELSE 'Conflict' END,
+ 'status', CASE terminal_outcome #>> '{problem,code}' WHEN 'validation_error' THEN 422
+WHEN 'finance_account_not_found' THEN 404 WHEN 'finance_participant_not_found' THEN 404 ELSE 409
+    END,
+ 'code', terminal_outcome #> '{problem,code}', 'detail', terminal_outcome #> '{problem,detail}'))
+AND terminal_outcome #>> '{problem,code}' IN ('validation_error', 'finance_account_not_found' ,
+    'finance_participant_not_found' , 'finance_account_archived' ,
+    'finance_participant_archived' , 'finance_advance_preview_stale' ,
+    'finance_linked_record_protected' )
+, FALSE)) OR (COALESCE(canonical_command->>'operation' IN ('createFinanceTransaction',
+    'createBalanceAdjustment' )
+AND retention_ledger_id::text = canonical_command->>'targetLedgerId'
+AND resolved_at IS NOT NULL AND resolved_at >= admitted_at
+AND jsonb_typeof(terminal_outcome #> '{problem,detail}') = 'string'
+AND terminal_outcome = jsonb_build_object('kind', 'rejected' , 'problem' ,
+    jsonb_build_object('type', 'about:blank' , 'title' , 'Conflict' , 'status' , 409, 'code' ,
+    'finance_linked_record_protected' , 'detail' , terminal_outcome #> '{problem,detail}' ))
+, FALSE))
 """
 
 

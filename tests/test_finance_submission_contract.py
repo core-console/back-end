@@ -292,9 +292,15 @@ def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
             "200",
             "AdjustmentSuccessReceipt",
         ),
+        (
+            "/finance/ledgers/{ledgerId}/advances",
+            "createFinanceAdvance",
+            "201",
+            "AdvanceCreatedReceipt",
+        ),
     ],
 )
-def test_final_five_create_schema_header_status_and_lookup_matrix(
+def test_cumulative_create_schema_header_status_and_lookup_matrix(
     app: FastAPI, path: str, operation: str, status: str, receipt: str
 ) -> None:
     schema = app.openapi()
@@ -319,6 +325,7 @@ def test_final_five_create_schema_header_status_and_lookup_matrix(
         "createFinanceCategory",
         "createFinanceTransaction",
         "createBalanceAdjustment",
+        "createFinanceAdvance",
     }
     components = schema["components"]["schemas"]
     assert set(

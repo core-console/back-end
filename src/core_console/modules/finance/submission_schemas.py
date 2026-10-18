@@ -285,7 +285,9 @@ class TransactionArchivedProblem(_Evidence):
     type: str
     title: str
     status: Literal[409]
-    code: Literal["finance_account_archived", "finance_category_archived"]
+    code: Literal[
+        "finance_account_archived", "finance_category_archived", "finance_linked_record_protected"
+    ]
     detail: str
 
 
@@ -368,7 +370,9 @@ class TransactionInvalidTerminalProblem(ProblemDetails):
 class TransactionArchivedTerminalProblem(ProblemDetails):
     model_config = ConfigDict(extra="forbid")
     status: Literal[409]
-    code: Literal["finance_account_archived", "finance_category_archived"]
+    code: Literal[
+        "finance_account_archived", "finance_category_archived", "finance_linked_record_protected"
+    ]
     submissionReceipt: TransactionArchivedReceipt
 
 
@@ -432,7 +436,10 @@ class AdjustmentConflictProblem(_Evidence):
     title: str
     status: Literal[409]
     code: Literal[
-        "finance_account_archived", "account_balance_changed", "finance_account_semantics_changed"
+        "finance_account_archived",
+        "account_balance_changed",
+        "finance_account_semantics_changed",
+        "finance_linked_record_protected",
     ]
     detail: str
 
@@ -524,7 +531,10 @@ class AdjustmentConflictTerminalProblem(ProblemDetails):
     model_config = ConfigDict(extra="forbid")
     status: Literal[409]
     code: Literal[
-        "finance_account_archived", "account_balance_changed", "finance_account_semantics_changed"
+        "finance_account_archived",
+        "account_balance_changed",
+        "finance_account_semantics_changed",
+        "finance_linked_record_protected",
     ]
     submissionReceipt: AdjustmentConflictReceipt
 
@@ -566,12 +576,112 @@ class AdjustmentValidationResponse(
     """Distinguish unresolved validation, Q29, and terminal business evidence."""
 
 
+class AdvanceCreatedResource(_Evidence):
+    type: Literal["advance"]
+    id: UUID
+
+
+class AdvanceCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: AdvanceCreatedResource
+
+
+class AdvanceInvalidProblem(TransactionInvalidProblem):
+    pass
+
+
+class AdvanceConflictProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[409]
+    code: Literal[
+        "finance_account_archived",
+        "finance_participant_archived",
+        "finance_advance_preview_stale",
+        "finance_linked_record_protected",
+    ]
+    detail: str
+
+
+class AdvanceMissingProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[404]
+    code: Literal["finance_account_not_found", "finance_participant_not_found"]
+    detail: str
+
+
+class AdvanceRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: Annotated[
+        AdvanceInvalidProblem | AdvanceConflictProblem | AdvanceMissingProblem,
+        Field(discriminator="code"),
+    ]
+
+
+class _AdvanceReceipt(_Receipt):
+    operation: Literal["createFinanceAdvance"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdvanceCreatedReceipt(_AdvanceReceipt):
+    outcome: AdvanceCreatedOutcome
+
+
+class AdvanceRejectedReceipt(_AdvanceReceipt):
+    outcome: AdvanceRejectedOutcome
+
+
+class AdvanceSubmissionReceipt(_AdvanceReceipt):
+    outcome: Annotated[AdvanceCreatedOutcome | AdvanceRejectedOutcome, Field(discriminator="kind")]
+
+
+class AdvanceSubmissionUnfinished(_Unfinished):
+    operation: Literal["createFinanceAdvance"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdvanceCommandValidationRejection(_CommandValidationRejection):
+    operation: Literal["createFinanceAdvance"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdvanceValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: AdvanceCommandValidationRejection
+
+
+class AdvanceTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[404, 409, 422]
+    code: Literal[
+        "validation_error",
+        "finance_account_archived",
+        "finance_participant_archived",
+        "finance_advance_preview_stale",
+        "finance_linked_record_protected",
+        "finance_account_not_found",
+        "finance_participant_not_found",
+    ]
+    submissionReceipt: AdvanceRejectedReceipt
+
+
+class AdvanceFailureResponse(
+    RootModel[SubmissionNonterminalProblem | AdvanceValidationProblem | AdvanceTerminalProblem]
+):
+    """Unresolved failure, guarded pre-admission proof, or terminal rejection."""
+
+
 type SubmissionReceipt = Annotated[
     LedgerSubmissionReceipt
     | AccountSubmissionReceipt
     | CategorySubmissionReceipt
     | TransactionSubmissionReceipt
-    | AdjustmentSubmissionReceipt,
+    | AdjustmentSubmissionReceipt
+    | AdvanceSubmissionReceipt,
     Field(discriminator="operation"),
 ]
 type SubmissionValidationProblem = (
@@ -580,6 +690,7 @@ type SubmissionValidationProblem = (
     | CategoryValidationProblem
     | TransactionValidationProblem
     | AdjustmentValidationProblem
+    | AdvanceValidationProblem
 )
 
 type SubmissionUnfinished = Annotated[
@@ -587,7 +698,8 @@ type SubmissionUnfinished = Annotated[
     | AccountSubmissionUnfinished
     | CategorySubmissionUnfinished
     | TransactionSubmissionUnfinished
-    | AdjustmentSubmissionUnfinished,
+    | AdjustmentSubmissionUnfinished
+    | AdvanceSubmissionUnfinished,
     Field(discriminator="operation"),
 ]
 
