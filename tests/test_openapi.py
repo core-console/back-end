@@ -30,10 +30,29 @@ def test_openapi_describes_pure_advance_and_recovery_as_additive_contract(app: F
         "Finance-Command-Version",
         "Finance-Submission-Owner",
     }
-    command = create["requestBody"]["content"]["application/json"]["schema"]
+    command_union = create["requestBody"]["content"]["application/json"]["schema"]
+    command, shared_command = command_union["anyOf"]
     assert command["additionalProperties"] is False
     assert "previewToken" in command["required"]
     assert command["properties"]["amount"]["additionalProperties"] is False
+    assert shared_command["additionalProperties"] is False
+    assert "participantShares" in shared_command["required"]
+    assert "previewToken" in shared_command["required"]
+    assert shared_command["properties"]["participantShares"]["minItems"] == 1
+    share = shared_command["properties"]["participantShares"]["items"]
+    assert share["additionalProperties"] is False
+    assert set(share["required"]) == {"participantId", "amount"}
+    assert share["properties"]["amount"]["additionalProperties"] is False
+    assert schema["components"]["schemas"]["AdvanceCreatedReceipt"]["properties"]["commandVersion"][
+        "enum"
+    ] == ["1", "2"]
+    # Other commands keep their closed version 1 evidence meanings.
+    assert (
+        schema["components"]["schemas"]["AccountCreatedReceipt"]["properties"]["commandVersion"][
+            "const"
+        ]
+        == "1"
+    )
     receipt = schema["components"]["schemas"]["SubmissionReceipt"]
     assert "createFinanceAdvance" in receipt["discriminator"]["mapping"]
 

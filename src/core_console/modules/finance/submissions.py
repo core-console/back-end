@@ -15,7 +15,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 
-from core_console.modules.finance.advance_schemas import AdvanceCommandV1
+from core_console.modules.finance.advance_schemas import AdvanceCommandV1, AdvanceCommandV2
 from core_console.modules.finance.advances import execute_create_advance
 from core_console.modules.finance.models import FinanceLedger
 from core_console.modules.finance.service import (
@@ -76,7 +76,7 @@ from core_console.problems import ApplicationProblem
 # budgets to each transaction, including uniqueness waits and Finance locks.
 ADMISSION_LOCK_TIMEOUT_MS = 250
 EXECUTION_LOCK_TIMEOUT_MS = 250
-OPEN_ADMISSION_VERSIONS = frozenset({"1"})
+OPEN_ADMISSION_VERSIONS = frozenset({"1", "2"})
 
 
 def submission_problem(status: int, code: str, detail: str) -> ApplicationProblem:
@@ -266,7 +266,7 @@ async def _submit_create(
     if row is not None:
         await _authorize_binding(session, row)
         _compare(row, version)
-    if version != "1":
+    if version != "1" and not (version == "2" and operation == "createFinanceAdvance"):
         raise submission_problem(
             422, "finance_command_version_unsupported", "Command version is not supported."
         )
@@ -282,13 +282,14 @@ async def _submit_create(
             | type[CategoryCommandV1]
             | type[AccountCommandV1]
             | type[AdjustmentCommandV1]
-            | type[AdvanceCommandV1],
+            | type[AdvanceCommandV1]
+            | type[AdvanceCommandV2],
         ] = {
             "createFinanceLedger": LedgerCommandV1,
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,
             "createBalanceAdjustment": AdjustmentCommandV1,
-            "createFinanceAdvance": AdvanceCommandV1,
+            "createFinanceAdvance": AdvanceCommandV1 if version == "1" else AdvanceCommandV2,
         }
         body = (
             TypeAdapter(TransactionCommandV1).validate_python(attempted_body)
@@ -353,7 +354,7 @@ async def _submit_create(
             {
                 "kind": "definitivelyNotAdmitted",
                 "submissionId": key,
-                "commandVersion": "1",
+                "commandVersion": version,
                 "ownerId": owner_id,
                 "operation": operation,
                 "targetLedgerId": target_ledger_id,
@@ -394,6 +395,7 @@ async def _submit_create(
                 TransferCommandV1,
                 AdjustmentCommandV1,
                 AdvanceCommandV1,
+                AdvanceCommandV2,
             ),
         )
         else {"name": body.name},
@@ -441,7 +443,7 @@ async def _submit_create(
         async with session.begin_nested():
             no_change = False
             resource_id: UUID | None = None
-            if isinstance(body, AdvanceCommandV1):
+            if isinstance(body, (AdvanceCommandV1, AdvanceCommandV2)):
                 assert target_ledger_id is not None
                 resource_id = await execute_create_advance(
                     session, owner_id=owner_id, ledger_id=target_ledger_id, command=body

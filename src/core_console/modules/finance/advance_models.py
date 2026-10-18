@@ -1,4 +1,4 @@
-"""Confirmed pure Advances and their single attributed Obligation."""
+"""Confirmed Advances, attributed Obligations and linked financial effects."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -21,7 +21,7 @@ from core_console.database.base import Base
 
 
 class FinanceAdvance(Base):
-    """Immutable source of one Asset-funded, zero-owner-share event."""
+    """Immutable source of one funded event and its explicit owner share."""
 
     __tablename__ = "finance_advances"
     __table_args__ = (
@@ -40,6 +40,12 @@ class FinanceAdvance(Base):
             "note IS NULL OR (note = btrim(note) AND char_length(note) BETWEEN 1 AND 500)",
             name="ck_finance_advances_note",
         ),
+        CheckConstraint("command_version IN ('1', '2')", name="ck_finance_advances_version"),
+        CheckConstraint(
+            "owner_share >= 0 AND owner_share NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
+            name="ck_finance_advances_owner_share",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -48,6 +54,8 @@ class FinanceAdvance(Base):
     transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     transaction_date: Mapped[date] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(Text)
+    owner_share: Mapped[Decimal] = mapped_column(Numeric(), server_default=text("0"))
+    command_version: Mapped[str] = mapped_column(Text, server_default=text("'1'"))
     confirmed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
     )
@@ -58,7 +66,7 @@ class FinanceObligation(Base):
 
     __tablename__ = "finance_obligations"
     __table_args__ = (
-        UniqueConstraint("advance_id", name="uq_finance_obligations_advance"),
+        UniqueConstraint("advance_id", "participant_id", name="uq_finance_obligations_participant"),
         UniqueConstraint("receivable_account_id", name="uq_finance_obligations_receivable"),
         ForeignKeyConstraint(
             ["advance_id", "ledger_id"], ["finance_advances.id", "finance_advances.ledger_id"]
@@ -93,3 +101,21 @@ class FinanceObligation(Base):
     receivable_account_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     principal: Mapped[Decimal] = mapped_column(Numeric())
     currency: Mapped[str] = mapped_column(Text)
+
+
+class FinanceAdvanceTransaction(Base):
+    """Every T03 Expense/transfer is protected as part of its source Advance."""
+
+    __tablename__ = "finance_advance_transactions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["advance_id", "ledger_id"], ["finance_advances.id", "finance_advances.ledger_id"]
+        ),
+        ForeignKeyConstraint(
+            ["transaction_id", "ledger_id"],
+            ["finance_transactions.id", "finance_transactions.ledger_id"],
+        ),
+    )
+    transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
+    ledger_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    advance_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))

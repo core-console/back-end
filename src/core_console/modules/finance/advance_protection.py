@@ -6,7 +6,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core_console.modules.finance.advance_models import FinanceAdvance, FinanceObligation
+from core_console.modules.finance.advance_models import (
+    FinanceAdvance,
+    FinanceAdvanceTransaction,
+    FinanceObligation,
+)
 from core_console.problems import ApplicationProblem
 
 
@@ -38,4 +42,6 @@ async def require_unlinked_transaction(session: AsyncSession, transaction_id: UU
         )
         is not None
     ):
+        raise linked_record_problem()
+    if await session.get(FinanceAdvanceTransaction, transaction_id) is not None:
         raise linked_record_problem()

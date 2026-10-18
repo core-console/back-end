@@ -1,19 +1,24 @@
-"""Backend producer HTTP boundary for the first pure Advance workflow."""
+"""Backend producer HTTP boundary for versioned Advance workflows."""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.advance_schemas import (
     AdvanceCommandV1,
+    AdvanceCommandV2,
     AdvanceDraftV1,
+    AdvanceDraftV2,
     AdvancePreview,
     AdvanceResponse,
     ObligationResponse,
+    SharedAdvancePreview,
+    SharedAdvanceResponse,
 )
 from core_console.modules.finance.advances import (
     inspect_advance,
@@ -38,26 +43,34 @@ _READ_ERRORS: dict[int | str, dict[str, Any]] = {
 
 
 def _command_schema() -> dict[str, object]:
-    schema = AdvanceCommandV1.model_json_schema()
+    schema = TypeAdapter(AdvanceCommandV1 | AdvanceCommandV2).json_schema()
     definitions = schema.pop("$defs")
-    for field in ("amount", "ownerShare", "participantShare"):
-        schema["properties"][field] = definitions["OpeningBalanceV1"]
-    return schema
+
+    def inline(value: Any) -> Any:
+        if isinstance(value, dict):
+            if "$ref" in value:
+                return inline(definitions[value["$ref"].rsplit("/", 1)[1]])
+            return {key: inline(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [inline(item) for item in value]
+        return value
+
+    return cast(dict[str, object], inline(schema))
 
 
 @router.post(
     "/advances/preview",
     operation_id="previewFinanceAdvance",
-    response_model=AdvancePreview,
+    response_model=SharedAdvancePreview | AdvancePreview,
     responses={**_READ_ERRORS, 409: {"model": ProblemDetails}},
     openapi_extra={"security": []},
 )
 async def post_preview(
     ledger_id: Annotated[UUID, Path(alias="ledgerId")],
-    draft: AdvanceDraftV1,
+    draft: AdvanceDraftV1 | AdvanceDraftV2,
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> AdvancePreview:
+) -> AdvancePreview | SharedAdvancePreview:
     return await _run_finance_workflow(
         preview_advance(session, owner_id=actor.id, ledger_id=ledger_id, draft=draft)
     )
@@ -65,6 +78,13 @@ async def post_preview(
 
 @router.post(
     "/advances",
+    description=(
+        "Confirm one atomic Advance under the retained submission protocol. "
+        "Finance-Command-Version: 1 accepts the frozen single-participant, Asset-funded "
+        "pure Advance body. Version 2 accepts participantShares, an explicit non-negative "
+        "ownerShare and Asset or Liability funding. Each body's previewToken must come "
+        "from its matching preview. All linked effects share one terminal outcome."
+    ),
     operation_id="createFinanceAdvance",
     status_code=201,
     response_model=AdvanceCreatedReceipt,
@@ -98,7 +118,7 @@ async def post_advance(
 @router.get(
     "/advances/{advanceId}",
     operation_id="getFinanceAdvance",
-    response_model=AdvanceResponse,
+    response_model=AdvanceResponse | SharedAdvanceResponse,
     responses=_READ_ERRORS,
     openapi_extra={"security": []},
 )
@@ -107,7 +127,7 @@ async def get_advance(
     advance_id: Annotated[UUID, Path(alias="advanceId")],
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> AdvanceResponse:
+) -> AdvanceResponse | SharedAdvanceResponse:
     return await _run_finance_workflow(
         inspect_advance(session, owner_id=actor.id, ledger_id=ledger_id, advance_id=advance_id)
     )

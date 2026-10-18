@@ -13,26 +13,35 @@ class _Evidence(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class _Receipt(_Evidence):
+class _ReceiptMetadata(_Evidence):
     submission_id: UUID = Field(alias="submissionId")
-    command_version: Literal["1"] = Field(alias="commandVersion")
     admitted_at: datetime = Field(alias="admittedAt")
     resolved_at: datetime = Field(alias="resolvedAt")
 
 
-class _Unfinished(_Evidence):
+class _Receipt(_ReceiptMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+
+
+class _UnfinishedMetadata(_Evidence):
     state: Literal["unfinished"]
     submission_id: UUID = Field(alias="submissionId")
-    command_version: Literal["1"] = Field(alias="commandVersion")
     admitted_at: datetime = Field(alias="admittedAt")
 
 
-class _CommandValidationRejection(_Evidence):
+class _Unfinished(_UnfinishedMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+
+
+class _CommandValidationRejectionMetadata(_Evidence):
     kind: Literal["definitivelyNotAdmitted"]
     submission_id: UUID = Field(alias="submissionId")
-    command_version: Literal["1"] = Field(alias="commandVersion")
     owner_id: UUID = Field(alias="ownerId")
     attempted_body: dict[str, JsonValue] = Field(alias="attemptedBody")
+
+
+class _CommandValidationRejection(_CommandValidationRejectionMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
 
 
 class LedgerCreatedResource(_Evidence):
@@ -619,7 +628,8 @@ class AdvanceRejectedOutcome(_Evidence):
     ]
 
 
-class _AdvanceReceipt(_Receipt):
+class _AdvanceReceipt(_ReceiptMetadata):
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceAdvance"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
@@ -636,12 +646,14 @@ class AdvanceSubmissionReceipt(_AdvanceReceipt):
     outcome: Annotated[AdvanceCreatedOutcome | AdvanceRejectedOutcome, Field(discriminator="kind")]
 
 
-class AdvanceSubmissionUnfinished(_Unfinished):
+class AdvanceSubmissionUnfinished(_UnfinishedMetadata):
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceAdvance"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
 
-class AdvanceCommandValidationRejection(_CommandValidationRejection):
+class AdvanceCommandValidationRejection(_CommandValidationRejectionMetadata):
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceAdvance"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 

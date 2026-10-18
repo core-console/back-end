@@ -324,6 +324,12 @@ AND terminal_outcome = jsonb_build_object('kind', 'rejected' , 'problem' ,
 """
 
 
+COMMAND_CHECK = (
+    f"({COMMAND_CHECK}) OR "
+    "(command_version = '2' AND finance_advance_v2_command_valid(canonical_command))"
+)
+
+
 class FinanceSubmission(Base):
     """Exactly unfinished or terminal, unique across one user's commands."""
 
