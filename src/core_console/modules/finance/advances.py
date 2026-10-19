@@ -6,7 +6,7 @@ from hashlib import sha256
 from typing import cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.modules.finance.advance_models import (
@@ -41,6 +41,7 @@ from core_console.modules.finance.queries import (
     get_finance_account_for_update,
 )
 from core_console.modules.finance.schemas import MoneyResponse
+from core_console.modules.finance.settlement_models import FinanceSettlementAllocation
 from core_console.problems import ApplicationProblem
 
 
@@ -338,7 +339,21 @@ async def execute_create_advance(
     return advance_id
 
 
-def _obligation(advance: FinanceAdvance, obligation: FinanceObligation) -> ObligationResponse:
+async def _cash_paid(session: AsyncSession, obligation_ids: list[UUID]) -> dict[UUID, Decimal]:
+    rows = await session.execute(
+        select(
+            FinanceSettlementAllocation.obligation_id,
+            func.sum(FinanceSettlementAllocation.cash_paid),
+        )
+        .where(FinanceSettlementAllocation.obligation_id.in_(obligation_ids))
+        .group_by(FinanceSettlementAllocation.obligation_id)
+    )
+    return dict(rows.all())
+
+
+def _obligation(
+    advance: FinanceAdvance, obligation: FinanceObligation, paid: Decimal = Decimal(0)
+) -> ObligationResponse:
     principal = _money(obligation.principal, obligation.currency)
     zero = _money(Decimal(0), obligation.currency)
     return ObligationResponse(
@@ -349,10 +364,12 @@ def _obligation(advance: FinanceAdvance, obligation: FinanceObligation) -> Oblig
         sourceDate=advance.transaction_date,
         receivableAccountId=obligation.receivable_account_id,
         principal=principal,
-        cashPaid=zero,
+        cashPaid=_money(paid, obligation.currency),
         forgiven=zero,
         creditApplied=zero,
-        remaining=principal,
+        remaining=_money(
+            subtract_money_amounts_exact(obligation.principal, paid), obligation.currency
+        ),
     )
 
 
@@ -371,6 +388,7 @@ async def inspect_advance(
     if not results:
         raise _problem(404, "finance_advance_not_found", "Advance was not found.")
     advance, obligation = results[0]
+    paid = await _cash_paid(session, [row.id for _, row in results])
     total = advance.owner_share
     for _, row in results:
         total = subtract_money_amounts_exact(
@@ -391,7 +409,7 @@ async def inspect_advance(
             {
                 **source,
                 "transactionId": advance.transaction_id,
-                "obligation": _obligation(advance, obligation),
+                "obligation": _obligation(advance, obligation, paid.get(obligation.id, Decimal(0))),
             }
         )
     transactions = (
@@ -405,7 +423,9 @@ async def inspect_advance(
         {
             **source,
             "transactionIds": list(transactions),
-            "obligations": [_obligation(advance, row) for _, row in results],
+            "obligations": [
+                _obligation(advance, row, paid.get(row.id, Decimal(0))) for _, row in results
+            ],
         }
     )
 
@@ -436,4 +456,5 @@ async def list_participant_obligations(
             )
         )
     ).all()
-    return [_obligation(advance, obligation) for advance, obligation in rows]
+    paid = await _cash_paid(session, [row.id for _, row in rows])
+    return [_obligation(advance, row, paid.get(row.id, Decimal(0))) for advance, row in rows]

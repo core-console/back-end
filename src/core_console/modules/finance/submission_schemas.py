@@ -687,13 +687,118 @@ class AdvanceFailureResponse(
     """Unresolved failure, guarded pre-admission proof, or terminal rejection."""
 
 
+class SettlementCreatedResource(_Evidence):
+    type: Literal["settlement"]
+    id: UUID
+
+
+class SettlementCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: SettlementCreatedResource
+
+
+class SettlementInvalidProblem(TransactionInvalidProblem):
+    pass
+
+
+class SettlementConflictProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[409]
+    code: Literal[
+        "finance_account_archived",
+        "finance_settlement_preview_stale",
+        "finance_linked_record_protected",
+    ]
+    detail: str
+
+
+class SettlementMissingProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[404]
+    code: Literal["finance_account_not_found", "finance_participant_not_found"]
+    detail: str
+
+
+class SettlementRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: Annotated[
+        SettlementInvalidProblem | SettlementConflictProblem | SettlementMissingProblem,
+        Field(discriminator="code"),
+    ]
+
+
+class _SettlementReceipt(_ReceiptMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    operation: Literal["createFinanceSettlement"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class SettlementCreatedReceipt(_SettlementReceipt):
+    outcome: SettlementCreatedOutcome
+
+
+class SettlementRejectedReceipt(_SettlementReceipt):
+    outcome: SettlementRejectedOutcome
+
+
+class SettlementSubmissionReceipt(_SettlementReceipt):
+    outcome: Annotated[
+        SettlementCreatedOutcome | SettlementRejectedOutcome, Field(discriminator="kind")
+    ]
+
+
+class SettlementSubmissionUnfinished(_UnfinishedMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    operation: Literal["createFinanceSettlement"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class SettlementCommandValidationRejection(_CommandValidationRejectionMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    operation: Literal["createFinanceSettlement"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class SettlementValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: SettlementCommandValidationRejection
+
+
+class SettlementTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[404, 409, 422]
+    code: Literal[
+        "validation_error",
+        "finance_account_archived",
+        "finance_settlement_preview_stale",
+        "finance_linked_record_protected",
+        "finance_account_not_found",
+        "finance_participant_not_found",
+    ]
+    submissionReceipt: SettlementRejectedReceipt
+
+
+class SettlementFailureResponse(
+    RootModel[
+        SubmissionNonterminalProblem | SettlementValidationProblem | SettlementTerminalProblem
+    ]
+):
+    """Unresolved failure, guarded pre-admission proof, or terminal rejection."""
+
+
 type SubmissionReceipt = Annotated[
     LedgerSubmissionReceipt
     | AccountSubmissionReceipt
     | CategorySubmissionReceipt
     | TransactionSubmissionReceipt
     | AdjustmentSubmissionReceipt
-    | AdvanceSubmissionReceipt,
+    | AdvanceSubmissionReceipt
+    | SettlementSubmissionReceipt,
     Field(discriminator="operation"),
 ]
 type SubmissionValidationProblem = (
@@ -703,6 +808,7 @@ type SubmissionValidationProblem = (
     | TransactionValidationProblem
     | AdjustmentValidationProblem
     | AdvanceValidationProblem
+    | SettlementValidationProblem
 )
 
 type SubmissionUnfinished = Annotated[
@@ -711,7 +817,8 @@ type SubmissionUnfinished = Annotated[
     | CategorySubmissionUnfinished
     | TransactionSubmissionUnfinished
     | AdjustmentSubmissionUnfinished
-    | AdvanceSubmissionUnfinished,
+    | AdvanceSubmissionUnfinished
+    | SettlementSubmissionUnfinished,
     Field(discriminator="operation"),
 ]
 

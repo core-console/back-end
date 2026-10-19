@@ -64,8 +64,10 @@ original terminal rejection has been correlated.
 Confirmed source includes its UUID, funding Account, Transaction, date, note,
 confirmation timestamp, amount, zero owner share, and Obligation. An Obligation
 includes stable UUID, Ledger, Participant, Advance, source date, receivable Account,
-principal, cash-paid, forgiven, credit-applied, and remaining Money. In this unpaid
-slice the three resolution components are zero and remaining equals principal.
+principal, cash-paid, forgiven, credit-applied, and remaining Money. Newly created
+Obligations have zero resolution components and remaining equals principal.
+The [T04 cash repayment workflow](finance-v2-cash-repayments-t04.md) updates the
+derived cash-paid and remaining projections without changing original principal.
 The Participant list orders by source date, immutable confirmation timestamp, and
 Obligation UUID. Rename/archive preserve attribution and inspection. Archived
 Participants cannot receive new Advances; terminal replay still returns the

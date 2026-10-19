@@ -298,6 +298,12 @@ def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
             "201",
             "AdvanceCreatedReceipt",
         ),
+        (
+            "/finance/ledgers/{ledgerId}/settlements",
+            "createFinanceSettlement",
+            "201",
+            "SettlementCreatedReceipt",
+        ),
     ],
 )
 def test_cumulative_create_schema_header_status_and_lookup_matrix(
@@ -326,6 +332,7 @@ def test_cumulative_create_schema_header_status_and_lookup_matrix(
         "createFinanceTransaction",
         "createBalanceAdjustment",
         "createFinanceAdvance",
+        "createFinanceSettlement",
     }
     components = schema["components"]["schemas"]
     assert set(

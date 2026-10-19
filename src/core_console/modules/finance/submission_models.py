@@ -330,6 +330,39 @@ COMMAND_CHECK = (
 )
 
 
+COMMAND_CHECK = (
+    f"({COMMAND_CHECK}) OR "
+    "(command_version = '1' AND finance_settlement_v1_command_valid(canonical_command))"
+)
+OUTCOME_CHECK = (
+    OUTCOME_CHECK.replace(
+        "WHEN 'createFinanceAdvance' THEN 'advance' END",
+        "WHEN 'createFinanceAdvance' THEN 'advance' "
+        "WHEN 'createFinanceSettlement' THEN 'settlement' END",
+    )
+    + r""" OR
+(COALESCE(canonical_command->>'operation' = 'createFinanceSettlement'
+AND retention_ledger_id::text = canonical_command->>'targetLedgerId'
+AND resolved_at IS NOT NULL AND resolved_at >= admitted_at
+AND jsonb_typeof(terminal_outcome #> '{problem,detail}') = 'string'
+AND terminal_outcome = jsonb_build_object('kind', 'rejected', 'problem', jsonb_build_object(
+ 'type', 'about:blank', 'title', CASE terminal_outcome #>> '{problem,code}'
+ WHEN 'validation_error' THEN 'Unprocessable Entity'
+ WHEN 'finance_account_not_found' THEN 'Not Found'
+ WHEN 'finance_participant_not_found' THEN 'Not Found' ELSE 'Conflict' END,
+ 'status', CASE terminal_outcome #>> '{problem,code}' WHEN 'validation_error' THEN 422
+WHEN 'finance_account_not_found' THEN 404 WHEN 'finance_participant_not_found' THEN 404 ELSE 409
+    END,
+ 'code', terminal_outcome #> '{problem,code}', 'detail', terminal_outcome #> '{problem,detail}'))
+AND terminal_outcome #>> '{problem,code}' IN ('validation_error', 'finance_account_not_found' ,
+    'finance_participant_not_found' , 'finance_account_archived' ,
+    'finance_settlement_preview_stale' ,
+    'finance_linked_record_protected' )
+, FALSE))
+"""
+)
+
+
 class FinanceSubmission(Base):
     """Exactly unfinished or terminal, unique across one user's commands."""
 

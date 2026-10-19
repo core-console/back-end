@@ -11,6 +11,7 @@ from core_console.modules.finance.advance_models import (
     FinanceAdvanceTransaction,
     FinanceObligation,
 )
+from core_console.modules.finance.settlement_models import FinanceSettlementAllocation
 from core_console.problems import ApplicationProblem
 
 
@@ -19,7 +20,10 @@ def linked_record_problem() -> ApplicationProblem:
         status=409,
         title="Conflict",
         code="finance_linked_record_protected",
-        detail="This record belongs to a confirmed Advance and requires a coordinated Correction.",
+        detail=(
+            "This record belongs to a confirmed Advance or Settlement "
+            "and requires a coordinated Correction."
+        ),
     )
 
 
@@ -36,6 +40,15 @@ async def require_unmanaged_accounts(session: AsyncSession, account_ids: Collect
 
 
 async def require_unlinked_transaction(session: AsyncSession, transaction_id: UUID) -> None:
+    if (
+        await session.scalar(
+            select(FinanceSettlementAllocation.settlement_id).where(
+                FinanceSettlementAllocation.transaction_id == transaction_id
+            )
+        )
+        is not None
+    ):
+        raise linked_record_problem()
     if (
         await session.scalar(
             select(FinanceAdvance.id).where(FinanceAdvance.transaction_id == transaction_id)

@@ -39,6 +39,8 @@ from core_console.modules.finance.service import (
     execute_create_finance_transaction,
     execute_create_internal_transfer_transaction,
 )
+from core_console.modules.finance.settlement_schemas import SettlementCommandV1
+from core_console.modules.finance.settlements import execute_create_settlement
 from core_console.modules.finance.submission_commands import (
     AccountCommandV1,
     AdjustmentCommandV1,
@@ -63,6 +65,8 @@ from core_console.modules.finance.submission_schemas import (
     FinanceSubmissionTerminal,
     LedgerCommandValidationRejection,
     LedgerValidationProblem,
+    SettlementCommandValidationRejection,
+    SettlementValidationProblem,
     SubmissionReceipt,
     SubmissionUnfinished,
     SubmissionValidationProblem,
@@ -283,13 +287,15 @@ async def _submit_create(
             | type[AccountCommandV1]
             | type[AdjustmentCommandV1]
             | type[AdvanceCommandV1]
-            | type[AdvanceCommandV2],
+            | type[AdvanceCommandV2]
+            | type[SettlementCommandV1],
         ] = {
             "createFinanceLedger": LedgerCommandV1,
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,
             "createBalanceAdjustment": AdjustmentCommandV1,
             "createFinanceAdvance": AdvanceCommandV1 if version == "1" else AdvanceCommandV2,
+            "createFinanceSettlement": SettlementCommandV1,
         }
         body = (
             TypeAdapter(TransactionCommandV1).validate_python(attempted_body)
@@ -340,6 +346,7 @@ async def _submit_create(
                 | type[TransactionCommandValidationRejection]
                 | type[AdjustmentCommandValidationRejection]
                 | type[AdvanceCommandValidationRejection]
+                | type[SettlementCommandValidationRejection]
             ),
         ] = {
             "createFinanceLedger": LedgerCommandValidationRejection,
@@ -348,6 +355,7 @@ async def _submit_create(
             "createFinanceTransaction": TransactionCommandValidationRejection,
             "createBalanceAdjustment": AdjustmentCommandValidationRejection,
             "createFinanceAdvance": AdvanceCommandValidationRejection,
+            "createFinanceSettlement": SettlementCommandValidationRejection,
         }
         proof_model = proof_models[operation]
         problem_data["commandValidationRejection"] = proof_model.model_validate(
@@ -371,6 +379,7 @@ async def _submit_create(
                 | type[TransactionValidationProblem]
                 | type[AdjustmentValidationProblem]
                 | type[AdvanceValidationProblem]
+                | type[SettlementValidationProblem]
             ),
         ] = {
             "createFinanceLedger": LedgerValidationProblem,
@@ -379,6 +388,7 @@ async def _submit_create(
             "createFinanceTransaction": TransactionValidationProblem,
             "createBalanceAdjustment": AdjustmentValidationProblem,
             "createFinanceAdvance": AdvanceValidationProblem,
+            "createFinanceSettlement": SettlementValidationProblem,
         }
         problem_model = problem_models[operation]
         return problem_model.model_validate(problem_data)
@@ -396,6 +406,7 @@ async def _submit_create(
                 AdjustmentCommandV1,
                 AdvanceCommandV1,
                 AdvanceCommandV2,
+                SettlementCommandV1,
             ),
         )
         else {"name": body.name},
@@ -443,7 +454,13 @@ async def _submit_create(
         async with session.begin_nested():
             no_change = False
             resource_id: UUID | None = None
-            if isinstance(body, (AdvanceCommandV1, AdvanceCommandV2)):
+            if isinstance(body, SettlementCommandV1):
+                assert target_ledger_id is not None
+                resource_id = await execute_create_settlement(
+                    session, owner_id=owner_id, ledger_id=target_ledger_id, command=body
+                )
+                resource_type = "settlement"
+            elif isinstance(body, (AdvanceCommandV1, AdvanceCommandV2)):
                 assert target_ledger_id is not None
                 resource_id = await execute_create_advance(
                     session, owner_id=owner_id, ledger_id=target_ledger_id, command=body
@@ -545,6 +562,18 @@ async def _submit_create(
         }
         if not (
             (operation == "createFinanceAdvance" and business_problem.code in advance_codes)
+            or (
+                operation == "createFinanceSettlement"
+                and business_problem.code
+                in {
+                    "validation_error",
+                    "finance_account_not_found",
+                    "finance_participant_not_found",
+                    "finance_account_archived",
+                    "finance_settlement_preview_stale",
+                    "finance_linked_record_protected",
+                }
+            )
             or (
                 operation in ("createFinanceTransaction", "createBalanceAdjustment")
                 and business_problem.code == "finance_linked_record_protected"

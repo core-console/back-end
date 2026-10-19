@@ -62,10 +62,11 @@ class FinanceAdvance(Base):
 
 
 class FinanceObligation(Base):
-    """Principal with an exclusive receivable position; resolution is added later."""
+    """Principal with an exclusive receivable position and derived resolution."""
 
     __tablename__ = "finance_obligations"
     __table_args__ = (
+        UniqueConstraint("id", "ledger_id", name="uq_finance_obligations_id_ledger"),
         UniqueConstraint("advance_id", "participant_id", name="uq_finance_obligations_participant"),
         UniqueConstraint("receivable_account_id", name="uq_finance_obligations_receivable"),
         ForeignKeyConstraint(

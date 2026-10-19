@@ -952,3 +952,36 @@ def test_openapi_normalization_ignores_path_item_metadata(
     assert path_item["summary"] == "Path summary"
     assert path_item["description"] == "Path description"
     assert path_item["servers"] == [{"url": "https://example.test"}]
+
+
+def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI) -> None:
+    schema = app.openapi()
+    base = "/finance/ledgers/{ledgerId}"
+    for method, path, operation_id in [
+        ("post", "/settlements/preview", "previewFinanceSettlement"),
+        ("post", "/settlements", "createFinanceSettlement"),
+        ("get", "/settlements/{settlementId}", "getFinanceSettlement"),
+        ("get", "/participants/{participantId}/settlements", "listFinanceParticipantSettlements"),
+    ]:
+        operation = schema["paths"][base + path][method]
+        assert operation["operationId"] == operation_id
+        assert operation["security"] == []
+        for status, response in operation["responses"].items():
+            if int(status) >= 400:
+                assert set(response["content"]) == {"application/problem+json"}
+    command = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert command["additionalProperties"] is False
+    assert set(command["properties"]) == {
+        "participantId",
+        "receivingAccountId",
+        "transactionDate",
+        "amount",
+        "note",
+        "previewToken",
+    }
+    assert command["properties"]["amount"]["additionalProperties"] is False
+    assert "previewToken" in command["required"]
+    receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
+    assert receipt["properties"]["commandVersion"]["const"] == "1"

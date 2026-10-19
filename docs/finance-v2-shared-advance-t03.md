@@ -78,7 +78,8 @@ The shared source returns `transactionIds` for all linked financial effects and
 confirmation timestamp, note, total and owner share. The original T02 source
 continues to return its singular `transactionId` and `obligation`. Obligation
 projections retain principal, cash-paid, forgiven, credit-applied and remaining;
-resolution components are zero in this slice. Totals are derived exactly from
+resolution components start at zero. The [T04 cash repayment workflow](finance-v2-cash-repayments-t04.md)
+derives cash-paid and remaining from retained Allocations. Totals are derived exactly from
 owner share and Obligation principals. Existing financial position includes
 receivable Accounts once; composition never adds a second balance authority.
 

@@ -52,6 +52,9 @@ from core_console.modules.finance.submission_schemas import (
     LedgerTerminalProblem,
     LedgerValidationProblem,
     LedgerValidationResponse,
+    SettlementRejectedOutcome,
+    SettlementTerminalProblem,
+    SettlementValidationProblem,
     SubmissionNonterminalProblem,
     TransactionArchivedTerminalProblem,
     TransactionConflictResponse,
@@ -420,6 +423,7 @@ async def _post_create(
             TransactionValidationProblem,
             AdjustmentValidationProblem,
             AdvanceValidationProblem,
+            SettlementValidationProblem,
         ),
     ):
         return problem_response(evidence.model_copy(update={"instance": request.url.path}))
@@ -432,6 +436,7 @@ async def _post_create(
             TransactionRejectedOutcome,
             AdjustmentRejectedOutcome,
             AdvanceRejectedOutcome,
+            SettlementRejectedOutcome,
         ),
     ):
         problem = evidence.outcome.problem
@@ -458,7 +463,8 @@ async def _post_create(
         problem_models: dict[
             CreateOperation,
             (
-                type[AdvanceTerminalProblem]
+                type[SettlementTerminalProblem]
+                | type[AdvanceTerminalProblem]
                 | type[LedgerTerminalProblem]
                 | type[AccountTerminalProblem]
                 | type[CategoryTerminalProblem]
@@ -471,6 +477,7 @@ async def _post_create(
             ),
         ] = {
             "createFinanceAdvance": AdvanceTerminalProblem,
+            "createFinanceSettlement": SettlementTerminalProblem,
             "createFinanceLedger": LedgerTerminalProblem,
             "createFinanceAccount": AccountTerminalProblem,
             "createFinanceCategory": CategoryTerminalProblem,
