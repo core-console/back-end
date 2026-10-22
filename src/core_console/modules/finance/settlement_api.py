@@ -5,21 +5,29 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.advances import _problem, require_advance_ledger
 from core_console.modules.finance.api import _run_finance_workflow
 from core_console.modules.finance.settlement_schemas import (
+    CreditOriginResponse,
+    CreditSettlementPreview,
+    CreditSettlementResponse,
+    ParticipantPositionResponse,
     SettlementCommandV1,
+    SettlementCommandV2,
     SettlementDraftV1,
+    SettlementDraftV2,
     SettlementPreview,
     SettlementResponse,
 )
 from core_console.modules.finance.settlements import (
     inspect_settlement,
+    list_participant_credits,
     list_participant_settlements,
+    participant_positions,
     preview_settlement,
 )
 from core_console.modules.finance.submission_api import _header_parameter, _post_create
@@ -38,8 +46,8 @@ _READ_ERRORS: dict[int | str, dict[str, Any]] = {
 }
 
 
-def _request_schema(model: type[SettlementDraftV1]) -> dict[str, object]:
-    schema = model.model_json_schema()
+def _request_schema(model: Any) -> dict[str, object]:
+    schema = TypeAdapter(model).json_schema()
     definitions = schema.pop("$defs", {})
 
     def inline(value: Any) -> Any:
@@ -57,13 +65,17 @@ def _request_schema(model: type[SettlementDraftV1]) -> dict[str, object]:
 @router.post(
     "/settlements/preview",
     operation_id="previewFinanceSettlement",
-    response_model=SettlementPreview,
+    response_model=CreditSettlementPreview | SettlementPreview,
     responses={**_READ_ERRORS, 409: {"model": ProblemDetails}},
     openapi_extra={
         "security": [],
         "requestBody": {
             "required": True,
-            "content": {"application/json": {"schema": _request_schema(SettlementDraftV1)}},
+            "content": {
+                "application/json": {
+                    "schema": _request_schema(SettlementDraftV1 | SettlementDraftV2)
+                }
+            },
         },
     },
 )
@@ -72,10 +84,12 @@ async def post_preview(
     request: Request,
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> SettlementPreview:
+) -> SettlementPreview | CreditSettlementPreview:
     await _run_finance_workflow(require_advance_ledger(session, actor.id, ledger_id))
     try:
-        draft = SettlementDraftV1.model_validate_json(await request.body())
+        draft: SettlementDraftV1 | SettlementDraftV2 = TypeAdapter(
+            SettlementDraftV1 | SettlementDraftV2
+        ).validate_json(await request.body())
     except ValidationError:
         raise _problem(
             422, "validation_error", "The request did not satisfy the API contract."
@@ -90,7 +104,9 @@ async def post_preview(
     description=(
         "Confirm one participant's accumulated cash repayment. Version 1 requires the "
         "matching previewToken and allocates all eligible debt oldest Advance date first. "
-        "No selected subset, forgiveness, surplus or credit disposition is accepted. "
+        "Version 2 requires excessDisposition=retainCredit and records any unallocated "
+        "actual receipt as a participant credit Liability, including without eligible debt. "
+        "No selected subset, forgiveness, Income disposition or credit use is accepted. "
         "Prepare one immutable submission identity before dispatch; recover under that "
         "same identity using getFinanceSubmission or an explicit retry."
     ),
@@ -111,7 +127,11 @@ async def post_preview(
         ],
         "requestBody": {
             "required": True,
-            "content": {"application/json": {"schema": _request_schema(SettlementCommandV1)}},
+            "content": {
+                "application/json": {
+                    "schema": _request_schema(SettlementCommandV1 | SettlementCommandV2)
+                }
+            },
         },
     },
 )
@@ -127,7 +147,7 @@ async def post_settlement(
 @router.get(
     "/settlements/{settlementId}",
     operation_id="getFinanceSettlement",
-    response_model=SettlementResponse,
+    response_model=CreditSettlementResponse | SettlementResponse,
     responses=_READ_ERRORS,
     openapi_extra={"security": []},
 )
@@ -136,7 +156,7 @@ async def get_settlement(
     settlement_id: Annotated[UUID, Path(alias="settlementId")],
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> SettlementResponse:
+) -> SettlementResponse | CreditSettlementResponse:
     return await _run_finance_workflow(
         inspect_settlement(
             session, owner_id=actor.id, ledger_id=ledger_id, settlement_id=settlement_id
@@ -147,7 +167,7 @@ async def get_settlement(
 @router.get(
     "/participants/{participantId}/settlements",
     operation_id="listFinanceParticipantSettlements",
-    response_model=list[SettlementResponse],
+    response_model=list[CreditSettlementResponse | SettlementResponse],
     responses=_READ_ERRORS,
     openapi_extra={"security": []},
 )
@@ -156,9 +176,53 @@ async def get_settlements(
     participant_id: Annotated[UUID, Path(alias="participantId")],
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> list[SettlementResponse]:
+) -> list[SettlementResponse | CreditSettlementResponse]:
     return await _run_finance_workflow(
         list_participant_settlements(
+            session, owner_id=actor.id, ledger_id=ledger_id, participant_id=participant_id
+        )
+    )
+
+
+@router.get(
+    "/participants/{participantId}/credits",
+    operation_id="listFinanceParticipantCredits",
+    description="Receipt-backed credit origins in immutable receipt confirmation order. "
+    "Financial event dates do not change origin ordering; credit use and return are not supported.",
+    response_model=list[CreditOriginResponse],
+    responses=_READ_ERRORS,
+    openapi_extra={"security": []},
+)
+async def get_credits(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    participant_id: Annotated[UUID, Path(alias="participantId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[CreditOriginResponse]:
+    return await _run_finance_workflow(
+        list_participant_credits(
+            session, owner_id=actor.id, ledger_id=ledger_id, participant_id=participant_id
+        )
+    )
+
+
+@router.get(
+    "/participants/{participantId}/positions",
+    operation_id="getFinanceParticipantPositions",
+    description="Gross outstanding receivables and available credits separately by currency, "
+    "with net exposure as an additional summary. Creating an Advance never consumes credit.",
+    response_model=list[ParticipantPositionResponse],
+    responses=_READ_ERRORS,
+    openapi_extra={"security": []},
+)
+async def get_positions(
+    ledger_id: Annotated[UUID, Path(alias="ledgerId")],
+    participant_id: Annotated[UUID, Path(alias="participantId")],
+    actor: Annotated[CurrentUser, Depends(require_active_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[ParticipantPositionResponse]:
+    return await _run_finance_workflow(
+        participant_positions(
             session, owner_id=actor.id, ledger_id=ledger_id, participant_id=participant_id
         )
     )

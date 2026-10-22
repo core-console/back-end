@@ -730,7 +730,7 @@ class SettlementRejectedOutcome(_Evidence):
 
 
 class _SettlementReceipt(_ReceiptMetadata):
-    command_version: Literal["1"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlement"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
@@ -750,13 +750,13 @@ class SettlementSubmissionReceipt(_SettlementReceipt):
 
 
 class SettlementSubmissionUnfinished(_UnfinishedMetadata):
-    command_version: Literal["1"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlement"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
 
 class SettlementCommandValidationRejection(_CommandValidationRejectionMetadata):
-    command_version: Literal["1"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlement"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 

@@ -20,8 +20,9 @@ pytestmark = pytest.mark.anyio
 
 
 @pytest.mark.parametrize("unavailable", [True, False])
+@pytest.mark.parametrize("boundary", ["preview", "credits", "positions"])
 async def test_preview_translates_ledger_query_failures_at_the_http_boundary(
-    app: FastAPI, client: AsyncClient, unavailable: bool
+    app: FastAPI, client: AsyncClient, unavailable: bool, boundary: str
 ) -> None:
     session = cast(AsyncSession, AsyncMock(spec=AsyncSession))
     cast(AsyncMock, session.scalar).side_effect = (
@@ -37,7 +38,12 @@ async def test_preview_translates_ledger_query_failures_at_the_http_boundary(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         id=uuid4(), username=None, display_name=None, email=None, status="active"
     )
-    response = await client.post(f"/api/finance/ledgers/{uuid4()}/settlements/preview", json={})
+    base = f"/api/finance/ledgers/{uuid4()}"
+    response = (
+        await client.post(f"{base}/settlements/preview", json={})
+        if boundary == "preview"
+        else await client.get(f"{base}/participants/{uuid4()}/{boundary}")
+    )
     assert response.status_code == (503 if unavailable else 500)
     assert response.json()["code"] == ("database_unavailable" if unavailable else "internal_error")
     assert response.headers["content-type"] == "application/problem+json"

@@ -28,13 +28,20 @@ from core_console.modules.finance.queries import (
     get_finance_account_for_update,
 )
 from core_console.modules.finance.settlement_models import (
+    FinanceCreditOrigin,
     FinanceSettlement,
     FinanceSettlementAllocation,
 )
 from core_console.modules.finance.settlement_schemas import (
     CashAllocationResponse,
+    CreditOriginResponse,
+    CreditSettlementPreview,
+    CreditSettlementResponse,
+    ParticipantPositionResponse,
     SettlementCommandV1,
+    SettlementCommandV2,
     SettlementDraftV1,
+    SettlementDraftV2,
     SettlementPreview,
     SettlementResponse,
 )
@@ -45,9 +52,9 @@ async def preview_settlement(
     *,
     owner_id: UUID,
     ledger_id: UUID,
-    draft: SettlementDraftV1,
+    draft: SettlementDraftV1 | SettlementDraftV2,
     lock: bool = False,
-) -> SettlementPreview:
+) -> SettlementPreview | CreditSettlementPreview:
     await require_advance_ledger(session, owner_id, ledger_id)
     if lock:
         # Lock every potentially affected Account in the ordinary Finance UUID order,
@@ -126,7 +133,9 @@ async def preview_settlement(
             left = subtract(left, paid)
     state = {
         "ledgerId": str(ledger_id),
-        "intent": SettlementDraftV1.canonical(draft),
+        "intent": SettlementDraftV2.canonical(draft)
+        if isinstance(draft, SettlementDraftV2)
+        else SettlementDraftV1.canonical(draft),
         "receiving": [
             str(account.updated_at),
             account.name,
@@ -139,14 +148,25 @@ async def preview_settlement(
         "participant": [str(participant.updated_at), participant.name, participant.status],
         "obligations": [row.model_dump(mode="json", by_alias=True) for row in eligible],
     }
+    credit = Decimal(0)
+    if isinstance(draft, SettlementDraftV2):
+        origins = await _credit_origins(session, ledger_id, draft.participant_id)
+        state["creditOrigins"] = [row.model_dump(mode="json", by_alias=True) for row in origins]
+        for origin in origins:
+            if origin.amount.currency == account.currency:
+                credit = subtract(credit, subtract(Decimal(0), Decimal(origin.available.amount)))
     token = sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    if lock and isinstance(draft, SettlementCommandV1) and token != draft.preview_token:
+    if (
+        lock
+        and isinstance(draft, (SettlementCommandV1, SettlementCommandV2))
+        and token != draft.preview_token
+    ):
         raise _problem(
             409,
             "finance_settlement_preview_stale",
             "Repayment state changed. Refresh the preview and confirm again.",
         )
-    if left > 0:
+    if left > 0 and not isinstance(draft, SettlementDraftV2):
         raise _problem(
             422,
             "validation_error",
@@ -156,7 +176,7 @@ async def preview_settlement(
     delta = Decimal(draft.amount.amount)
     if account.nature == "liability":
         delta = subtract(Decimal(0), delta)
-    return SettlementPreview(
+    preview = SettlementPreview(
         previewToken=token,
         receivingBalance=_money(balance.current_balance, account.currency),
         receivingBalanceAfter=_money(
@@ -164,13 +184,29 @@ async def preview_settlement(
         ),
         amount=_money(Decimal(draft.amount.amount), account.currency),
         outstandingBefore=_money(total, account.currency),
-        outstandingAfter=_money(subtract(total, Decimal(draft.amount.amount)), account.currency),
+        outstandingAfter=_money(
+            subtract(total, subtract(Decimal(draft.amount.amount), left)), account.currency
+        ),
         allocations=allocations,
     )
+    if isinstance(draft, SettlementDraftV2):
+        return CreditSettlementPreview(
+            **preview.model_dump(by_alias=True),
+            retainedCredit=_money(left, account.currency),
+            availableCreditBefore=_money(credit, account.currency),
+            availableCreditAfter=_money(
+                subtract(credit, subtract(Decimal(0), left)), account.currency
+            ),
+        )
+    return preview
 
 
 async def execute_create_settlement(
-    session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, command: SettlementCommandV1
+    session: AsyncSession,
+    *,
+    owner_id: UUID,
+    ledger_id: UUID,
+    command: SettlementCommandV1 | SettlementCommandV2,
 ) -> UUID:
     preview = await preview_settlement(
         session, owner_id=owner_id, ledger_id=ledger_id, draft=command, lock=True
@@ -232,6 +268,10 @@ async def execute_create_settlement(
                 ),
             ]
         )
+    if isinstance(preview, CreditSettlementPreview) and Decimal(preview.retained_credit.amount) > 0:
+        await _record_credit(
+            session, settlement, Decimal(preview.retained_credit.amount), receiving
+        )
     await session.flush()
     await inspect_settlement(
         session, owner_id=owner_id, ledger_id=ledger_id, settlement_id=settlement.id
@@ -241,7 +281,7 @@ async def execute_create_settlement(
 
 async def inspect_settlement(
     session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, settlement_id: UUID
-) -> SettlementResponse:
+) -> SettlementResponse | CreditSettlementResponse:
     await require_advance_ledger(session, owner_id, ledger_id)
     settlement = await session.scalar(
         select(FinanceSettlement).where(
@@ -261,7 +301,7 @@ async def inspect_settlement(
             .order_by(FinanceSettlementAllocation.position)
         )
     ).all()
-    return SettlementResponse(
+    result = SettlementResponse(
         id=settlement.id,
         ledgerId=ledger_id,
         participantId=settlement.participant_id,
@@ -284,11 +324,21 @@ async def inspect_settlement(
             for allocation, obligation, advance in rows
         ],
     )
+    origin = await session.get(FinanceCreditOrigin, settlement.id)
+    if origin is not None:
+        return CreditSettlementResponse(
+            **{
+                **result.model_dump(by_alias=True),
+                "transactionIds": [*result.transaction_ids, origin.transaction_id],
+            },
+            creditOrigin=_origin_response(origin, settlement),
+        )
+    return result
 
 
 async def list_participant_settlements(
     session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, participant_id: UUID
-) -> list[SettlementResponse]:
+) -> list[SettlementResponse | CreditSettlementResponse]:
     # Reuse the owner/Participant boundary, including archived identities.
     await list_participant_obligations(
         session, owner_id=owner_id, ledger_id=ledger_id, participant_id=participant_id
@@ -306,4 +356,140 @@ async def list_participant_settlements(
     return [
         await inspect_settlement(session, owner_id=owner_id, ledger_id=ledger_id, settlement_id=id)
         for id in ids
+    ]
+
+
+async def _record_credit(
+    session: AsyncSession, settlement: FinanceSettlement, amount: Decimal, receiving: FinanceAccount
+) -> None:
+    account_id, transaction_id = uuid4(), uuid4()
+    name = f"Participant credit {settlement.id}"
+    session.add_all(
+        [
+            FinanceAccount(
+                id=account_id,
+                ledger_id=settlement.ledger_id,
+                name=name,
+                name_key=name.casefold(),
+                nature="liability",
+                currency=settlement.currency,
+                opening_balance=Decimal(0),
+                tracking_start_date=settlement.transaction_date,
+                status="active",
+            ),
+            FinanceTransaction(
+                id=transaction_id,
+                ledger_id=settlement.ledger_id,
+                kind="internal_transfer",
+                transaction_date=settlement.transaction_date,
+                note=settlement.note,
+            ),
+        ]
+    )
+    await session.flush()
+    session.add_all(
+        [
+            FinanceAccountMovement(
+                transaction_id=transaction_id,
+                ledger_id=settlement.ledger_id,
+                account_id=account_id,
+                amount=amount,
+                currency=settlement.currency,
+                role="source",
+            ),
+            FinanceAccountMovement(
+                transaction_id=transaction_id,
+                ledger_id=settlement.ledger_id,
+                account_id=receiving.id,
+                amount=amount if receiving.nature == "asset" else subtract(Decimal(0), amount),
+                currency=settlement.currency,
+                role="destination",
+            ),
+            FinanceCreditOrigin(
+                settlement_id=settlement.id,
+                ledger_id=settlement.ledger_id,
+                liability_account_id=account_id,
+                transaction_id=transaction_id,
+                amount=amount,
+            ),
+        ]
+    )
+
+
+def _origin_response(
+    origin: FinanceCreditOrigin, settlement: FinanceSettlement
+) -> CreditOriginResponse:
+    return CreditOriginResponse(
+        settlementId=settlement.id,
+        ledgerId=settlement.ledger_id,
+        participantId=settlement.participant_id,
+        receivingAccountId=settlement.receiving_account_id,
+        liabilityAccountId=origin.liability_account_id,
+        transactionId=origin.transaction_id,
+        transactionDate=settlement.transaction_date,
+        confirmedAt=settlement.confirmed_at,
+        confirmationOrder=settlement.confirmation_order,
+        amount=_money(origin.amount, settlement.currency),
+        available=_money(origin.amount, settlement.currency),
+    )
+
+
+async def _credit_origins(
+    session: AsyncSession, ledger_id: UUID, participant_id: UUID
+) -> list[CreditOriginResponse]:
+    rows = (
+        await session.execute(
+            select(FinanceCreditOrigin, FinanceSettlement)
+            .join(FinanceSettlement, FinanceSettlement.id == FinanceCreditOrigin.settlement_id)
+            .where(
+                FinanceSettlement.ledger_id == ledger_id,
+                FinanceSettlement.participant_id == participant_id,
+            )
+            .order_by(FinanceSettlement.confirmation_order, FinanceSettlement.id)
+        )
+    ).all()
+    return [_origin_response(origin, settlement) for origin, settlement in rows]
+
+
+async def list_participant_credits(
+    session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, participant_id: UUID
+) -> list[CreditOriginResponse]:
+    await list_participant_obligations(
+        session, owner_id=owner_id, ledger_id=ledger_id, participant_id=participant_id
+    )
+    return await _credit_origins(session, ledger_id, participant_id)
+
+
+async def participant_positions(
+    session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, participant_id: UUID
+) -> list[ParticipantPositionResponse]:
+    obligations = await list_participant_obligations(
+        session, owner_id=owner_id, ledger_id=ledger_id, participant_id=participant_id
+    )
+    origins = await _credit_origins(session, ledger_id, participant_id)
+    debt: dict[str, Decimal] = {}
+    credits: dict[str, Decimal] = {}
+    for obligation in obligations:
+        currency = obligation.remaining.currency
+        debt[currency] = subtract(
+            debt.get(currency, Decimal(0)),
+            subtract(Decimal(0), Decimal(obligation.remaining.amount)),
+        )
+    for origin in origins:
+        currency = origin.available.currency
+        credits[currency] = subtract(
+            credits.get(currency, Decimal(0)),
+            subtract(Decimal(0), Decimal(origin.available.amount)),
+        )
+    return [
+        ParticipantPositionResponse(
+            currency=currency,
+            outstandingReceivables=_money(debt.get(currency, Decimal(0)), currency),
+            availableCredits=_money(credits.get(currency, Decimal(0)), currency),
+            netExposure=_money(
+                subtract(debt.get(currency, Decimal(0)), credits.get(currency, Decimal(0))),
+                currency,
+            ),
+        )
+        for currency in sorted(debt.keys() | credits.keys())
     ]

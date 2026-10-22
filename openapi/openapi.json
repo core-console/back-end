@@ -3239,6 +3239,217 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CreditOriginResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "available": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "liabilityAccountId": {
+            "format": "uuid",
+            "title": "Liabilityaccountid",
+            "type": "string"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "receivingAccountId": {
+            "format": "uuid",
+            "title": "Receivingaccountid",
+            "type": "string"
+          },
+          "settlementId": {
+            "format": "uuid",
+            "title": "Settlementid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionId": {
+            "format": "uuid",
+            "title": "Transactionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "settlementId",
+          "ledgerId",
+          "participantId",
+          "receivingAccountId",
+          "liabilityAccountId",
+          "transactionId",
+          "transactionDate",
+          "confirmedAt",
+          "confirmationOrder",
+          "amount",
+          "available"
+        ],
+        "title": "CreditOriginResponse",
+        "type": "object"
+      },
+      "CreditSettlementPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CashAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "availableCreditAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "availableCreditBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "outstandingAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "outstandingBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "previewToken": {
+            "title": "Previewtoken",
+            "type": "string"
+          },
+          "receivingBalance": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "receivingBalanceAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "retainedCredit": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          }
+        },
+        "required": [
+          "previewToken",
+          "receivingBalance",
+          "receivingBalanceAfter",
+          "amount",
+          "outstandingBefore",
+          "outstandingAfter",
+          "allocations",
+          "retainedCredit",
+          "availableCreditBefore",
+          "availableCreditAfter"
+        ],
+        "title": "CreditSettlementPreview",
+        "type": "object"
+      },
+      "CreditSettlementResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CashAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "creditOrigin": {
+            "$ref": "#/components/schemas/CreditOriginResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "receivingAccountId": {
+            "format": "uuid",
+            "title": "Receivingaccountid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transactionids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "ledgerId",
+          "participantId",
+          "receivingAccountId",
+          "transactionDate",
+          "amount",
+          "note",
+          "confirmedAt",
+          "confirmationOrder",
+          "transactionIds",
+          "allocations",
+          "creditOrigin"
+        ],
+        "title": "CreditSettlementResponse",
+        "type": "object"
+      },
       "CurrencyCode": {
         "enum": [
           "CNY",
@@ -4443,6 +4654,32 @@
         "title": "ParticipantNameRequest",
         "type": "object"
       },
+      "ParticipantPositionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "availableCredits": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "netExposure": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "outstandingReceivables": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          }
+        },
+        "required": [
+          "currency",
+          "outstandingReceivables",
+          "availableCredits",
+          "netExposure"
+        ],
+        "title": "ParticipantPositionResponse",
+        "type": "object"
+      },
       "ParticipantReceivablePreview": {
         "additionalProperties": false,
         "properties": {
@@ -4812,7 +5049,10 @@
             "type": "object"
           },
           "commandVersion": {
-            "const": "1",
+            "enum": [
+              "1",
+              "2"
+            ],
             "title": "Commandversion",
             "type": "string"
           },
@@ -4922,7 +5162,10 @@
             "type": "string"
           },
           "commandVersion": {
-            "const": "1",
+            "enum": [
+              "1",
+              "2"
+            ],
             "title": "Commandversion",
             "type": "string"
           },
@@ -5165,7 +5408,10 @@
             "type": "string"
           },
           "commandVersion": {
-            "const": "1",
+            "enum": [
+              "1",
+              "2"
+            ],
             "title": "Commandversion",
             "type": "string"
           },
@@ -5297,7 +5543,10 @@
             "type": "string"
           },
           "commandVersion": {
-            "const": "1",
+            "enum": [
+              "1",
+              "2"
+            ],
             "title": "Commandversion",
             "type": "string"
           },
@@ -5361,7 +5610,10 @@
             "type": "string"
           },
           "commandVersion": {
-            "const": "1",
+            "enum": [
+              "1",
+              "2"
+            ],
             "title": "Commandversion",
             "type": "string"
           },
@@ -10156,6 +10408,105 @@
         ]
       }
     },
+    "/finance/ledgers/{ledgerId}/participants/{participantId}/credits": {
+      "get": {
+        "description": "Receipt-backed credit origins in immutable receipt confirmation order. Financial event dates do not change origin ordering; credit use and return are not supported.",
+        "operationId": "listFinanceParticipantCredits",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "participantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Participantid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CreditOriginResponse"
+                  },
+                  "title": "Response Listfinanceparticipantcredits",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [],
+        "summary": "Get Credits",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/finance/ledgers/{ledgerId}/participants/{participantId}/obligations": {
       "get": {
         "operationId": "listFinanceParticipantObligations",
@@ -10254,6 +10605,105 @@
         ]
       }
     },
+    "/finance/ledgers/{ledgerId}/participants/{participantId}/positions": {
+      "get": {
+        "description": "Gross outstanding receivables and available credits separately by currency, with net exposure as an additional summary. Creating an Advance never consumes credit.",
+        "operationId": "getFinanceParticipantPositions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ledgerId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ledgerid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "participantId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Participantid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ParticipantPositionResponse"
+                  },
+                  "title": "Response Getfinanceparticipantpositions",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [],
+        "summary": "Get Positions",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/finance/ledgers/{ledgerId}/participants/{participantId}/settlements": {
       "get": {
         "operationId": "listFinanceParticipantSettlements",
@@ -10285,7 +10735,14 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/SettlementResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/CreditSettlementResponse"
+                      },
+                      {
+                        "$ref": "#/components/schemas/SettlementResponse"
+                      }
+                    ]
                   },
                   "title": "Response Listfinanceparticipantsettlements",
                   "type": "array"
@@ -10354,7 +10811,7 @@
     },
     "/finance/ledgers/{ledgerId}/settlements": {
       "post": {
-        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. No selected subset, forgiveness, surplus or credit disposition is accepted. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
+        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. No selected subset, forgiveness, Income disposition or credit use is accepted. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
         "operationId": "createFinanceSettlement",
         "parameters": [
           {
@@ -10398,75 +10855,156 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "amount": {
+                "anyOf": [
+                  {
                     "additionalProperties": false,
                     "properties": {
                       "amount": {
-                        "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
-                        "title": "Amount",
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
                         "type": "string"
                       },
-                      "currency": {
-                        "enum": [
-                          "CNY",
-                          "JPY",
-                          "USD"
-                        ],
-                        "title": "Currency",
+                      "previewToken": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "title": "Previewtoken",
+                        "type": "string"
+                      },
+                      "receivingAccountId": {
+                        "format": "uuid",
+                        "title": "Receivingaccountid",
+                        "type": "string"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
                         "type": "string"
                       }
                     },
                     "required": [
+                      "transactionDate",
+                      "participantId",
+                      "receivingAccountId",
                       "amount",
-                      "currency"
+                      "previewToken"
                     ],
-                    "title": "OpeningBalanceV1",
+                    "title": "SettlementCommandV1",
                     "type": "object"
                   },
-                  "note": {
-                    "anyOf": [
-                      {
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "excessDisposition": {
+                        "const": "retainCredit",
+                        "title": "Excessdisposition",
                         "type": "string"
                       },
-                      {
-                        "type": "null"
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
+                        "type": "string"
+                      },
+                      "previewToken": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "title": "Previewtoken",
+                        "type": "string"
+                      },
+                      "receivingAccountId": {
+                        "format": "uuid",
+                        "title": "Receivingaccountid",
+                        "type": "string"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
                       }
+                    },
+                    "required": [
+                      "transactionDate",
+                      "participantId",
+                      "receivingAccountId",
+                      "amount",
+                      "excessDisposition",
+                      "previewToken"
                     ],
-                    "maxLength": 500,
-                    "title": "Note"
-                  },
-                  "participantId": {
-                    "format": "uuid",
-                    "title": "Participantid",
-                    "type": "string"
-                  },
-                  "previewToken": {
-                    "pattern": "^[0-9a-f]{64}$",
-                    "title": "Previewtoken",
-                    "type": "string"
-                  },
-                  "receivingAccountId": {
-                    "format": "uuid",
-                    "title": "Receivingaccountid",
-                    "type": "string"
-                  },
-                  "transactionDate": {
-                    "format": "date",
-                    "title": "Transactiondate",
-                    "type": "string"
+                    "title": "SettlementCommandV2",
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "transactionDate",
-                  "participantId",
-                  "receivingAccountId",
-                  "amount",
-                  "previewToken"
-                ],
-                "title": "SettlementCommandV1",
-                "type": "object"
+                ]
               }
             }
           },
@@ -10580,69 +11118,144 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "amount": {
+                "anyOf": [
+                  {
                     "additionalProperties": false,
                     "properties": {
                       "amount": {
-                        "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
-                        "title": "Amount",
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
                         "type": "string"
                       },
-                      "currency": {
-                        "enum": [
-                          "CNY",
-                          "JPY",
-                          "USD"
-                        ],
-                        "title": "Currency",
+                      "receivingAccountId": {
+                        "format": "uuid",
+                        "title": "Receivingaccountid",
+                        "type": "string"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
                         "type": "string"
                       }
                     },
                     "required": [
-                      "amount",
-                      "currency"
+                      "transactionDate",
+                      "participantId",
+                      "receivingAccountId",
+                      "amount"
                     ],
-                    "title": "OpeningBalanceV1",
+                    "title": "SettlementDraftV1",
                     "type": "object"
                   },
-                  "note": {
-                    "anyOf": [
-                      {
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "excessDisposition": {
+                        "const": "retainCredit",
+                        "title": "Excessdisposition",
                         "type": "string"
                       },
-                      {
-                        "type": "null"
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
+                        "type": "string"
+                      },
+                      "receivingAccountId": {
+                        "format": "uuid",
+                        "title": "Receivingaccountid",
+                        "type": "string"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
                       }
+                    },
+                    "required": [
+                      "transactionDate",
+                      "participantId",
+                      "receivingAccountId",
+                      "amount",
+                      "excessDisposition"
                     ],
-                    "maxLength": 500,
-                    "title": "Note"
-                  },
-                  "participantId": {
-                    "format": "uuid",
-                    "title": "Participantid",
-                    "type": "string"
-                  },
-                  "receivingAccountId": {
-                    "format": "uuid",
-                    "title": "Receivingaccountid",
-                    "type": "string"
-                  },
-                  "transactionDate": {
-                    "format": "date",
-                    "title": "Transactiondate",
-                    "type": "string"
+                    "title": "SettlementDraftV2",
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "transactionDate",
-                  "participantId",
-                  "receivingAccountId",
-                  "amount"
-                ],
-                "title": "SettlementDraftV1",
-                "type": "object"
+                ]
               }
             }
           },
@@ -10653,7 +11266,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SettlementPreview"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CreditSettlementPreview"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SettlementPreview"
+                    }
+                  ],
+                  "title": "Response Previewfinancesettlement"
                 }
               }
             },
@@ -10757,7 +11378,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SettlementResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CreditSettlementResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SettlementResponse"
+                    }
+                  ],
+                  "title": "Response Getfinancesettlement"
                 }
               }
             },

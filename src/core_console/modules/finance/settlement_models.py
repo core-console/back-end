@@ -105,3 +105,35 @@ class FinanceSettlementAllocation(Base):
     transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     cash_paid: Mapped[Decimal] = mapped_column(Numeric())
     remaining_after: Mapped[Decimal] = mapped_column(Numeric())
+
+
+class FinanceCreditOrigin(Base):
+    """One actual receipt's unallocated cash and its protected Liability effect."""
+
+    __tablename__ = "finance_credit_origins"
+    __table_args__ = (
+        UniqueConstraint("liability_account_id", name="uq_finance_credit_account"),
+        UniqueConstraint("transaction_id", name="uq_finance_credit_transaction"),
+        ForeignKeyConstraint(
+            ["settlement_id", "ledger_id"],
+            ["finance_settlements.id", "finance_settlements.ledger_id"],
+        ),
+        ForeignKeyConstraint(
+            ["liability_account_id", "ledger_id"],
+            ["finance_accounts.id", "finance_accounts.ledger_id"],
+        ),
+        ForeignKeyConstraint(
+            ["transaction_id", "ledger_id"],
+            ["finance_transactions.id", "finance_transactions.ledger_id"],
+        ),
+        CheckConstraint(
+            "amount > 0 AND amount NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
+            name="ck_finance_credit_amount",
+        ),
+    )
+    settlement_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
+    ledger_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    liability_account_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    amount: Mapped[Decimal] = mapped_column(Numeric())

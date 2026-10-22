@@ -39,7 +39,7 @@ from core_console.modules.finance.service import (
     execute_create_finance_transaction,
     execute_create_internal_transfer_transaction,
 )
-from core_console.modules.finance.settlement_schemas import SettlementCommandV1
+from core_console.modules.finance.settlement_schemas import SettlementCommandV1, SettlementCommandV2
 from core_console.modules.finance.settlements import execute_create_settlement
 from core_console.modules.finance.submission_commands import (
     AccountCommandV1,
@@ -270,7 +270,9 @@ async def _submit_create(
     if row is not None:
         await _authorize_binding(session, row)
         _compare(row, version)
-    if version != "1" and not (version == "2" and operation == "createFinanceAdvance"):
+    if version != "1" and not (
+        version == "2" and operation in ("createFinanceAdvance", "createFinanceSettlement")
+    ):
         raise submission_problem(
             422, "finance_command_version_unsupported", "Command version is not supported."
         )
@@ -288,14 +290,17 @@ async def _submit_create(
             | type[AdjustmentCommandV1]
             | type[AdvanceCommandV1]
             | type[AdvanceCommandV2]
-            | type[SettlementCommandV1],
+            | type[SettlementCommandV1]
+            | type[SettlementCommandV2],
         ] = {
             "createFinanceLedger": LedgerCommandV1,
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,
             "createBalanceAdjustment": AdjustmentCommandV1,
             "createFinanceAdvance": AdvanceCommandV1 if version == "1" else AdvanceCommandV2,
-            "createFinanceSettlement": SettlementCommandV1,
+            "createFinanceSettlement": SettlementCommandV1
+            if version == "1"
+            else SettlementCommandV2,
         }
         body = (
             TypeAdapter(TransactionCommandV1).validate_python(attempted_body)
@@ -407,6 +412,7 @@ async def _submit_create(
                 AdvanceCommandV1,
                 AdvanceCommandV2,
                 SettlementCommandV1,
+                SettlementCommandV2,
             ),
         )
         else {"name": body.name},
@@ -454,7 +460,7 @@ async def _submit_create(
         async with session.begin_nested():
             no_change = False
             resource_id: UUID | None = None
-            if isinstance(body, SettlementCommandV1):
+            if isinstance(body, (SettlementCommandV1, SettlementCommandV2)):
                 assert target_ledger_id is not None
                 resource_id = await execute_create_settlement(
                     session, owner_id=owner_id, ledger_id=target_ledger_id, command=body

@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Self
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import Field, model_validator
@@ -40,6 +40,20 @@ class SettlementCommandV1(SettlementDraftV1):
         return {**super().canonical(), "previewToken": self.preview_token}
 
 
+class SettlementDraftV2(SettlementDraftV1):
+    excess_disposition: Literal["retainCredit"] = Field(alias="excessDisposition")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "excessDisposition": self.excess_disposition}
+
+
+class SettlementCommandV2(SettlementDraftV2):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
 class CashAllocationResponse(_Projection):
     position: int
     obligation_id: UUID = Field(alias="obligationId")
@@ -59,6 +73,26 @@ class SettlementPreview(_Projection):
     allocations: list[CashAllocationResponse]
 
 
+class CreditSettlementPreview(SettlementPreview):
+    retained_credit: MoneyResponse = Field(alias="retainedCredit")
+    available_credit_before: MoneyResponse = Field(alias="availableCreditBefore")
+    available_credit_after: MoneyResponse = Field(alias="availableCreditAfter")
+
+
+class CreditOriginResponse(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    ledger_id: UUID = Field(alias="ledgerId")
+    participant_id: UUID = Field(alias="participantId")
+    receiving_account_id: UUID = Field(alias="receivingAccountId")
+    liability_account_id: UUID = Field(alias="liabilityAccountId")
+    transaction_id: UUID = Field(alias="transactionId")
+    transaction_date: date = Field(alias="transactionDate")
+    confirmed_at: datetime = Field(alias="confirmedAt")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    amount: MoneyResponse
+    available: MoneyResponse
+
+
 class SettlementResponse(_Projection):
     id: UUID
     ledger_id: UUID = Field(alias="ledgerId")
@@ -71,3 +105,14 @@ class SettlementResponse(_Projection):
     confirmation_order: int = Field(alias="confirmationOrder")
     transaction_ids: list[UUID] = Field(alias="transactionIds")
     allocations: list[CashAllocationResponse]
+
+
+class CreditSettlementResponse(SettlementResponse):
+    credit_origin: CreditOriginResponse = Field(alias="creditOrigin")
+
+
+class ParticipantPositionResponse(_Projection):
+    currency: str
+    outstanding_receivables: MoneyResponse = Field(alias="outstandingReceivables")
+    available_credits: MoneyResponse = Field(alias="availableCredits")
+    net_exposure: MoneyResponse = Field(alias="netExposure")

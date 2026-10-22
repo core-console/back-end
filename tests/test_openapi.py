@@ -962,6 +962,8 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
         ("post", "/settlements", "createFinanceSettlement"),
         ("get", "/settlements/{settlementId}", "getFinanceSettlement"),
         ("get", "/participants/{participantId}/settlements", "listFinanceParticipantSettlements"),
+        ("get", "/participants/{participantId}/credits", "listFinanceParticipantCredits"),
+        ("get", "/participants/{participantId}/positions", "getFinanceParticipantPositions"),
     ]:
         operation = schema["paths"][base + path][method]
         assert operation["operationId"] == operation_id
@@ -969,9 +971,11 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
         for status, response in operation["responses"].items():
             if int(status) >= 400:
                 assert set(response["content"]) == {"application/problem+json"}
-    command = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
+    commands = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
         "application/json"
-    ]["schema"]
+    ]["schema"]["anyOf"]
+    assert len(commands) == 2
+    command, credit_command = commands
     assert command["additionalProperties"] is False
     assert set(command["properties"]) == {
         "participantId",
@@ -983,5 +987,11 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     }
     assert command["properties"]["amount"]["additionalProperties"] is False
     assert "previewToken" in command["required"]
+    assert credit_command["additionalProperties"] is False
+    assert set(credit_command["properties"]) == set(command["properties"]) | {"excessDisposition"}
+    assert credit_command["properties"]["amount"]["additionalProperties"] is False
+    assert "excessDisposition" in credit_command["required"]
+    assert "previewToken" in credit_command["required"]
+    assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["const"] == "1"
+    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2"]

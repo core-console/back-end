@@ -332,7 +332,8 @@ COMMAND_CHECK = (
 
 COMMAND_CHECK = (
     f"({COMMAND_CHECK}) OR "
-    "(command_version = '1' AND finance_settlement_v1_command_valid(canonical_command))"
+    "(command_version = '1' AND finance_settlement_v1_command_valid(canonical_command)) OR "
+    "(command_version = '2' AND finance_settlement_v2_command_valid(canonical_command))"
 )
 OUTCOME_CHECK = (
     OUTCOME_CHECK.replace(
