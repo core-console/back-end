@@ -21,6 +21,7 @@ from core_console.modules.finance.settlement_models import (
     FinanceCreditOrigin,
     FinanceSettlement,
     FinanceSettlementAllocation,
+    FinanceSettlementIncome,
 )
 from core_console.modules.finance.submission_models import FinanceSubmission
 from core_console.modules.users.models import User
@@ -40,6 +41,7 @@ assert target_metadata is FinanceSubmission.metadata
 assert target_metadata is FinanceCreditOrigin.metadata
 assert target_metadata is FinanceSettlement.metadata
 assert target_metadata is FinanceSettlementAllocation.metadata
+assert target_metadata is FinanceSettlementIncome.metadata
 assert target_metadata is User.metadata
 
 

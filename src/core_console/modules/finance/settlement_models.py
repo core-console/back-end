@@ -137,3 +137,29 @@ class FinanceCreditOrigin(Base):
     liability_account_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     amount: Mapped[Decimal] = mapped_column(Numeric())
+
+
+class FinanceSettlementIncome(Base):
+    """Explicitly accepted receipt surplus linked to its protected Income."""
+
+    __tablename__ = "finance_settlement_income"
+    __table_args__ = (
+        UniqueConstraint("transaction_id", name="uq_finance_settlement_income_transaction"),
+        ForeignKeyConstraint(
+            ["settlement_id", "ledger_id"],
+            ["finance_settlements.id", "finance_settlements.ledger_id"],
+        ),
+        ForeignKeyConstraint(
+            ["transaction_id", "ledger_id"],
+            ["finance_transactions.id", "finance_transactions.ledger_id"],
+        ),
+        CheckConstraint(
+            "amount > 0 AND amount NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
+            name="ck_finance_settlement_income_amount",
+        ),
+    )
+    settlement_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
+    ledger_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    amount: Mapped[Decimal] = mapped_column(Numeric())

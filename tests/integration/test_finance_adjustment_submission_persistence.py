@@ -239,7 +239,7 @@ async def test_t08_populated_migration_preserves_prior_evidence_and_blocks_unsaf
         async with postgres_engine.connect() as connection:
             assert (
                 await connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261022_01"
+                == "20261023_01"
             )
         assert (
             await client.get(f"/api/finance/submissions/{key}", headers=headers)

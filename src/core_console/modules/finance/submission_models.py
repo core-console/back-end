@@ -364,6 +364,31 @@ AND terminal_outcome #>> '{problem,code}' IN ('validation_error', 'finance_accou
 )
 
 
+COMMAND_CHECK = (
+    f"({COMMAND_CHECK}) OR "
+    "(command_version = '3' AND finance_settlement_v3_command_valid(canonical_command))"
+)
+OUTCOME_CHECK = (
+    f"({OUTCOME_CHECK}) OR "
+    + r"""
+(COALESCE(command_version = '3'
+AND canonical_command->>'operation' = 'createFinanceSettlement'
+AND retention_ledger_id::text = canonical_command->>'targetLedgerId'
+AND resolved_at IS NOT NULL AND resolved_at >= admitted_at
+AND jsonb_typeof(terminal_outcome #> '{problem,detail}') = 'string'
+AND terminal_outcome = jsonb_build_object('kind', 'rejected', 'problem', jsonb_build_object(
+ 'type', 'about:blank', 'title', CASE terminal_outcome #>> '{problem,code}'
+ WHEN 'finance_category_not_found' THEN 'Not Found' ELSE 'Conflict' END,
+ 'status', CASE terminal_outcome #>> '{problem,code}'
+ WHEN 'finance_category_not_found' THEN 404 ELSE 409 END,
+ 'code', terminal_outcome #> '{problem,code}', 'detail', terminal_outcome #> '{problem,detail}'))
+AND terminal_outcome #>> '{problem,code}' IN
+    ('finance_category_not_found', 'finance_category_archived')
+, FALSE))
+"""
+)
+
+
 class FinanceSubmission(Base):
     """Exactly unfinished or terminal, unique across one user's commands."""
 

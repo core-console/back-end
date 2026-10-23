@@ -14,6 +14,7 @@ from core_console.modules.finance.advance_models import (
 from core_console.modules.finance.settlement_models import (
     FinanceCreditOrigin,
     FinanceSettlementAllocation,
+    FinanceSettlementIncome,
 )
 from core_console.problems import ApplicationProblem
 
@@ -52,6 +53,14 @@ async def require_unmanaged_accounts(session: AsyncSession, account_ids: Collect
 
 
 async def require_unlinked_transaction(session: AsyncSession, transaction_id: UUID) -> None:
+    if (
+        await session.scalar(
+            select(FinanceSettlementIncome.settlement_id).where(
+                FinanceSettlementIncome.transaction_id == transaction_id
+            )
+        )
+    ) is not None:
+        raise linked_record_problem()
     if (
         await session.scalar(
             select(FinanceCreditOrigin.settlement_id).where(

@@ -974,8 +974,8 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     commands = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
         "application/json"
     ]["schema"]["anyOf"]
-    assert len(commands) == 2
-    command, credit_command = commands
+    assert len(commands) == 3
+    command, credit_command, income_command = commands
     assert command["additionalProperties"] is False
     assert set(command["properties"]) == {
         "participantId",
@@ -994,4 +994,25 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     assert "previewToken" in credit_command["required"]
     assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2"]
+    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3"]
+    assert income_command["additionalProperties"] is False
+    assert set(income_command["properties"]) == set(command["properties"]) | {
+        "excessDisposition",
+        "categoryAllocations",
+    }
+    assert income_command["properties"]["excessDisposition"]["const"] == "acceptIncome"
+    assert {"previewToken", "excessDisposition", "categoryAllocations"} <= set(
+        income_command["required"]
+    )
+    allocation = income_command["properties"]["categoryAllocations"]
+    assert allocation["minItems"] == allocation["maxItems"] == 1
+    assert allocation["items"]["additionalProperties"] is False
+    preview = schema["components"]["schemas"]["IncomeSettlementPreview"]
+    assert {
+        "acceptedSurplus",
+        "categoryAllocations",
+        "availableCreditBefore",
+        "availableCreditAfter",
+    } <= set(preview["required"])
+    detail = schema["components"]["schemas"]["IncomeSettlementResponse"]
+    assert {"acceptedSurplus", "incomeTransactionId"} <= set(detail["required"])

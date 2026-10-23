@@ -708,6 +708,7 @@ class SettlementConflictProblem(_Evidence):
     code: Literal[
         "finance_account_archived",
         "finance_settlement_preview_stale",
+        "finance_category_archived",
         "finance_linked_record_protected",
     ]
     detail: str
@@ -717,7 +718,9 @@ class SettlementMissingProblem(_Evidence):
     type: str
     title: str
     status: Literal[404]
-    code: Literal["finance_account_not_found", "finance_participant_not_found"]
+    code: Literal[
+        "finance_account_not_found", "finance_participant_not_found", "finance_category_not_found"
+    ]
     detail: str
 
 
@@ -730,7 +733,7 @@ class SettlementRejectedOutcome(_Evidence):
 
 
 class _SettlementReceipt(_ReceiptMetadata):
-    command_version: Literal["1", "2"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2", "3"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlement"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
@@ -750,13 +753,13 @@ class SettlementSubmissionReceipt(_SettlementReceipt):
 
 
 class SettlementSubmissionUnfinished(_UnfinishedMetadata):
-    command_version: Literal["1", "2"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2", "3"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlement"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
 
 class SettlementCommandValidationRejection(_CommandValidationRejectionMetadata):
-    command_version: Literal["1", "2"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2", "3"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlement"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
@@ -776,9 +779,11 @@ class SettlementTerminalProblem(ProblemDetails):
         "validation_error",
         "finance_account_archived",
         "finance_settlement_preview_stale",
+        "finance_category_archived",
         "finance_linked_record_protected",
         "finance_account_not_found",
         "finance_participant_not_found",
+        "finance_category_not_found",
     ]
     submissionReceipt: SettlementRejectedReceipt
 

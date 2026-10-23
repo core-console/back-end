@@ -9,7 +9,11 @@ from pydantic import Field, model_validator
 
 from core_console.modules.finance.advance_schemas import _Projection
 from core_console.modules.finance.schemas import MoneyResponse
-from core_console.modules.finance.submission_commands import OpeningBalanceV1, _TransactionCommandV1
+from core_console.modules.finance.submission_commands import (
+    AllocationV1,
+    OpeningBalanceV1,
+    _TransactionCommandV1,
+)
 
 
 class SettlementDraftV1(_TransactionCommandV1):
@@ -54,6 +58,42 @@ class SettlementCommandV2(SettlementDraftV2):
         return {**super().canonical(), "previewToken": self.preview_token}
 
 
+class SettlementDraftV3(SettlementDraftV1):
+    excess_disposition: Literal["acceptIncome"] = Field(alias="excessDisposition")
+    category_allocations: list[AllocationV1] = Field(
+        alias="categoryAllocations", min_length=1, max_length=1
+    )
+
+    @model_validator(mode="after")
+    def positive_income_classification(self) -> Self:
+        amount = self.category_allocations[0].amount
+        if amount.currency != self.amount.currency or not (
+            0 < Decimal(amount.amount) <= Decimal(self.amount.amount)
+        ):
+            raise ValueError("Income classification must be positive and use the receipt currency.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        allocation = self.category_allocations[0]
+        return {
+            **super().canonical(),
+            "excessDisposition": self.excess_disposition,
+            "categoryAllocations": [
+                {
+                    "amount": allocation.amount.canonical(),
+                    "categoryId": str(allocation.category_id) if allocation.category_id else None,
+                }
+            ],
+        }
+
+
+class SettlementCommandV3(SettlementDraftV3):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
 class CashAllocationResponse(_Projection):
     position: int
     obligation_id: UUID = Field(alias="obligationId")
@@ -75,6 +115,13 @@ class SettlementPreview(_Projection):
 
 class CreditSettlementPreview(SettlementPreview):
     retained_credit: MoneyResponse = Field(alias="retainedCredit")
+    available_credit_before: MoneyResponse = Field(alias="availableCreditBefore")
+    available_credit_after: MoneyResponse = Field(alias="availableCreditAfter")
+
+
+class IncomeSettlementPreview(SettlementPreview):
+    accepted_surplus: MoneyResponse = Field(alias="acceptedSurplus")
+    category_allocations: list[AllocationV1] = Field(alias="categoryAllocations")
     available_credit_before: MoneyResponse = Field(alias="availableCreditBefore")
     available_credit_after: MoneyResponse = Field(alias="availableCreditAfter")
 
@@ -109,6 +156,11 @@ class SettlementResponse(_Projection):
 
 class CreditSettlementResponse(SettlementResponse):
     credit_origin: CreditOriginResponse = Field(alias="creditOrigin")
+
+
+class IncomeSettlementResponse(SettlementResponse):
+    accepted_surplus: MoneyResponse = Field(alias="acceptedSurplus")
+    income_transaction_id: UUID = Field(alias="incomeTransactionId")
 
 
 class ParticipantPositionResponse(_Projection):
