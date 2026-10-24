@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,6 +27,11 @@ from core_console.database.base import Base
 class FinanceSettlement(Base):
     __tablename__ = "finance_settlements"
     __table_args__ = (
+        CheckConstraint(
+            "selected_obligation_ids IS NULL OR (cardinality(selected_obligation_ids) > 0 "
+            "AND array_position(selected_obligation_ids, NULL) IS NULL)",
+            name="ck_finance_settlements_selection",
+        ),
         UniqueConstraint("id", "ledger_id", name="uq_finance_settlements_id_ledger"),
         UniqueConstraint("confirmation_order", name="uq_finance_settlements_order"),
         ForeignKeyConstraint(["ledger_id"], ["finance_ledgers.id"]),
@@ -63,6 +69,9 @@ class FinanceSettlement(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric())
     currency: Mapped[str] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    selected_obligation_ids: Mapped[list[UUID] | None] = mapped_column(
+        ARRAY(PostgreSQLUUID(as_uuid=True))
+    )
     confirmation_order: Mapped[int] = mapped_column(BigInteger, Identity())
     confirmed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("clock_timestamp()")

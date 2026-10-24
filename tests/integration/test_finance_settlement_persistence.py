@@ -160,7 +160,7 @@ async def test_downgrade_preserves_every_retained_settlement_state(
     async with postgres_engine.connect() as connection:
         assert (
             await connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261023_01"
+            == "20261024_01"
         )
     assert (await client.get(f"/api/finance/submissions/{key}", headers=headers)).json() == before
 

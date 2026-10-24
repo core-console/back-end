@@ -974,8 +974,16 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     commands = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
         "application/json"
     ]["schema"]["anyOf"]
-    assert len(commands) == 3
-    command, credit_command, income_command = commands
+    commands = [*commands[:3], *commands[3]["anyOf"]]
+    assert len(commands) == 6
+    command, credit_command, income_command = commands[:3]
+    for original, selected in zip(commands[:3], commands[3:], strict=True):
+        assert selected["additionalProperties"] is False
+        assert set(selected["properties"]) == set(original["properties"]) | {
+            "selectedObligationIds"
+        }
+        assert "selectedObligationIds" in selected["required"]
+        assert selected["properties"]["selectedObligationIds"]["minItems"] == 1
     assert command["additionalProperties"] is False
     assert set(command["properties"]) == {
         "participantId",
@@ -994,7 +1002,7 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     assert "previewToken" in credit_command["required"]
     assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3"]
+    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4"]
     assert income_command["additionalProperties"] is False
     assert set(income_command["properties"]) == set(command["properties"]) | {
         "excessDisposition",

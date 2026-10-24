@@ -389,6 +389,13 @@ AND terminal_outcome #>> '{problem,code}' IN
 )
 
 
+COMMAND_CHECK = (
+    f"({COMMAND_CHECK}) OR "
+    "(command_version = '4' AND finance_settlement_v4_command_valid(canonical_command))"
+)
+OUTCOME_CHECK = OUTCOME_CHECK.replace("command_version = '3'", "command_version IN ('3', '4')")
+
+
 class FinanceSubmission(Base):
     """Exactly unfinished or terminal, unique across one user's commands."""
 

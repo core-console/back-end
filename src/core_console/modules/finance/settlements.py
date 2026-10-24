@@ -43,14 +43,21 @@ from core_console.modules.finance.settlement_schemas import (
     IncomeSettlementPreview,
     IncomeSettlementResponse,
     ParticipantPositionResponse,
+    SelectedCreditSettlementResponse,
+    SelectedIncomeSettlementResponse,
+    SelectedScope,
+    SelectedSettlementResponse,
     SettlementCommandV1,
     SettlementCommandV2,
     SettlementCommandV3,
+    SettlementCommandV4,
     SettlementDraftV1,
     SettlementDraftV2,
     SettlementDraftV3,
+    SettlementDraftV4,
     SettlementPreview,
     SettlementResponse,
+    SettlementSource,
 )
 
 
@@ -59,7 +66,7 @@ async def preview_settlement(
     *,
     owner_id: UUID,
     ledger_id: UUID,
-    draft: SettlementDraftV1 | SettlementDraftV2 | SettlementDraftV3,
+    draft: SettlementDraftV1 | SettlementDraftV2 | SettlementDraftV3 | SettlementDraftV4,
     lock: bool = False,
 ) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview:
     await require_advance_ledger(session, owner_id, ledger_id)
@@ -119,6 +126,13 @@ async def preview_settlement(
         for row in obligations
         if row.source_date <= draft.transaction_date and row.principal.currency == account.currency
     ]
+    scope_invalid = False
+    if isinstance(draft, SelectedScope):
+        selected = set(draft.selected_obligation_ids)
+        scope_invalid = not selected.issubset(
+            {row.id for row in eligible if Decimal(row.remaining.amount) > 0}
+        )
+        eligible = [row for row in eligible if row.id in selected]
     total = Decimal(0)
     left = Decimal(draft.amount.amount)
     allocations: list[CashAllocationResponse] = []
@@ -140,11 +154,15 @@ async def preview_settlement(
             left = subtract(left, paid)
     state = {
         "ledgerId": str(ledger_id),
-        "intent": SettlementDraftV3.canonical(draft)
-        if isinstance(draft, SettlementDraftV3)
-        else SettlementDraftV2.canonical(draft)
-        if isinstance(draft, SettlementDraftV2)
-        else SettlementDraftV1.canonical(draft),
+        "intent": {key: value for key, value in draft.canonical().items() if key != "previewToken"}
+        if isinstance(draft, SelectedScope)
+        else (
+            SettlementDraftV3.canonical(draft)
+            if isinstance(draft, SettlementDraftV3)
+            else SettlementDraftV2.canonical(draft)
+            if isinstance(draft, SettlementDraftV2)
+            else SettlementDraftV1.canonical(draft)
+        ),
         "receiving": [
             str(account.updated_at),
             account.name,
@@ -175,15 +193,17 @@ async def preview_settlement(
                 raise _problem(404, "finance_category_not_found", "Income Category was not found.")
             state["incomeCategory"] = [str(category.updated_at), category.name, category.status]
     token = sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    if (
-        lock
-        and isinstance(draft, (SettlementCommandV1, SettlementCommandV2, SettlementCommandV3))
-        and token != draft.preview_token
-    ):
+    if lock and hasattr(draft, "preview_token") and token != draft.preview_token:
         raise _problem(
             409,
             "finance_settlement_preview_stale",
             "Repayment state changed. Refresh the preview and confirm again.",
+        )
+    if scope_invalid:
+        raise _problem(
+            422,
+            "validation_error",
+            "Select outstanding eligible Obligations in this Participant and currency only.",
         )
     if isinstance(draft, SettlementDraftV3):
         if category is not None and category.status != "active":
@@ -240,7 +260,7 @@ async def execute_create_settlement(
     *,
     owner_id: UUID,
     ledger_id: UUID,
-    command: SettlementCommandV1 | SettlementCommandV2 | SettlementCommandV3,
+    command: SettlementCommandV1 | SettlementCommandV2 | SettlementCommandV3 | SettlementCommandV4,
 ) -> UUID:
     preview = await preview_settlement(
         session, owner_id=owner_id, ledger_id=ledger_id, draft=command, lock=True
@@ -253,6 +273,9 @@ async def execute_create_settlement(
         amount=Decimal(command.amount.amount),
         currency=command.amount.currency,
         note=command.note,
+        selected_obligation_ids=sorted(command.selected_obligation_ids)
+        if isinstance(command, SelectedScope)
+        else None,
     )
     session.add(settlement)
     await session.flush()
@@ -306,7 +329,7 @@ async def execute_create_settlement(
         await _record_credit(
             session, settlement, Decimal(preview.retained_credit.amount), receiving
         )
-    if isinstance(command, SettlementCommandV3) and isinstance(preview, IncomeSettlementPreview):
+    if isinstance(command, SettlementDraftV3) and isinstance(preview, IncomeSettlementPreview):
         await _record_income(session, settlement, preview, command, receiving)
     await session.flush()
     await inspect_settlement(
@@ -317,7 +340,7 @@ async def execute_create_settlement(
 
 async def inspect_settlement(
     session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, settlement_id: UUID
-) -> SettlementResponse | CreditSettlementResponse | IncomeSettlementResponse:
+) -> SettlementSource:
     await require_advance_ledger(session, owner_id, ledger_id)
     settlement = await session.scalar(
         select(FinanceSettlement).where(
@@ -360,10 +383,16 @@ async def inspect_settlement(
             for allocation, obligation, advance in rows
         ],
     )
+    scope = (
+        {"selectedObligationIds": settlement.selected_obligation_ids}
+        if settlement.selected_obligation_ids
+        else {}
+    )
     income = await session.get(FinanceSettlementIncome, settlement.id)
     if income is not None:
-        return IncomeSettlementResponse(
+        return (SelectedIncomeSettlementResponse if scope else IncomeSettlementResponse)(
             **{
+                **scope,
                 **result.model_dump(by_alias=True),
                 "transactionIds": [*result.transaction_ids, income.transaction_id],
             },
@@ -372,19 +401,24 @@ async def inspect_settlement(
         )
     origin = await session.get(FinanceCreditOrigin, settlement.id)
     if origin is not None:
-        return CreditSettlementResponse(
+        return (SelectedCreditSettlementResponse if scope else CreditSettlementResponse)(
             **{
+                **scope,
                 **result.model_dump(by_alias=True),
                 "transactionIds": [*result.transaction_ids, origin.transaction_id],
             },
             creditOrigin=_origin_response(origin, settlement),
         )
-    return result
+    return (
+        SelectedSettlementResponse.model_validate({**result.model_dump(by_alias=True), **scope})
+        if scope
+        else result
+    )
 
 
 async def list_participant_settlements(
     session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, participant_id: UUID
-) -> list[SettlementResponse | CreditSettlementResponse | IncomeSettlementResponse]:
+) -> list[SettlementSource]:
     # Reuse the owner/Participant boundary, including archived identities.
     await list_participant_obligations(
         session, owner_id=owner_id, ledger_id=ledger_id, participant_id=participant_id
@@ -545,7 +579,7 @@ async def _record_income(
     session: AsyncSession,
     settlement: FinanceSettlement,
     preview: IncomeSettlementPreview,
-    command: SettlementCommandV3,
+    command: SettlementDraftV3,
     receiving: FinanceAccount,
 ) -> None:
     amount = Decimal(preview.accepted_surplus.amount)

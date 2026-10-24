@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from core_console.modules.finance.advance_schemas import _Projection
 from core_console.modules.finance.schemas import MoneyResponse
@@ -94,6 +94,71 @@ class SettlementCommandV3(SettlementDraftV3):
         return {**super().canonical(), "previewToken": self.preview_token}
 
 
+class SelectedScope(BaseModel):
+    selected_obligation_ids: list[UUID] = Field(alias="selectedObligationIds", min_length=1)
+
+    @model_validator(mode="after")
+    def unique_selection(self) -> Self:
+        if len(set(self.selected_obligation_ids)) != len(self.selected_obligation_ids):
+            raise ValueError("Select each Obligation only once.")
+        return self
+
+
+class SelectedSettlementDraftV4(SettlementDraftV1, SelectedScope):
+    def canonical(self) -> dict[str, object]:
+        return {
+            **super().canonical(),
+            "selectedObligationIds": sorted(str(id) for id in self.selected_obligation_ids),
+        }
+
+
+class SelectedCreditSettlementDraftV4(SettlementDraftV2, SelectedScope):
+    def canonical(self) -> dict[str, object]:
+        return {
+            **super().canonical(),
+            "selectedObligationIds": sorted(str(id) for id in self.selected_obligation_ids),
+        }
+
+
+class SelectedIncomeSettlementDraftV4(SettlementDraftV3, SelectedScope):
+    def canonical(self) -> dict[str, object]:
+        return {
+            **super().canonical(),
+            "selectedObligationIds": sorted(str(id) for id in self.selected_obligation_ids),
+        }
+
+
+class SelectedSettlementCommandV4(SelectedSettlementDraftV4):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
+class SelectedCreditSettlementCommandV4(SelectedCreditSettlementDraftV4):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
+class SelectedIncomeSettlementCommandV4(SelectedIncomeSettlementDraftV4):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
+type SettlementDraftV4 = (
+    SelectedSettlementDraftV4 | SelectedCreditSettlementDraftV4 | SelectedIncomeSettlementDraftV4
+)
+type SettlementCommandV4 = (
+    SelectedSettlementCommandV4
+    | SelectedCreditSettlementCommandV4
+    | SelectedIncomeSettlementCommandV4
+)
+
+
 class CashAllocationResponse(_Projection):
     position: int
     obligation_id: UUID = Field(alias="obligationId")
@@ -168,3 +233,25 @@ class ParticipantPositionResponse(_Projection):
     outstanding_receivables: MoneyResponse = Field(alias="outstandingReceivables")
     available_credits: MoneyResponse = Field(alias="availableCredits")
     net_exposure: MoneyResponse = Field(alias="netExposure")
+
+
+class SelectedSettlementResponse(SettlementResponse, SelectedScope):
+    pass
+
+
+class SelectedCreditSettlementResponse(CreditSettlementResponse, SelectedScope):
+    pass
+
+
+class SelectedIncomeSettlementResponse(IncomeSettlementResponse, SelectedScope):
+    pass
+
+
+type SettlementSource = (
+    SelectedIncomeSettlementResponse
+    | SelectedCreditSettlementResponse
+    | SelectedSettlementResponse
+    | IncomeSettlementResponse
+    | CreditSettlementResponse
+    | SettlementResponse
+)

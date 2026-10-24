@@ -5218,6 +5218,299 @@
         "title": "ReplaceInternalTransferTransactionRequest",
         "type": "object"
       },
+      "SelectedCreditSettlementResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CashAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "creditOrigin": {
+            "$ref": "#/components/schemas/CreditOriginResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "receivingAccountId": {
+            "format": "uuid",
+            "title": "Receivingaccountid",
+            "type": "string"
+          },
+          "selectedObligationIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Selectedobligationids",
+            "type": "array"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transactionids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selectedObligationIds",
+          "id",
+          "ledgerId",
+          "participantId",
+          "receivingAccountId",
+          "transactionDate",
+          "amount",
+          "note",
+          "confirmedAt",
+          "confirmationOrder",
+          "transactionIds",
+          "allocations",
+          "creditOrigin"
+        ],
+        "title": "SelectedCreditSettlementResponse",
+        "type": "object"
+      },
+      "SelectedIncomeSettlementResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptedSurplus": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CashAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "incomeTransactionId": {
+            "format": "uuid",
+            "title": "Incometransactionid",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "receivingAccountId": {
+            "format": "uuid",
+            "title": "Receivingaccountid",
+            "type": "string"
+          },
+          "selectedObligationIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Selectedobligationids",
+            "type": "array"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transactionids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selectedObligationIds",
+          "id",
+          "ledgerId",
+          "participantId",
+          "receivingAccountId",
+          "transactionDate",
+          "amount",
+          "note",
+          "confirmedAt",
+          "confirmationOrder",
+          "transactionIds",
+          "allocations",
+          "acceptedSurplus",
+          "incomeTransactionId"
+        ],
+        "title": "SelectedIncomeSettlementResponse",
+        "type": "object"
+      },
+      "SelectedSettlementResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CashAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "receivingAccountId": {
+            "format": "uuid",
+            "title": "Receivingaccountid",
+            "type": "string"
+          },
+          "selectedObligationIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Selectedobligationids",
+            "type": "array"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transactionids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selectedObligationIds",
+          "id",
+          "ledgerId",
+          "participantId",
+          "receivingAccountId",
+          "transactionDate",
+          "amount",
+          "note",
+          "confirmedAt",
+          "confirmationOrder",
+          "transactionIds",
+          "allocations"
+        ],
+        "title": "SelectedSettlementResponse",
+        "type": "object"
+      },
       "SettlementCommandValidationRejection": {
         "additionalProperties": false,
         "properties": {
@@ -5232,7 +5525,8 @@
             "enum": [
               "1",
               "2",
-              "3"
+              "3",
+              "4"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -5347,7 +5641,8 @@
             "enum": [
               "1",
               "2",
-              "3"
+              "3",
+              "4"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -5597,7 +5892,8 @@
             "enum": [
               "1",
               "2",
-              "3"
+              "3",
+              "4"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -5721,6 +6017,28 @@
         "title": "SettlementResponse",
         "type": "object"
       },
+      "SettlementSource": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SelectedIncomeSettlementResponse"
+          },
+          {
+            "$ref": "#/components/schemas/SelectedCreditSettlementResponse"
+          },
+          {
+            "$ref": "#/components/schemas/SelectedSettlementResponse"
+          },
+          {
+            "$ref": "#/components/schemas/IncomeSettlementResponse"
+          },
+          {
+            "$ref": "#/components/schemas/CreditSettlementResponse"
+          },
+          {
+            "$ref": "#/components/schemas/SettlementResponse"
+          }
+        ]
+      },
       "SettlementSubmissionReceipt": {
         "additionalProperties": false,
         "properties": {
@@ -5733,7 +6051,8 @@
             "enum": [
               "1",
               "2",
-              "3"
+              "3",
+              "4"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -5801,7 +6120,8 @@
             "enum": [
               "1",
               "2",
-              "3"
+              "3",
+              "4"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -10926,17 +11246,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/IncomeSettlementResponse"
-                      },
-                      {
-                        "$ref": "#/components/schemas/CreditSettlementResponse"
-                      },
-                      {
-                        "$ref": "#/components/schemas/SettlementResponse"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/SettlementSource"
                   },
                   "title": "Response Listfinanceparticipantsettlements",
                   "type": "array"
@@ -11005,7 +11315,7 @@
     },
     "/finance/ledgers/{ledgerId}/settlements": {
       "post": {
-        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation equal to the positive actual surplus, creating linked Income without credit. No selected subset, forgiveness or credit use is accepted. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
+        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation equal to the positive actual surplus, creating linked Income without credit. Version 4 requires selectedObligationIds and allocates only within that eligible outstanding subset, with the same explicit excess choices. No forgiveness or credit use is accepted. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
         "operationId": "createFinanceSettlement",
         "parameters": [
           {
@@ -11328,6 +11638,319 @@
                     ],
                     "title": "SettlementCommandV3",
                     "type": "object"
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "amount": {
+                                "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                "title": "Amount",
+                                "type": "string"
+                              },
+                              "currency": {
+                                "enum": [
+                                  "CNY",
+                                  "JPY",
+                                  "USD"
+                                ],
+                                "title": "Currency",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "amount",
+                              "currency"
+                            ],
+                            "title": "OpeningBalanceV1",
+                            "type": "object"
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "maxLength": 500,
+                            "title": "Note"
+                          },
+                          "participantId": {
+                            "format": "uuid",
+                            "title": "Participantid",
+                            "type": "string"
+                          },
+                          "previewToken": {
+                            "pattern": "^[0-9a-f]{64}$",
+                            "title": "Previewtoken",
+                            "type": "string"
+                          },
+                          "receivingAccountId": {
+                            "format": "uuid",
+                            "title": "Receivingaccountid",
+                            "type": "string"
+                          },
+                          "selectedObligationIds": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "title": "Selectedobligationids",
+                            "type": "array"
+                          },
+                          "transactionDate": {
+                            "format": "date",
+                            "title": "Transactiondate",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "selectedObligationIds",
+                          "transactionDate",
+                          "participantId",
+                          "receivingAccountId",
+                          "amount",
+                          "previewToken"
+                        ],
+                        "title": "SelectedSettlementCommandV4",
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "amount": {
+                                "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                "title": "Amount",
+                                "type": "string"
+                              },
+                              "currency": {
+                                "enum": [
+                                  "CNY",
+                                  "JPY",
+                                  "USD"
+                                ],
+                                "title": "Currency",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "amount",
+                              "currency"
+                            ],
+                            "title": "OpeningBalanceV1",
+                            "type": "object"
+                          },
+                          "excessDisposition": {
+                            "const": "retainCredit",
+                            "title": "Excessdisposition",
+                            "type": "string"
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "maxLength": 500,
+                            "title": "Note"
+                          },
+                          "participantId": {
+                            "format": "uuid",
+                            "title": "Participantid",
+                            "type": "string"
+                          },
+                          "previewToken": {
+                            "pattern": "^[0-9a-f]{64}$",
+                            "title": "Previewtoken",
+                            "type": "string"
+                          },
+                          "receivingAccountId": {
+                            "format": "uuid",
+                            "title": "Receivingaccountid",
+                            "type": "string"
+                          },
+                          "selectedObligationIds": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "title": "Selectedobligationids",
+                            "type": "array"
+                          },
+                          "transactionDate": {
+                            "format": "date",
+                            "title": "Transactiondate",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "selectedObligationIds",
+                          "transactionDate",
+                          "participantId",
+                          "receivingAccountId",
+                          "amount",
+                          "excessDisposition",
+                          "previewToken"
+                        ],
+                        "title": "SelectedCreditSettlementCommandV4",
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "amount": {
+                                "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                "title": "Amount",
+                                "type": "string"
+                              },
+                              "currency": {
+                                "enum": [
+                                  "CNY",
+                                  "JPY",
+                                  "USD"
+                                ],
+                                "title": "Currency",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "amount",
+                              "currency"
+                            ],
+                            "title": "OpeningBalanceV1",
+                            "type": "object"
+                          },
+                          "categoryAllocations": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "amount": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "amount": {
+                                      "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                      "title": "Amount",
+                                      "type": "string"
+                                    },
+                                    "currency": {
+                                      "enum": [
+                                        "CNY",
+                                        "JPY",
+                                        "USD"
+                                      ],
+                                      "title": "Currency",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "amount",
+                                    "currency"
+                                  ],
+                                  "title": "OpeningBalanceV1",
+                                  "type": "object"
+                                },
+                                "categoryId": {
+                                  "anyOf": [
+                                    {
+                                      "format": "uuid",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Categoryid"
+                                }
+                              },
+                              "required": [
+                                "amount"
+                              ],
+                              "title": "AllocationV1",
+                              "type": "object"
+                            },
+                            "maxItems": 1,
+                            "minItems": 1,
+                            "title": "Categoryallocations",
+                            "type": "array"
+                          },
+                          "excessDisposition": {
+                            "const": "acceptIncome",
+                            "title": "Excessdisposition",
+                            "type": "string"
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "maxLength": 500,
+                            "title": "Note"
+                          },
+                          "participantId": {
+                            "format": "uuid",
+                            "title": "Participantid",
+                            "type": "string"
+                          },
+                          "previewToken": {
+                            "pattern": "^[0-9a-f]{64}$",
+                            "title": "Previewtoken",
+                            "type": "string"
+                          },
+                          "receivingAccountId": {
+                            "format": "uuid",
+                            "title": "Receivingaccountid",
+                            "type": "string"
+                          },
+                          "selectedObligationIds": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "title": "Selectedobligationids",
+                            "type": "array"
+                          },
+                          "transactionDate": {
+                            "format": "date",
+                            "title": "Transactiondate",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "selectedObligationIds",
+                          "transactionDate",
+                          "participantId",
+                          "receivingAccountId",
+                          "amount",
+                          "excessDisposition",
+                          "categoryAllocations",
+                          "previewToken"
+                        ],
+                        "title": "SelectedIncomeSettlementCommandV4",
+                        "type": "object"
+                      }
+                    ]
                   }
                 ]
               }
@@ -11704,6 +12327,301 @@
                     ],
                     "title": "SettlementDraftV3",
                     "type": "object"
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "amount": {
+                                "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                "title": "Amount",
+                                "type": "string"
+                              },
+                              "currency": {
+                                "enum": [
+                                  "CNY",
+                                  "JPY",
+                                  "USD"
+                                ],
+                                "title": "Currency",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "amount",
+                              "currency"
+                            ],
+                            "title": "OpeningBalanceV1",
+                            "type": "object"
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "maxLength": 500,
+                            "title": "Note"
+                          },
+                          "participantId": {
+                            "format": "uuid",
+                            "title": "Participantid",
+                            "type": "string"
+                          },
+                          "receivingAccountId": {
+                            "format": "uuid",
+                            "title": "Receivingaccountid",
+                            "type": "string"
+                          },
+                          "selectedObligationIds": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "title": "Selectedobligationids",
+                            "type": "array"
+                          },
+                          "transactionDate": {
+                            "format": "date",
+                            "title": "Transactiondate",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "selectedObligationIds",
+                          "transactionDate",
+                          "participantId",
+                          "receivingAccountId",
+                          "amount"
+                        ],
+                        "title": "SelectedSettlementDraftV4",
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "amount": {
+                                "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                "title": "Amount",
+                                "type": "string"
+                              },
+                              "currency": {
+                                "enum": [
+                                  "CNY",
+                                  "JPY",
+                                  "USD"
+                                ],
+                                "title": "Currency",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "amount",
+                              "currency"
+                            ],
+                            "title": "OpeningBalanceV1",
+                            "type": "object"
+                          },
+                          "excessDisposition": {
+                            "const": "retainCredit",
+                            "title": "Excessdisposition",
+                            "type": "string"
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "maxLength": 500,
+                            "title": "Note"
+                          },
+                          "participantId": {
+                            "format": "uuid",
+                            "title": "Participantid",
+                            "type": "string"
+                          },
+                          "receivingAccountId": {
+                            "format": "uuid",
+                            "title": "Receivingaccountid",
+                            "type": "string"
+                          },
+                          "selectedObligationIds": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "title": "Selectedobligationids",
+                            "type": "array"
+                          },
+                          "transactionDate": {
+                            "format": "date",
+                            "title": "Transactiondate",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "selectedObligationIds",
+                          "transactionDate",
+                          "participantId",
+                          "receivingAccountId",
+                          "amount",
+                          "excessDisposition"
+                        ],
+                        "title": "SelectedCreditSettlementDraftV4",
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "amount": {
+                                "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                "title": "Amount",
+                                "type": "string"
+                              },
+                              "currency": {
+                                "enum": [
+                                  "CNY",
+                                  "JPY",
+                                  "USD"
+                                ],
+                                "title": "Currency",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "amount",
+                              "currency"
+                            ],
+                            "title": "OpeningBalanceV1",
+                            "type": "object"
+                          },
+                          "categoryAllocations": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "amount": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "amount": {
+                                      "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                                      "title": "Amount",
+                                      "type": "string"
+                                    },
+                                    "currency": {
+                                      "enum": [
+                                        "CNY",
+                                        "JPY",
+                                        "USD"
+                                      ],
+                                      "title": "Currency",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "amount",
+                                    "currency"
+                                  ],
+                                  "title": "OpeningBalanceV1",
+                                  "type": "object"
+                                },
+                                "categoryId": {
+                                  "anyOf": [
+                                    {
+                                      "format": "uuid",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "title": "Categoryid"
+                                }
+                              },
+                              "required": [
+                                "amount"
+                              ],
+                              "title": "AllocationV1",
+                              "type": "object"
+                            },
+                            "maxItems": 1,
+                            "minItems": 1,
+                            "title": "Categoryallocations",
+                            "type": "array"
+                          },
+                          "excessDisposition": {
+                            "const": "acceptIncome",
+                            "title": "Excessdisposition",
+                            "type": "string"
+                          },
+                          "note": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "maxLength": 500,
+                            "title": "Note"
+                          },
+                          "participantId": {
+                            "format": "uuid",
+                            "title": "Participantid",
+                            "type": "string"
+                          },
+                          "receivingAccountId": {
+                            "format": "uuid",
+                            "title": "Receivingaccountid",
+                            "type": "string"
+                          },
+                          "selectedObligationIds": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "title": "Selectedobligationids",
+                            "type": "array"
+                          },
+                          "transactionDate": {
+                            "format": "date",
+                            "title": "Transactiondate",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "selectedObligationIds",
+                          "transactionDate",
+                          "participantId",
+                          "receivingAccountId",
+                          "amount",
+                          "excessDisposition",
+                          "categoryAllocations"
+                        ],
+                        "title": "SelectedIncomeSettlementDraftV4",
+                        "type": "object"
+                      }
+                    ]
                   }
                 ]
               }
@@ -11831,18 +12749,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/IncomeSettlementResponse"
-                    },
-                    {
-                      "$ref": "#/components/schemas/CreditSettlementResponse"
-                    },
-                    {
-                      "$ref": "#/components/schemas/SettlementResponse"
-                    }
-                  ],
-                  "title": "Response Getfinancesettlement"
+                  "$ref": "#/components/schemas/SettlementSource"
                 }
               }
             },
