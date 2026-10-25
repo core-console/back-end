@@ -16,7 +16,11 @@ from core_console.modules.finance.advances import (
     list_participant_obligations,
     require_advance_ledger,
 )
-from core_console.modules.finance.forgiveness import execute_create_forgiveness, preview_forgiveness
+from core_console.modules.finance.forgiveness import (
+    execute_create_forgiveness,
+    preview_forgiveness,
+    record_forgiveness_allocation,
+)
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -38,6 +42,11 @@ from core_console.modules.finance.settlement_models import (
 )
 from core_console.modules.finance.settlement_schemas import (
     CashAllocationResponse,
+    CombinedCashAllocationResponse,
+    CombinedSettlementCommandV6,
+    CombinedSettlementDraftV6,
+    CombinedSettlementPreview,
+    CombinedSettlementResponse,
     CreditOriginResponse,
     CreditSettlementPreview,
     CreditSettlementResponse,
@@ -76,9 +85,16 @@ async def preview_settlement(
     | SettlementDraftV2
     | SettlementDraftV3
     | SettlementDraftV4
-    | ForgivenessDraftV5,
+    | ForgivenessDraftV5
+    | CombinedSettlementDraftV6,
     lock: bool = False,
-) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview | ForgivenessPreview:
+) -> (
+    SettlementPreview
+    | CreditSettlementPreview
+    | IncomeSettlementPreview
+    | ForgivenessPreview
+    | CombinedSettlementPreview
+):
     if isinstance(draft, ForgivenessDraftV5):
         return await preview_forgiveness(
             session, owner_id=owner_id, ledger_id=ledger_id, draft=draft, lock=lock
@@ -249,6 +265,49 @@ async def preview_settlement(
         ),
         allocations=allocations,
     )
+    if isinstance(draft, CombinedSettlementDraftV6):
+        combined_allocations: list[
+            CombinedCashAllocationResponse | ForgivenessAllocationResponse
+        ] = [
+            CombinedCashAllocationResponse(**allocation.model_dump(by_alias=True))
+            for allocation in allocations
+        ]
+        paid_by_obligation = {
+            row.obligation_id: Decimal(row.cash_paid.amount) for row in allocations
+        }
+        forgiveness_left = Decimal(draft.forgiveness_amount.amount)
+        for row in eligible:
+            remaining = subtract(
+                Decimal(row.remaining.amount), paid_by_obligation.get(row.id, Decimal(0))
+            )
+            forgiven = min(forgiveness_left, remaining)
+            if forgiven > 0:
+                combined_allocations.append(
+                    ForgivenessAllocationResponse(
+                        position=len(combined_allocations) + 1,
+                        obligationId=row.id,
+                        advanceId=row.advance_id,
+                        sourceDate=row.source_date,
+                        forgiven=_money(forgiven, account.currency),
+                        remainingAfter=_money(subtract(remaining, forgiven), account.currency),
+                    )
+                )
+                forgiveness_left = subtract(forgiveness_left, forgiven)
+        if forgiveness_left > 0:
+            raise _problem(
+                422, "validation_error", "Forgiveness exceeds selected capacity after cash."
+            )
+        amount = _money(Decimal(draft.forgiveness_amount.amount), account.currency)
+        return CombinedSettlementPreview(
+            **preview.model_dump(by_alias=True, exclude={"allocations", "outstanding_after"}),
+            allocations=combined_allocations,
+            forgivenessAmount=amount,
+            expense=amount,
+            outstandingAfter=_money(
+                subtract(Decimal(preview.outstanding_after.amount), Decimal(amount.amount)),
+                account.currency,
+            ),
+        )
     if isinstance(draft, SettlementDraftV3):
         return IncomeSettlementPreview(
             **preview.model_dump(by_alias=True),
@@ -278,7 +337,8 @@ async def execute_create_settlement(
     | SettlementCommandV2
     | SettlementCommandV3
     | SettlementCommandV4
-    | ForgivenessCommandV5,
+    | ForgivenessCommandV5
+    | CombinedSettlementCommandV6,
 ) -> UUID:
     if isinstance(command, ForgivenessCommandV5):
         return await execute_create_forgiveness(
@@ -296,6 +356,7 @@ async def execute_create_settlement(
         amount=Decimal(command.amount.amount),
         currency=command.amount.currency,
         note=command.note,
+        reason=command.reason if isinstance(command, CombinedSettlementCommandV6) else None,
         selected_obligation_ids=sorted(command.selected_obligation_ids)
         if isinstance(command, SelectedScope)
         else None,
@@ -305,6 +366,9 @@ async def execute_create_settlement(
     receiving = await session.get(FinanceAccount, command.receiving_account_id)
     assert receiving is not None
     for allocation in preview.allocations:
+        if isinstance(allocation, ForgivenessAllocationResponse):
+            await record_forgiveness_allocation(session, settlement, allocation)
+            continue
         obligation = await session.get(FinanceObligation, allocation.obligation_id)
         assert obligation is not None
         transaction_id = uuid4()
@@ -383,6 +447,52 @@ async def inspect_settlement(
             .order_by(FinanceSettlementAllocation.position)
         )
     ).all()
+    if settlement.reason is not None and settlement.receiving_account_id is not None:
+        assert settlement.selected_obligation_ids is not None
+        combined_allocations: list[
+            CombinedCashAllocationResponse | ForgivenessAllocationResponse
+        ] = []
+        forgiven = Decimal(0)
+        for allocation, obligation, advance in rows:
+            if allocation.kind == "forgiveness":
+                forgiven = subtract(forgiven, subtract(Decimal(0), allocation.forgiven))
+                combined_allocations.append(
+                    ForgivenessAllocationResponse(
+                        position=allocation.position,
+                        obligationId=obligation.id,
+                        advanceId=advance.id,
+                        sourceDate=advance.transaction_date,
+                        remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                        forgiven=_money(allocation.forgiven, settlement.currency),
+                    )
+                )
+            else:
+                combined_allocations.append(
+                    CombinedCashAllocationResponse(
+                        position=allocation.position,
+                        obligationId=obligation.id,
+                        advanceId=advance.id,
+                        sourceDate=advance.transaction_date,
+                        remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                        cashPaid=_money(allocation.cash_paid, settlement.currency),
+                    )
+                )
+        return CombinedSettlementResponse(
+            id=settlement.id,
+            ledgerId=ledger_id,
+            participantId=settlement.participant_id,
+            receivingAccountId=settlement.receiving_account_id,
+            transactionDate=settlement.transaction_date,
+            amount=_money(settlement.amount, settlement.currency),
+            forgivenessAmount=_money(forgiven, settlement.currency),
+            reason=settlement.reason,
+            note=settlement.note,
+            confirmedAt=settlement.confirmed_at,
+            confirmationOrder=settlement.confirmation_order,
+            selectedObligationIds=settlement.selected_obligation_ids,
+            transactionIds=[allocation.transaction_id for allocation, _, _ in rows],
+            allocations=combined_allocations,
+        )
     if settlement.reason is not None:
         assert settlement.selected_obligation_ids is not None
         return ForgivenessResponse(

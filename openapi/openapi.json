@@ -3177,6 +3177,230 @@
         "description": "Generic validation/version failure or correlated Q29 evidence.",
         "title": "CategoryValidationResponse"
       },
+      "CombinedCashAllocationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "advanceId": {
+            "format": "uuid",
+            "title": "Advanceid",
+            "type": "string"
+          },
+          "cashPaid": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "kind": {
+            "const": "cash",
+            "default": "cash",
+            "title": "Kind",
+            "type": "string"
+          },
+          "obligationId": {
+            "format": "uuid",
+            "title": "Obligationid",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "remainingAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "sourceDate": {
+            "format": "date",
+            "title": "Sourcedate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "position",
+          "obligationId",
+          "advanceId",
+          "sourceDate",
+          "cashPaid",
+          "remainingAfter"
+        ],
+        "title": "CombinedCashAllocationResponse",
+        "type": "object"
+      },
+      "CombinedSettlementPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CombinedCashAllocationResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/ForgivenessAllocationResponse"
+                }
+              ]
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "expense": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "forgivenessAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "kind": {
+            "const": "combined",
+            "default": "combined",
+            "title": "Kind",
+            "type": "string"
+          },
+          "outstandingAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "outstandingBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "previewToken": {
+            "title": "Previewtoken",
+            "type": "string"
+          },
+          "receivingBalance": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "receivingBalanceAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          }
+        },
+        "required": [
+          "previewToken",
+          "receivingBalance",
+          "receivingBalanceAfter",
+          "amount",
+          "forgivenessAmount",
+          "expense",
+          "outstandingBefore",
+          "outstandingAfter",
+          "allocations"
+        ],
+        "title": "CombinedSettlementPreview",
+        "type": "object"
+      },
+      "CombinedSettlementResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CombinedCashAllocationResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/ForgivenessAllocationResponse"
+                }
+              ]
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "forgivenessAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "combined",
+            "default": "combined",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "receivingAccountId": {
+            "format": "uuid",
+            "title": "Receivingaccountid",
+            "type": "string"
+          },
+          "selectedObligationIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Selectedobligationids",
+            "type": "array"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transactionids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selectedObligationIds",
+          "id",
+          "ledgerId",
+          "participantId",
+          "receivingAccountId",
+          "transactionDate",
+          "amount",
+          "forgivenessAmount",
+          "reason",
+          "note",
+          "confirmedAt",
+          "confirmationOrder",
+          "transactionIds",
+          "allocations"
+        ],
+        "title": "CombinedSettlementResponse",
+        "type": "object"
+      },
       "CorrectAccountSemanticsRequest": {
         "additionalProperties": false,
         "anyOf": [
@@ -5709,7 +5933,8 @@
               "2",
               "3",
               "4",
-              "5"
+              "5",
+              "6"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -5826,7 +6051,8 @@
               "2",
               "3",
               "4",
-              "5"
+              "5",
+              "6"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6078,7 +6304,8 @@
               "2",
               "3",
               "4",
-              "5"
+              "5",
+              "6"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6205,6 +6432,9 @@
       "SettlementSource": {
         "anyOf": [
           {
+            "$ref": "#/components/schemas/CombinedSettlementResponse"
+          },
+          {
             "$ref": "#/components/schemas/ForgivenessResponse"
           },
           {
@@ -6241,7 +6471,8 @@
               "2",
               "3",
               "4",
-              "5"
+              "5",
+              "6"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6311,7 +6542,8 @@
               "2",
               "3",
               "4",
-              "5"
+              "5",
+              "6"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -11505,7 +11737,7 @@
     },
     "/finance/ledgers/{ledgerId}/settlements": {
       "post": {
-        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation equal to the positive actual surplus, creating linked Income without credit. Version 4 requires selectedObligationIds and allocates only within that eligible outstanding subset, with the same explicit excess choices. Version 5 requires kind=forgiveness, selectedObligationIds, a positive amount and reason. It records non-cash Expense against selected receivables without a receiving Account. Combined cash/forgiveness and credit use are not supported. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
+        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation equal to the positive actual surplus, creating linked Income without credit. Version 4 requires selectedObligationIds and allocates only within that eligible outstanding subset, with the same explicit excess choices. Version 5 requires kind=forgiveness, selectedObligationIds, a positive amount and reason. It records non-cash Expense against selected receivables without a receiving Account. Version 6 requires kind=combined, selectedObligationIds, positive cash amount, positive same-currency forgivenessAmount and reason. Cash allocates first, then forgiveness within remaining selected capacity; one atomic outcome retains both. Credit use and Corrections are not supported. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
         "operationId": "createFinanceSettlement",
         "parameters": [
           {
@@ -12219,15 +12451,135 @@
                       }
                     },
                     "required": [
+                      "reason",
                       "selectedObligationIds",
                       "transactionDate",
                       "kind",
                       "participantId",
                       "amount",
-                      "reason",
                       "previewToken"
                     ],
                     "title": "ForgivenessCommandV5",
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "forgivenessAmount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "combined",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
+                        "type": "string"
+                      },
+                      "previewToken": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "title": "Previewtoken",
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "title": "Reason",
+                        "type": "string"
+                      },
+                      "receivingAccountId": {
+                        "format": "uuid",
+                        "title": "Receivingaccountid",
+                        "type": "string"
+                      },
+                      "selectedObligationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "title": "Selectedobligationids",
+                        "type": "array"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "selectedObligationIds",
+                      "transactionDate",
+                      "participantId",
+                      "receivingAccountId",
+                      "amount",
+                      "kind",
+                      "forgivenessAmount",
+                      "previewToken"
+                    ],
+                    "title": "CombinedSettlementCommandV6",
                     "type": "object"
                   }
                 ]
@@ -12929,6 +13281,120 @@
                         "title": "OpeningBalanceV1",
                         "type": "object"
                       },
+                      "forgivenessAmount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "combined",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "title": "Reason",
+                        "type": "string"
+                      },
+                      "receivingAccountId": {
+                        "format": "uuid",
+                        "title": "Receivingaccountid",
+                        "type": "string"
+                      },
+                      "selectedObligationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "title": "Selectedobligationids",
+                        "type": "array"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "selectedObligationIds",
+                      "transactionDate",
+                      "participantId",
+                      "receivingAccountId",
+                      "amount",
+                      "kind",
+                      "forgivenessAmount"
+                    ],
+                    "title": "CombinedSettlementDraftV6",
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
                       "kind": {
                         "const": "forgiveness",
                         "title": "Kind",
@@ -12973,12 +13439,12 @@
                       }
                     },
                     "required": [
+                      "reason",
                       "selectedObligationIds",
                       "transactionDate",
                       "kind",
                       "participantId",
-                      "amount",
-                      "reason"
+                      "amount"
                     ],
                     "title": "ForgivenessDraftV5",
                     "type": "object"
@@ -12995,6 +13461,9 @@
               "application/json": {
                 "schema": {
                   "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CombinedSettlementPreview"
+                    },
                     {
                       "$ref": "#/components/schemas/ForgivenessPreview"
                     },

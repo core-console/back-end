@@ -954,6 +954,70 @@ def test_openapi_normalization_ignores_path_item_metadata(
     assert path_item["servers"] == [{"url": "https://example.test"}]
 
 
+def test_combined_settlement_contract_retains_typed_stages_and_versioned_recovery(
+    app: FastAPI,
+) -> None:
+    schema = app.openapi()
+    base = "/finance/ledgers/{ledgerId}"
+    for path in ("/settlements/preview", "/settlements"):
+        command_union = schema["paths"][base + path]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]["anyOf"]
+        combined = next(
+            branch
+            for branch in command_union
+            if branch.get("properties", {}).get("kind", {}).get("const") == "combined"
+        )
+        assert combined["additionalProperties"] is False
+        assert combined["properties"]["forgivenessAmount"]["additionalProperties"] is False
+        assert {
+            "kind",
+            "selectedObligationIds",
+            "receivingAccountId",
+            "amount",
+            "forgivenessAmount",
+            "reason",
+        } <= set(combined["required"])
+        assert ("previewToken" in combined["required"]) == (path == "/settlements")
+        assert "excessDisposition" not in combined["properties"]
+    for name in ("CombinedSettlementPreview", "CombinedSettlementResponse"):
+        properties = schema["components"]["schemas"][name]["properties"]
+        assert properties["kind"]["const"] == "combined"
+        allocation_refs = properties["allocations"]["items"]["anyOf"]
+        assert {branch["$ref"].rsplit("/", 1)[1] for branch in allocation_refs} == {
+            "CombinedCashAllocationResponse",
+            "ForgivenessAllocationResponse",
+        }
+    for name in (
+        "SettlementCreatedReceipt",
+        "SettlementRejectedReceipt",
+        "SettlementSubmissionReceipt",
+        "SettlementSubmissionUnfinished",
+        "SettlementCommandValidationRejection",
+    ):
+        assert schema["components"]["schemas"][name]["properties"]["commandVersion"]["enum"] == [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+        ]
+    for path, method, status in (
+        ("/settlements/preview", "post", "200"),
+        ("/settlements/{settlementId}", "get", "200"),
+        ("/participants/{participantId}/settlements", "get", "200"),
+    ):
+        response = schema["paths"][base + path][method]["responses"][status]["content"][
+            "application/json"
+        ]["schema"]
+        if "items" in response:
+            response = response["items"]
+        if "$ref" in response:
+            response = schema["components"]["schemas"][response["$ref"].rsplit("/", 1)[1]]
+        assert any("CombinedSettlement" in branch.get("$ref", "") for branch in response["anyOf"])
+
+
 def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI) -> None:
     schema = app.openapi()
     base = "/finance/ledgers/{ledgerId}"
@@ -974,8 +1038,8 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     commands = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
         "application/json"
     ]["schema"]["anyOf"]
-    commands = [*commands[:3], *commands[3]["anyOf"], commands[4]]
-    assert len(commands) == 7
+    commands = [*commands[:3], *commands[3]["anyOf"], *commands[4:]]
+    assert len(commands) == 8
     command, credit_command, income_command = commands[:3]
     for original, selected in zip(commands[:3], commands[3:6], strict=True):
         assert selected["additionalProperties"] is False
@@ -1002,7 +1066,7 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     assert "previewToken" in credit_command["required"]
     assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4", "5"]
+    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4", "5", "6"]
     forgiveness = commands[6]
     assert forgiveness["additionalProperties"] is False
     assert forgiveness["properties"]["kind"]["const"] == "forgiveness"

@@ -9,7 +9,11 @@ from httpx import ASGITransport, AsyncClient, ReadError, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core_console.modules.finance.models import FinanceAccountMovement, FinanceTransaction
+from core_console.modules.finance.models import (
+    FinanceAccountMovement,
+    FinanceCategoryAllocation,
+    FinanceTransaction,
+)
 from core_console.modules.finance.settlement_models import (
     FinanceCreditOrigin,
     FinanceSettlement,
@@ -27,7 +31,7 @@ __all__ = ["advance_client"]
 
 
 @pytest.mark.parametrize(
-    "disposition", ["repayOnly", "retainCredit", "acceptIncome", "forgiveness"]
+    "disposition", ["repayOnly", "retainCredit", "acceptIncome", "forgiveness", "combined"]
 )
 @pytest.mark.parametrize(
     "phase", ["partial_write", "before_commit", "admission_ack", "terminal_ack", "response_loss"]
@@ -48,7 +52,7 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
         **repayment(draft, "50.00" if disposition == "repayOnly" else "80.00"),
         "selectedObligationIds": selected,
     }
-    if disposition not in ("repayOnly", "forgiveness"):
+    if disposition not in ("repayOnly", "forgiveness", "combined"):
         body["excessDisposition"] = disposition
     if disposition == "acceptIncome":
         body["categoryAllocations"] = [{"amount": {"amount": "20.00", "currency": "CNY"}}]
@@ -61,12 +65,20 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
             "amount": {"amount": "50.00", "currency": "CNY"},
             "reason": "Waive selected debt",
         }
+    if disposition == "combined":
+        from integration.test_finance_combined_settlements import combined
+
+        body = combined(draft, selected, "50.00", "10.00")
     preview = await client.post(f"{base}/settlements/preview", json=body)
     assert preview.status_code == 200, preview.text
     command = {**body, "previewToken": preview.json()["previewToken"]}
     headers = {
         **submission_headers(actor.id),
-        "Finance-Command-Version": "5" if disposition == "forgiveness" else "4",
+        "Finance-Command-Version": "6"
+        if disposition == "combined"
+        else "5"
+        if disposition == "forgiveness"
+        else "4",
     }
     real_commit, real_flush = AsyncSession.commit, AsyncSession.flush
     commits = 0
@@ -81,7 +93,11 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
             raise ConnectionError("commit acknowledgement lost")
 
     async def flush_fault(session: AsyncSession, objects: Any = None) -> None:
-        partial = any(isinstance(row, FinanceSettlementAllocation) for row in session.new)
+        partial = any(
+            isinstance(row, FinanceSettlementAllocation)
+            and (disposition != "combined" or row.kind == "forgiveness")
+            for row in session.new
+        )
         await real_flush(session, objects)
         if partial:
             raise RuntimeError("selected principal written before group failure")
@@ -98,6 +114,21 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
         assert binding is not None and binding.terminal_outcome is not None
         saved = await postgres_session.scalar(select(FinanceSettlement))
         assert saved is not None and saved.selected_obligation_ids == [UUID(selected[0])]
+        if disposition == "combined":
+            allocations = (
+                await postgres_session.scalars(
+                    select(FinanceSettlementAllocation).order_by(
+                        FinanceSettlementAllocation.position
+                    )
+                )
+            ).all()
+            assert [(a.kind, a.cash_paid, a.forgiven, a.remaining_after) for a in allocations] == [
+                ("cash", Decimal("50"), Decimal("0"), Decimal("10")),
+                ("forgiveness", Decimal("0"), Decimal("10"), Decimal("0")),
+            ]
+            assert await postgres_session.scalar(
+                select(FinanceCategoryAllocation.amount)
+            ) == Decimal("10")
         await postgres_session.rollback()
         raise ReadError("committed selected response lost", request=request)
 
@@ -132,6 +163,7 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
         "forgiveness": [1, 1, 0, 0, 3, 5],
         "retainCredit": [1, 1, 1, 0, 4, 8],
         "acceptIncome": [1, 1, 0, 1, 4, 7],
+        "combined": [1, 2, 0, 0, 4, 7],
     }[disposition]
     assert counts == (expected if committed else [0, 0, 0, 0, 2, 4])
     await postgres_session.rollback()
@@ -159,6 +191,10 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
             "40.00",
             "10.00" if disposition in ("repayOnly", "forgiveness") else "0.00",
         ]
+        if disposition == "combined":
+            assert detail["kind"] == "combined"
+            assert obligations[1]["cashPaid"]["amount"] == "50.00"
+            assert obligations[1]["forgiven"]["amount"] == "10.00"
     effects = (
         await postgres_session.scalars(
             select(FinanceAccountMovement.amount).where(
@@ -170,7 +206,7 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
         "-100.00"
         if disposition == "forgiveness"
         else "-50.00"
-        if disposition == "repayOnly"
+        if disposition in ("repayOnly", "combined")
         else "-20.00"
     )
     if disposition == "forgiveness":

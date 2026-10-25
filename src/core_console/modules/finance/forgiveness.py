@@ -150,49 +150,58 @@ async def execute_create_forgiveness(
     session.add(settlement)
     await session.flush()
     for allocation in preview.allocations:
-        obligation = await session.get(FinanceObligation, allocation.obligation_id)
-        assert obligation is not None
-        transaction_id = uuid4()
-        session.add(
-            FinanceTransaction(
-                id=transaction_id,
-                ledger_id=ledger_id,
-                kind="expense",
-                transaction_date=command.transaction_date,
-                note=command.reason,
-            )
-        )
-        await session.flush()
-        amount = Decimal(allocation.forgiven.amount)
-        session.add_all(
-            [
-                FinanceAccountMovement(
-                    transaction_id=transaction_id,
-                    ledger_id=ledger_id,
-                    account_id=obligation.receivable_account_id,
-                    amount=subtract(Decimal(0), amount),
-                    currency=command.amount.currency,
-                    role="primary",
-                ),
-                FinanceCategoryAllocation(
-                    transaction_id=transaction_id,
-                    ledger_id=ledger_id,
-                    category_id=None,
-                    amount=amount,
-                    currency=command.amount.currency,
-                ),
-                FinanceSettlementAllocation(
-                    settlement_id=settlement.id,
-                    ledger_id=ledger_id,
-                    position=allocation.position,
-                    obligation_id=obligation.id,
-                    transaction_id=transaction_id,
-                    kind="forgiveness",
-                    cash_paid=Decimal(0),
-                    forgiven=amount,
-                    remaining_after=Decimal(allocation.remaining_after.amount),
-                ),
-            ]
-        )
+        await record_forgiveness_allocation(session, settlement, allocation)
     await session.flush()
     return settlement.id
+
+
+async def record_forgiveness_allocation(
+    session: AsyncSession,
+    settlement: FinanceSettlement,
+    allocation: ForgivenessAllocationResponse,
+) -> None:
+    """Record one retained non-cash Allocation and its complete linked Expense."""
+    obligation = await session.get(FinanceObligation, allocation.obligation_id)
+    assert obligation is not None
+    transaction_id = uuid4()
+    session.add(
+        FinanceTransaction(
+            id=transaction_id,
+            ledger_id=settlement.ledger_id,
+            kind="expense",
+            transaction_date=settlement.transaction_date,
+            note=settlement.reason,
+        )
+    )
+    await session.flush()
+    amount = Decimal(allocation.forgiven.amount)
+    session.add_all(
+        [
+            FinanceAccountMovement(
+                transaction_id=transaction_id,
+                ledger_id=settlement.ledger_id,
+                account_id=obligation.receivable_account_id,
+                amount=subtract(Decimal(0), amount),
+                currency=settlement.currency,
+                role="primary",
+            ),
+            FinanceCategoryAllocation(
+                transaction_id=transaction_id,
+                ledger_id=settlement.ledger_id,
+                category_id=None,
+                amount=amount,
+                currency=settlement.currency,
+            ),
+            FinanceSettlementAllocation(
+                settlement_id=settlement.id,
+                ledger_id=settlement.ledger_id,
+                position=allocation.position,
+                obligation_id=obligation.id,
+                transaction_id=transaction_id,
+                kind="forgiveness",
+                cash_paid=Decimal(0),
+                forgiven=amount,
+                remaining_after=Decimal(allocation.remaining_after.amount),
+            ),
+        ]
+    )

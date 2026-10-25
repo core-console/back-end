@@ -104,10 +104,7 @@ class SelectedScope(BaseModel):
         return self
 
 
-class ForgivenessDraftV5(_TransactionCommandV1, SelectedScope):
-    kind: Literal["forgiveness"]
-    participant_id: UUID = Field(alias="participantId")
-    amount: OpeningBalanceV1
+class ForgivenessReason(BaseModel):
     reason: str = Field(strict=True, min_length=1, max_length=500)
 
     @field_validator("reason")
@@ -117,6 +114,12 @@ class ForgivenessDraftV5(_TransactionCommandV1, SelectedScope):
         if not value:
             raise ValueError("A forgiveness reason is required.")
         return value
+
+
+class ForgivenessDraftV5(_TransactionCommandV1, SelectedScope, ForgivenessReason):
+    kind: Literal["forgiveness"]
+    participant_id: UUID = Field(alias="participantId")
+    amount: OpeningBalanceV1
 
     @model_validator(mode="after")
     def positive_forgiveness(self) -> Self:
@@ -241,6 +244,69 @@ class CashAllocationResponse(_Projection):
     remaining_after: MoneyResponse = Field(alias="remainingAfter")
 
 
+class CombinedSettlementDraftV6(SettlementDraftV1, SelectedScope, ForgivenessReason):
+    kind: Literal["combined"]
+    forgiveness_amount: OpeningBalanceV1 = Field(alias="forgivenessAmount")
+
+    @model_validator(mode="after")
+    def positive_same_currency_forgiveness(self) -> Self:
+        if Decimal(self.forgiveness_amount.amount) <= 0:
+            raise ValueError("Combined forgiveness must be positive.")
+        if self.forgiveness_amount.currency != self.amount.currency:
+            raise ValueError("Cash and forgiveness must use one currency.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        return {
+            **super().canonical(),
+            "kind": self.kind,
+            "selectedObligationIds": sorted(str(id) for id in self.selected_obligation_ids),
+            "forgivenessAmount": self.forgiveness_amount.canonical(),
+            "reason": self.reason,
+        }
+
+
+class CombinedSettlementCommandV6(CombinedSettlementDraftV6):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
+class CombinedCashAllocationResponse(CashAllocationResponse):
+    kind: Literal["cash"] = "cash"
+
+
+class CombinedSettlementPreview(_Projection):
+    kind: Literal["combined"] = "combined"
+    preview_token: str = Field(alias="previewToken")
+    receiving_balance: MoneyResponse = Field(alias="receivingBalance")
+    receiving_balance_after: MoneyResponse = Field(alias="receivingBalanceAfter")
+    amount: MoneyResponse
+    forgiveness_amount: MoneyResponse = Field(alias="forgivenessAmount")
+    expense: MoneyResponse
+    outstanding_before: MoneyResponse = Field(alias="outstandingBefore")
+    outstanding_after: MoneyResponse = Field(alias="outstandingAfter")
+    allocations: list[CombinedCashAllocationResponse | ForgivenessAllocationResponse]
+
+
+class CombinedSettlementResponse(_Projection, SelectedScope):
+    kind: Literal["combined"] = "combined"
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    participant_id: UUID = Field(alias="participantId")
+    receiving_account_id: UUID = Field(alias="receivingAccountId")
+    transaction_date: date = Field(alias="transactionDate")
+    amount: MoneyResponse
+    forgiveness_amount: MoneyResponse = Field(alias="forgivenessAmount")
+    reason: str
+    note: str | None
+    confirmed_at: datetime = Field(alias="confirmedAt")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_ids: list[UUID] = Field(alias="transactionIds")
+    allocations: list[CombinedCashAllocationResponse | ForgivenessAllocationResponse]
+
+
 class SettlementPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     receiving_balance: MoneyResponse = Field(alias="receivingBalance")
@@ -321,7 +387,8 @@ class SelectedIncomeSettlementResponse(IncomeSettlementResponse, SelectedScope):
 
 
 type SettlementSource = (
-    ForgivenessResponse
+    CombinedSettlementResponse
+    | ForgivenessResponse
     | SelectedIncomeSettlementResponse
     | SelectedCreditSettlementResponse
     | SelectedSettlementResponse

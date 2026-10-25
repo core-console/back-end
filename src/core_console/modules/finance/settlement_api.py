@@ -12,6 +12,9 @@ from core_console.database.dependencies import get_session
 from core_console.modules.finance.advances import _problem, require_advance_ledger
 from core_console.modules.finance.api import _run_finance_workflow
 from core_console.modules.finance.settlement_schemas import (
+    CombinedSettlementCommandV6,
+    CombinedSettlementDraftV6,
+    CombinedSettlementPreview,
     CreditOriginResponse,
     CreditSettlementPreview,
     ForgivenessCommandV5,
@@ -72,7 +75,8 @@ def _request_schema(model: Any) -> dict[str, object]:
 @router.post(
     "/settlements/preview",
     operation_id="previewFinanceSettlement",
-    response_model=ForgivenessPreview
+    response_model=CombinedSettlementPreview
+    | ForgivenessPreview
     | IncomeSettlementPreview
     | CreditSettlementPreview
     | SettlementPreview,
@@ -88,6 +92,7 @@ def _request_schema(model: Any) -> dict[str, object]:
                         | SettlementDraftV2
                         | SettlementDraftV3
                         | SettlementDraftV4
+                        | CombinedSettlementDraftV6
                         | ForgivenessDraftV5
                     )
                 }
@@ -100,7 +105,13 @@ async def post_preview(
     request: Request,
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview | ForgivenessPreview:
+) -> (
+    SettlementPreview
+    | CreditSettlementPreview
+    | IncomeSettlementPreview
+    | ForgivenessPreview
+    | CombinedSettlementPreview
+):
     await _run_finance_workflow(require_advance_ledger(session, actor.id, ledger_id))
     try:
         draft: (
@@ -108,12 +119,14 @@ async def post_preview(
             | SettlementDraftV2
             | SettlementDraftV3
             | SettlementDraftV4
+            | CombinedSettlementDraftV6
             | ForgivenessDraftV5
         ) = TypeAdapter(
             SettlementDraftV1
             | SettlementDraftV2
             | SettlementDraftV3
             | SettlementDraftV4
+            | CombinedSettlementDraftV6
             | ForgivenessDraftV5
         ).validate_json(await request.body())
     except ValidationError:
@@ -138,7 +151,10 @@ async def post_preview(
         "outstanding subset, with the same explicit excess choices. "
         "Version 5 requires kind=forgiveness, selectedObligationIds, a positive amount and reason. "
         "It records non-cash Expense against selected receivables without a receiving Account. "
-        "Combined cash/forgiveness and credit use are not supported. "
+        "Version 6 requires kind=combined, selectedObligationIds, positive cash amount, "
+        "positive same-currency forgivenessAmount and reason. Cash allocates first, then "
+        "forgiveness within remaining selected capacity; one atomic outcome retains both. "
+        "Credit use and Corrections are not supported. "
         "Prepare one immutable submission identity before dispatch; recover under that "
         "same identity using getFinanceSubmission or an explicit retry."
     ),
@@ -167,6 +183,7 @@ async def post_preview(
                         | SettlementCommandV3
                         | SettlementCommandV4
                         | ForgivenessCommandV5
+                        | CombinedSettlementCommandV6
                     )
                 }
             },

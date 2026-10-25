@@ -29,7 +29,7 @@ class FinanceSettlement(Base):
     __table_args__ = (
         CheckConstraint(
             "(receiving_account_id IS NOT NULL AND reason IS NULL) OR "
-            "(receiving_account_id IS NULL AND reason IS NOT NULL "
+            "(reason IS NOT NULL "
             "AND reason = btrim(reason) AND char_length(reason) BETWEEN 1 AND 500 "
             "AND selected_obligation_ids IS NOT NULL)",
             name="ck_finance_settlements_action",
@@ -89,7 +89,9 @@ class FinanceSettlement(Base):
 class FinanceSettlementAllocation(Base):
     __tablename__ = "finance_settlement_allocations"
     __table_args__ = (
-        UniqueConstraint("settlement_id", "obligation_id", name="uq_finance_settlement_obligation"),
+        UniqueConstraint(
+            "settlement_id", "obligation_id", "kind", name="uq_finance_settlement_obligation"
+        ),
         UniqueConstraint("transaction_id", name="uq_finance_settlement_transaction"),
         ForeignKeyConstraint(
             ["settlement_id", "ledger_id"],
