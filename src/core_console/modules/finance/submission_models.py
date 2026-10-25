@@ -396,6 +396,12 @@ COMMAND_CHECK = (
 OUTCOME_CHECK = OUTCOME_CHECK.replace("command_version = '3'", "command_version IN ('3', '4')")
 
 
+COMMAND_CHECK = (
+    f"({COMMAND_CHECK}) OR "
+    "(command_version = '5' AND finance_settlement_v5_command_valid(canonical_command))"
+)
+
+
 class FinanceSubmission(Base):
     """Exactly unfinished or terminal, unique across one user's commands."""
 

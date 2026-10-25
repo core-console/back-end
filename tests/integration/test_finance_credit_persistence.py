@@ -161,7 +161,7 @@ async def test_downgrade_refuses_every_retained_v2_credit_binding(
     async with postgres_engine.connect() as connection:
         assert (
             await connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261024_01"
+            == "20261024_02"
         )
     assert (
         await client.get(f"/api/finance/submissions/{headers['Idempotency-Key']}", headers=headers)

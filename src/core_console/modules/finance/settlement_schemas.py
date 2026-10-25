@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from core_console.modules.finance.advance_schemas import _Projection
 from core_console.modules.finance.schemas import MoneyResponse
@@ -102,6 +102,79 @@ class SelectedScope(BaseModel):
         if len(set(self.selected_obligation_ids)) != len(self.selected_obligation_ids):
             raise ValueError("Select each Obligation only once.")
         return self
+
+
+class ForgivenessDraftV5(_TransactionCommandV1, SelectedScope):
+    kind: Literal["forgiveness"]
+    participant_id: UUID = Field(alias="participantId")
+    amount: OpeningBalanceV1
+    reason: str = Field(strict=True, min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def explicit_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A forgiveness reason is required.")
+        return value
+
+    @model_validator(mode="after")
+    def positive_forgiveness(self) -> Self:
+        if Decimal(self.amount.amount) <= 0:
+            raise ValueError("Forgiveness must be positive.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "participantId": str(self.participant_id),
+            "selectedObligationIds": sorted(str(id) for id in self.selected_obligation_ids),
+            "transactionDate": self.transaction_date.isoformat(),
+            "amount": self.amount.canonical(),
+            "reason": self.reason,
+            "note": self.note,
+        }
+
+
+class ForgivenessCommandV5(ForgivenessDraftV5):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
+class ForgivenessAllocationResponse(_Projection):
+    kind: Literal["forgiveness"] = "forgiveness"
+    position: int
+    obligation_id: UUID = Field(alias="obligationId")
+    advance_id: UUID = Field(alias="advanceId")
+    source_date: date = Field(alias="sourceDate")
+    forgiven: MoneyResponse
+    remaining_after: MoneyResponse = Field(alias="remainingAfter")
+
+
+class ForgivenessPreview(_Projection):
+    preview_token: str = Field(alias="previewToken")
+    amount: MoneyResponse
+    expense: MoneyResponse
+    outstanding_before: MoneyResponse = Field(alias="outstandingBefore")
+    outstanding_after: MoneyResponse = Field(alias="outstandingAfter")
+    allocations: list[ForgivenessAllocationResponse]
+
+
+class ForgivenessResponse(_Projection, SelectedScope):
+    kind: Literal["forgiveness"] = "forgiveness"
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    participant_id: UUID = Field(alias="participantId")
+    transaction_date: date = Field(alias="transactionDate")
+    amount: MoneyResponse
+    reason: str
+    note: str | None
+    confirmed_at: datetime = Field(alias="confirmedAt")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_ids: list[UUID] = Field(alias="transactionIds")
+    allocations: list[ForgivenessAllocationResponse]
 
 
 class SelectedSettlementDraftV4(SettlementDraftV1, SelectedScope):
@@ -248,7 +321,8 @@ class SelectedIncomeSettlementResponse(IncomeSettlementResponse, SelectedScope):
 
 
 type SettlementSource = (
-    SelectedIncomeSettlementResponse
+    ForgivenessResponse
+    | SelectedIncomeSettlementResponse
     | SelectedCreditSettlementResponse
     | SelectedSettlementResponse
     | IncomeSettlementResponse

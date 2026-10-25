@@ -14,6 +14,9 @@ from core_console.modules.finance.api import _run_finance_workflow
 from core_console.modules.finance.settlement_schemas import (
     CreditOriginResponse,
     CreditSettlementPreview,
+    ForgivenessCommandV5,
+    ForgivenessDraftV5,
+    ForgivenessPreview,
     IncomeSettlementPreview,
     ParticipantPositionResponse,
     SettlementCommandV1,
@@ -69,7 +72,10 @@ def _request_schema(model: Any) -> dict[str, object]:
 @router.post(
     "/settlements/preview",
     operation_id="previewFinanceSettlement",
-    response_model=IncomeSettlementPreview | CreditSettlementPreview | SettlementPreview,
+    response_model=ForgivenessPreview
+    | IncomeSettlementPreview
+    | CreditSettlementPreview
+    | SettlementPreview,
     responses={**_READ_ERRORS, 409: {"model": ProblemDetails}},
     openapi_extra={
         "security": [],
@@ -82,6 +88,7 @@ def _request_schema(model: Any) -> dict[str, object]:
                         | SettlementDraftV2
                         | SettlementDraftV3
                         | SettlementDraftV4
+                        | ForgivenessDraftV5
                     )
                 }
             },
@@ -93,14 +100,22 @@ async def post_preview(
     request: Request,
     actor: Annotated[CurrentUser, Depends(require_active_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview:
+) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview | ForgivenessPreview:
     await _run_finance_workflow(require_advance_ledger(session, actor.id, ledger_id))
     try:
-        draft: SettlementDraftV1 | SettlementDraftV2 | SettlementDraftV3 | SettlementDraftV4 = (
-            TypeAdapter(
-                SettlementDraftV1 | SettlementDraftV2 | SettlementDraftV3 | SettlementDraftV4
-            ).validate_json(await request.body())
-        )
+        draft: (
+            SettlementDraftV1
+            | SettlementDraftV2
+            | SettlementDraftV3
+            | SettlementDraftV4
+            | ForgivenessDraftV5
+        ) = TypeAdapter(
+            SettlementDraftV1
+            | SettlementDraftV2
+            | SettlementDraftV3
+            | SettlementDraftV4
+            | ForgivenessDraftV5
+        ).validate_json(await request.body())
     except ValidationError:
         raise _problem(
             422, "validation_error", "The request did not satisfy the API contract."
@@ -120,8 +135,10 @@ async def post_preview(
         "Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation "
         "equal to the positive actual surplus, creating linked Income without credit. "
         "Version 4 requires selectedObligationIds and allocates only within that eligible "
-        "outstanding subset, with the same explicit excess choices. No forgiveness or credit use "
-        "is accepted. "
+        "outstanding subset, with the same explicit excess choices. "
+        "Version 5 requires kind=forgiveness, selectedObligationIds, a positive amount and reason. "
+        "It records non-cash Expense against selected receivables without a receiving Account. "
+        "Combined cash/forgiveness and credit use are not supported. "
         "Prepare one immutable submission identity before dispatch; recover under that "
         "same identity using getFinanceSubmission or an explicit retry."
     ),
@@ -149,6 +166,7 @@ async def post_preview(
                         | SettlementCommandV2
                         | SettlementCommandV3
                         | SettlementCommandV4
+                        | ForgivenessCommandV5
                     )
                 }
             },

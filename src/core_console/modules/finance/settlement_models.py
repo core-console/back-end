@@ -28,6 +28,13 @@ class FinanceSettlement(Base):
     __tablename__ = "finance_settlements"
     __table_args__ = (
         CheckConstraint(
+            "(receiving_account_id IS NOT NULL AND reason IS NULL) OR "
+            "(receiving_account_id IS NULL AND reason IS NOT NULL "
+            "AND reason = btrim(reason) AND char_length(reason) BETWEEN 1 AND 500 "
+            "AND selected_obligation_ids IS NOT NULL)",
+            name="ck_finance_settlements_action",
+        ),
+        CheckConstraint(
             "selected_obligation_ids IS NULL OR (cardinality(selected_obligation_ids) > 0 "
             "AND array_position(selected_obligation_ids, NULL) IS NULL)",
             name="ck_finance_settlements_selection",
@@ -64,7 +71,8 @@ class FinanceSettlement(Base):
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
     ledger_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     participant_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
-    receiving_account_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    receiving_account_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    reason: Mapped[str | None] = mapped_column(Text)
     transaction_date: Mapped[date] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(Numeric())
     currency: Mapped[str] = mapped_column(Text)
@@ -97,9 +105,15 @@ class FinanceSettlementAllocation(Base):
         ),
         CheckConstraint("position >= 1", name="ck_finance_settlement_allocation_position"),
         CheckConstraint(
-            "cash_paid > 0 AND cash_paid NOT IN "
+            "cash_paid >= 0 AND cash_paid NOT IN "
             "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
             name="ck_finance_settlement_allocation_cash",
+        ),
+        CheckConstraint(
+            "(kind = 'cash' AND cash_paid > 0 AND forgiven = 0) OR "
+            "(kind = 'forgiveness' AND cash_paid = 0 AND forgiven > 0 "
+            "AND forgiven NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))",
+            name="ck_finance_settlement_allocation_kind",
         ),
         CheckConstraint(
             "remaining_after >= 0 AND remaining_after NOT IN "
@@ -113,6 +127,8 @@ class FinanceSettlementAllocation(Base):
     obligation_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     cash_paid: Mapped[Decimal] = mapped_column(Numeric())
+    kind: Mapped[str] = mapped_column(Text, server_default="cash")
+    forgiven: Mapped[Decimal] = mapped_column(Numeric(), server_default="0")
     remaining_after: Mapped[Decimal] = mapped_column(Numeric())
 
 

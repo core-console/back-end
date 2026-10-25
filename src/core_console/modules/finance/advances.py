@@ -339,20 +339,26 @@ async def execute_create_advance(
     return advance_id
 
 
-async def _cash_paid(session: AsyncSession, obligation_ids: list[UUID]) -> dict[UUID, Decimal]:
+async def _resolution_totals(
+    session: AsyncSession, obligation_ids: list[UUID]
+) -> dict[UUID, tuple[Decimal, Decimal]]:
     rows = await session.execute(
         select(
             FinanceSettlementAllocation.obligation_id,
             func.sum(FinanceSettlementAllocation.cash_paid),
+            func.sum(FinanceSettlementAllocation.forgiven),
         )
         .where(FinanceSettlementAllocation.obligation_id.in_(obligation_ids))
         .group_by(FinanceSettlementAllocation.obligation_id)
     )
-    return dict(rows.all())
+    return {id: (paid, forgiven) for id, paid, forgiven in rows}
 
 
 def _obligation(
-    advance: FinanceAdvance, obligation: FinanceObligation, paid: Decimal = Decimal(0)
+    advance: FinanceAdvance,
+    obligation: FinanceObligation,
+    paid: Decimal = Decimal(0),
+    forgiven: Decimal = Decimal(0),
 ) -> ObligationResponse:
     principal = _money(obligation.principal, obligation.currency)
     zero = _money(Decimal(0), obligation.currency)
@@ -365,10 +371,13 @@ def _obligation(
         receivableAccountId=obligation.receivable_account_id,
         principal=principal,
         cashPaid=_money(paid, obligation.currency),
-        forgiven=zero,
+        forgiven=_money(forgiven, obligation.currency),
         creditApplied=zero,
         remaining=_money(
-            subtract_money_amounts_exact(obligation.principal, paid), obligation.currency
+            subtract_money_amounts_exact(
+                subtract_money_amounts_exact(obligation.principal, paid), forgiven
+            ),
+            obligation.currency,
         ),
     )
 
@@ -388,7 +397,7 @@ async def inspect_advance(
     if not results:
         raise _problem(404, "finance_advance_not_found", "Advance was not found.")
     advance, obligation = results[0]
-    paid = await _cash_paid(session, [row.id for _, row in results])
+    paid = await _resolution_totals(session, [row.id for _, row in results])
     total = advance.owner_share
     for _, row in results:
         total = subtract_money_amounts_exact(
@@ -409,7 +418,9 @@ async def inspect_advance(
             {
                 **source,
                 "transactionId": advance.transaction_id,
-                "obligation": _obligation(advance, obligation, paid.get(obligation.id, Decimal(0))),
+                "obligation": _obligation(
+                    advance, obligation, *paid.get(obligation.id, (Decimal(0), Decimal(0)))
+                ),
             }
         )
     transactions = (
@@ -424,7 +435,8 @@ async def inspect_advance(
             **source,
             "transactionIds": list(transactions),
             "obligations": [
-                _obligation(advance, row, paid.get(row.id, Decimal(0))) for _, row in results
+                _obligation(advance, row, *paid.get(row.id, (Decimal(0), Decimal(0))))
+                for _, row in results
             ],
         }
     )
@@ -456,5 +468,8 @@ async def list_participant_obligations(
             )
         )
     ).all()
-    paid = await _cash_paid(session, [row.id for _, row in rows])
-    return [_obligation(advance, row, paid.get(row.id, Decimal(0))) for advance, row in rows]
+    paid = await _resolution_totals(session, [row.id for _, row in rows])
+    return [
+        _obligation(advance, row, *paid.get(row.id, (Decimal(0), Decimal(0))))
+        for advance, row in rows
+    ]

@@ -974,10 +974,10 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     commands = schema["paths"][base + "/settlements"]["post"]["requestBody"]["content"][
         "application/json"
     ]["schema"]["anyOf"]
-    commands = [*commands[:3], *commands[3]["anyOf"]]
-    assert len(commands) == 6
+    commands = [*commands[:3], *commands[3]["anyOf"], commands[4]]
+    assert len(commands) == 7
     command, credit_command, income_command = commands[:3]
-    for original, selected in zip(commands[:3], commands[3:], strict=True):
+    for original, selected in zip(commands[:3], commands[3:6], strict=True):
         assert selected["additionalProperties"] is False
         assert set(selected["properties"]) == set(original["properties"]) | {
             "selectedObligationIds"
@@ -1002,7 +1002,32 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     assert "previewToken" in credit_command["required"]
     assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4"]
+    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4", "5"]
+    forgiveness = commands[6]
+    assert forgiveness["additionalProperties"] is False
+    assert forgiveness["properties"]["kind"]["const"] == "forgiveness"
+    assert {
+        "kind",
+        "participantId",
+        "selectedObligationIds",
+        "transactionDate",
+        "amount",
+        "reason",
+        "previewToken",
+    } == set(forgiveness["required"])
+    assert "receivingAccountId" not in forgiveness["properties"]
+    assert set(schema["components"]["schemas"]["ForgivenessAllocationResponse"]["properties"]) == {
+        "kind",
+        "position",
+        "obligationId",
+        "advanceId",
+        "sourceDate",
+        "forgiven",
+        "remainingAfter",
+    }
+    for name in ("ForgivenessPreview", "ForgivenessResponse"):
+        assert "receivingAccountId" not in schema["components"]["schemas"][name]["properties"]
+        assert "receivingBalance" not in schema["components"]["schemas"][name]["properties"]
     assert income_command["additionalProperties"] is False
     assert set(income_command["properties"]) == set(command["properties"]) | {
         "excessDisposition",

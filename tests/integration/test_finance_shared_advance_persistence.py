@@ -222,7 +222,7 @@ async def test_t03_downgrade_cannot_discard_any_retained_version_two_evidence(
     async with postgres_engine.connect() as connection:
         assert (
             await connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261024_01"
+            == "20261024_02"
         )
     assert (await client.get(f"/api/finance/submissions/{key}", headers=headers)).json() == before
     resumed = await client.post(f"{base}/advances", json=command, headers=headers)

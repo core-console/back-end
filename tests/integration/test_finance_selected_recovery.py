@@ -26,7 +26,9 @@ pytestmark = pytest.mark.anyio
 __all__ = ["advance_client"]
 
 
-@pytest.mark.parametrize("disposition", ["repayOnly", "retainCredit", "acceptIncome"])
+@pytest.mark.parametrize(
+    "disposition", ["repayOnly", "retainCredit", "acceptIncome", "forgiveness"]
+)
 @pytest.mark.parametrize(
     "phase", ["partial_write", "before_commit", "admission_ack", "terminal_ack", "response_loss"]
 )
@@ -46,14 +48,26 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
         **repayment(draft, "50.00" if disposition == "repayOnly" else "80.00"),
         "selectedObligationIds": selected,
     }
-    if disposition != "repayOnly":
+    if disposition not in ("repayOnly", "forgiveness"):
         body["excessDisposition"] = disposition
     if disposition == "acceptIncome":
         body["categoryAllocations"] = [{"amount": {"amount": "20.00", "currency": "CNY"}}]
+    if disposition == "forgiveness":
+        body = {
+            "kind": "forgiveness",
+            "participantId": draft["participantId"],
+            "selectedObligationIds": selected,
+            "transactionDate": "2026-10-22",
+            "amount": {"amount": "50.00", "currency": "CNY"},
+            "reason": "Waive selected debt",
+        }
     preview = await client.post(f"{base}/settlements/preview", json=body)
     assert preview.status_code == 200, preview.text
     command = {**body, "previewToken": preview.json()["previewToken"]}
-    headers = {**submission_headers(actor.id), "Finance-Command-Version": "4"}
+    headers = {
+        **submission_headers(actor.id),
+        "Finance-Command-Version": "5" if disposition == "forgiveness" else "4",
+    }
     real_commit, real_flush = AsyncSession.commit, AsyncSession.flush
     commits = 0
 
@@ -115,6 +129,7 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
     ]
     expected = {
         "repayOnly": [1, 1, 0, 0, 3, 6],
+        "forgiveness": [1, 1, 0, 0, 3, 5],
         "retainCredit": [1, 1, 1, 0, 4, 8],
         "acceptIncome": [1, 1, 0, 1, 4, 7],
     }[disposition]
@@ -142,7 +157,7 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
         ).json()
         assert [row["remaining"]["amount"] for row in obligations] == [
             "40.00",
-            "10.00" if disposition == "repayOnly" else "0.00",
+            "10.00" if disposition in ("repayOnly", "forgiveness") else "0.00",
         ]
     effects = (
         await postgres_session.scalars(
@@ -151,7 +166,19 @@ async def test_selected_group_recovers_original_scope_and_all_financial_effects(
             )
         )
     ).all()
-    assert sum(effects) == Decimal("-50.00" if disposition == "repayOnly" else "-20.00")
+    assert sum(effects) == Decimal(
+        "-100.00"
+        if disposition == "forgiveness"
+        else "-50.00"
+        if disposition == "repayOnly"
+        else "-20.00"
+    )
+    if disposition == "forgiveness":
+        assert detail["kind"] == "forgiveness"
+        assert obligations[1]["forgiven"]["amount"] == "50.00"
+        assert obligations[1]["cashPaid"]["amount"] == "0.00"
+        overview = (await client.get(f"{base}/overview", params={"month": "2026-10"})).json()
+        assert overview["monthSummaryByCurrency"][0]["expense"]["amount"] == "50.00"
     assert [
         await postgres_session.scalar(select(func.count()).select_from(model))
         for model in (

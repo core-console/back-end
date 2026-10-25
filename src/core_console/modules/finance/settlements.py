@@ -16,6 +16,7 @@ from core_console.modules.finance.advances import (
     list_participant_obligations,
     require_advance_ledger,
 )
+from core_console.modules.finance.forgiveness import execute_create_forgiveness, preview_forgiveness
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -40,6 +41,11 @@ from core_console.modules.finance.settlement_schemas import (
     CreditOriginResponse,
     CreditSettlementPreview,
     CreditSettlementResponse,
+    ForgivenessAllocationResponse,
+    ForgivenessCommandV5,
+    ForgivenessDraftV5,
+    ForgivenessPreview,
+    ForgivenessResponse,
     IncomeSettlementPreview,
     IncomeSettlementResponse,
     ParticipantPositionResponse,
@@ -66,9 +72,17 @@ async def preview_settlement(
     *,
     owner_id: UUID,
     ledger_id: UUID,
-    draft: SettlementDraftV1 | SettlementDraftV2 | SettlementDraftV3 | SettlementDraftV4,
+    draft: SettlementDraftV1
+    | SettlementDraftV2
+    | SettlementDraftV3
+    | SettlementDraftV4
+    | ForgivenessDraftV5,
     lock: bool = False,
-) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview:
+) -> SettlementPreview | CreditSettlementPreview | IncomeSettlementPreview | ForgivenessPreview:
+    if isinstance(draft, ForgivenessDraftV5):
+        return await preview_forgiveness(
+            session, owner_id=owner_id, ledger_id=ledger_id, draft=draft, lock=lock
+        )
     await require_advance_ledger(session, owner_id, ledger_id)
     if lock:
         # Lock every potentially affected Account in the ordinary Finance UUID order,
@@ -260,11 +274,20 @@ async def execute_create_settlement(
     *,
     owner_id: UUID,
     ledger_id: UUID,
-    command: SettlementCommandV1 | SettlementCommandV2 | SettlementCommandV3 | SettlementCommandV4,
+    command: SettlementCommandV1
+    | SettlementCommandV2
+    | SettlementCommandV3
+    | SettlementCommandV4
+    | ForgivenessCommandV5,
 ) -> UUID:
+    if isinstance(command, ForgivenessCommandV5):
+        return await execute_create_forgiveness(
+            session, owner_id=owner_id, ledger_id=ledger_id, command=command
+        )
     preview = await preview_settlement(
         session, owner_id=owner_id, ledger_id=ledger_id, draft=command, lock=True
     )
+    assert not isinstance(preview, ForgivenessPreview)
     settlement = FinanceSettlement(
         ledger_id=ledger_id,
         participant_id=command.participant_id,
@@ -360,6 +383,33 @@ async def inspect_settlement(
             .order_by(FinanceSettlementAllocation.position)
         )
     ).all()
+    if settlement.reason is not None:
+        assert settlement.selected_obligation_ids is not None
+        return ForgivenessResponse(
+            id=settlement.id,
+            ledgerId=ledger_id,
+            participantId=settlement.participant_id,
+            transactionDate=settlement.transaction_date,
+            amount=_money(settlement.amount, settlement.currency),
+            reason=settlement.reason,
+            note=settlement.note,
+            confirmedAt=settlement.confirmed_at,
+            confirmationOrder=settlement.confirmation_order,
+            selectedObligationIds=settlement.selected_obligation_ids,
+            transactionIds=[allocation.transaction_id for allocation, _, _ in rows],
+            allocations=[
+                ForgivenessAllocationResponse(
+                    position=allocation.position,
+                    obligationId=obligation.id,
+                    advanceId=advance.id,
+                    sourceDate=advance.transaction_date,
+                    forgiven=_money(allocation.forgiven, settlement.currency),
+                    remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                )
+                for allocation, obligation, advance in rows
+            ],
+        )
+    assert settlement.receiving_account_id is not None
     result = SettlementResponse(
         id=settlement.id,
         ledgerId=ledger_id,
@@ -499,6 +549,7 @@ async def _record_credit(
 def _origin_response(
     origin: FinanceCreditOrigin, settlement: FinanceSettlement
 ) -> CreditOriginResponse:
+    assert settlement.receiving_account_id is not None
     return CreditOriginResponse(
         settlementId=settlement.id,
         ledgerId=settlement.ledger_id,

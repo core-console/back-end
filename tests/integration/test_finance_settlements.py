@@ -184,19 +184,37 @@ async def test_same_date_ties_eligibility_backdating_and_retained_cash_history(
 @pytest.mark.parametrize(
     "phase", ["admission_ack", "partial_write", "before_commit", "terminal_ack", "response_loss"]
 )
+@pytest.mark.parametrize("kind", ["cash", "forgiveness"])
 async def test_grouped_receipt_faults_recover_original_action_without_duplicate_effects(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
     postgres_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
     phase: str,
+    kind: str,
 ) -> None:
     client, actor, base, draft = advance_client
     await advance(client, actor, base, draft, "40.00", "2026-10-20")
     await advance(client, actor, base, draft, "60.00", "2026-10-21")
-    body = repayment(draft)
+    if kind == "forgiveness":
+        obligations = (
+            await client.get(f"{base}/participants/{draft['participantId']}/obligations")
+        ).json()
+        body = {
+            "kind": "forgiveness",
+            "participantId": draft["participantId"],
+            "selectedObligationIds": [o["id"] for o in obligations],
+            "amount": {"amount": "50.00", "currency": "CNY"},
+            "transactionDate": "2026-10-22",
+            "reason": "Waive selected debt",
+        }
+    else:
+        body = repayment(draft)
     preview = await client.post(f"{base}/settlements/preview", json=body)
     command = {**body, "previewToken": preview.json()["previewToken"]}
-    headers = submission_headers(actor.id)
+    headers = {
+        **submission_headers(actor.id),
+        "Finance-Command-Version": "5" if kind == "forgiveness" else "1",
+    }
     real_commit, real_flush = AsyncSession.commit, AsyncSession.flush
     commits = 0
 
@@ -247,7 +265,7 @@ async def test_grouped_receipt_faults_recover_original_action_without_duplicate_
             FinanceAccountMovement,
         )
     ]
-    assert counts == ([1, 2, 4, 8] if committed else [0, 0, 2, 4])
+    assert counts == ([1, 2, 4, 6 if kind == "forgiveness" else 8] if committed else [0, 0, 2, 4])
     effects = (
         (
             await postgres_session.execute(
@@ -259,7 +277,9 @@ async def test_grouped_receipt_faults_recover_original_action_without_duplicate_
         .scalars()
         .all()
     )
-    assert sum(effects) == (Decimal("-50.00") if committed else Decimal("-100.00"))
+    assert sum(effects) == (
+        Decimal("-50.00") if committed and kind == "cash" else Decimal("-100.00")
+    )
     binding = await postgres_session.get(
         FinanceSubmission, (actor.id, UUID(headers["Idempotency-Key"]))
     )

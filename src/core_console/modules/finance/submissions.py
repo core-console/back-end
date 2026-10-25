@@ -40,6 +40,7 @@ from core_console.modules.finance.service import (
     execute_create_internal_transfer_transaction,
 )
 from core_console.modules.finance.settlement_schemas import (
+    ForgivenessCommandV5,
     SelectedCreditSettlementCommandV4,
     SelectedIncomeSettlementCommandV4,
     SelectedSettlementCommandV4,
@@ -88,7 +89,7 @@ from core_console.problems import ApplicationProblem
 # budgets to each transaction, including uniqueness waits and Finance locks.
 ADMISSION_LOCK_TIMEOUT_MS = 250
 EXECUTION_LOCK_TIMEOUT_MS = 250
-OPEN_ADMISSION_VERSIONS = frozenset({"1", "2", "3", "4"})
+OPEN_ADMISSION_VERSIONS = frozenset({"1", "2", "3", "4", "5"})
 
 
 def submission_problem(status: int, code: str, detail: str) -> ApplicationProblem:
@@ -280,7 +281,7 @@ async def _submit_create(
         _compare(row, version)
     if version != "1" and not (
         (version == "2" and operation in ("createFinanceAdvance", "createFinanceSettlement"))
-        or (version in ("3", "4") and operation == "createFinanceSettlement")
+        or (version in ("3", "4", "5") and operation == "createFinanceSettlement")
     ):
         raise submission_problem(
             422, "finance_command_version_unsupported", "Command version is not supported."
@@ -315,7 +316,9 @@ async def _submit_create(
             else SettlementCommandV3,
         }
         body = (
-            TypeAdapter(SettlementCommandV4).validate_python(attempted_body)
+            ForgivenessCommandV5.model_validate(attempted_body)
+            if operation == "createFinanceSettlement" and version == "5"
+            else TypeAdapter(SettlementCommandV4).validate_python(attempted_body)
             if operation == "createFinanceSettlement" and version == "4"
             else TypeAdapter(TransactionCommandV1).validate_python(attempted_body)
             if operation == "createFinanceTransaction"
@@ -431,6 +434,7 @@ async def _submit_create(
                 SelectedSettlementCommandV4,
                 SelectedCreditSettlementCommandV4,
                 SelectedIncomeSettlementCommandV4,
+                ForgivenessCommandV5,
             ),
         )
         else {"name": body.name},
@@ -487,6 +491,7 @@ async def _submit_create(
                     SelectedSettlementCommandV4,
                     SelectedCreditSettlementCommandV4,
                     SelectedIncomeSettlementCommandV4,
+                    ForgivenessCommandV5,
                 ),
             ):
                 assert target_ledger_id is not None
