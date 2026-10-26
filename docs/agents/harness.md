@@ -50,6 +50,13 @@ resolved base-to-HEAD, unstaged, and staged `git diff --check`. It requires
 and reports success only after pytest actually passes in that mode. It never falls back
 to `DATABASE_URL`.
 
+Test processes sharing the same `TEST_DATABASE_URL` must run serially, including
+focused tests, protected validation, migration tests, and reviewer checks: integration
+fixtures reset the schema and delete shared records, so overlapping processes can
+interfere with each other. Parallel test processes require separately provisioned
+guarded databases. Intentional concurrency scenarios within a single test remain
+allowed.
+
 ## Snapshot digest
 
 Snapshot schema `core-console-agent-snapshot/v1` is SHA-256 over ordered,
