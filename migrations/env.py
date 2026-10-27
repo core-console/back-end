@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from core_console.config import load_settings
 from core_console.modules.finance.advance_models import FinanceAdvance, FinanceObligation
+from core_console.modules.finance.credit_application_models import (
+    FinanceCreditApplicationAllocation,
+)
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceCategory,
@@ -38,6 +41,7 @@ assert target_metadata is FinanceParticipant.metadata
 assert target_metadata is FinanceAdvance.metadata
 assert target_metadata is FinanceObligation.metadata
 assert target_metadata is FinanceSubmission.metadata
+assert target_metadata is FinanceCreditApplicationAllocation.metadata
 assert target_metadata is FinanceCreditOrigin.metadata
 assert target_metadata is FinanceSettlement.metadata
 assert target_metadata is FinanceSettlementAllocation.metadata

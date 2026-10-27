@@ -16,6 +16,12 @@ from core_console.modules.finance.advances import (
     list_participant_obligations,
     require_advance_ledger,
 )
+from core_console.modules.finance.credit_applications import (
+    execute_credit_application,
+    inspect_credit_application,
+    preview_credit_application,
+)
+from core_console.modules.finance.credits import _credit_origins
 from core_console.modules.finance.forgiveness import (
     execute_create_forgiveness,
     preview_forgiveness,
@@ -47,6 +53,9 @@ from core_console.modules.finance.settlement_schemas import (
     CombinedSettlementDraftV6,
     CombinedSettlementPreview,
     CombinedSettlementResponse,
+    CreditApplicationCommandV7,
+    CreditApplicationDraftV7,
+    CreditApplicationPreview,
     CreditOriginResponse,
     CreditSettlementPreview,
     CreditSettlementResponse,
@@ -86,7 +95,8 @@ async def preview_settlement(
     | SettlementDraftV3
     | SettlementDraftV4
     | ForgivenessDraftV5
-    | CombinedSettlementDraftV6,
+    | CombinedSettlementDraftV6
+    | CreditApplicationDraftV7,
     lock: bool = False,
 ) -> (
     SettlementPreview
@@ -94,7 +104,12 @@ async def preview_settlement(
     | IncomeSettlementPreview
     | ForgivenessPreview
     | CombinedSettlementPreview
+    | CreditApplicationPreview
 ):
+    if isinstance(draft, CreditApplicationDraftV7):
+        return await preview_credit_application(
+            session, owner_id=owner_id, ledger_id=ledger_id, draft=draft, lock=lock
+        )
     if isinstance(draft, ForgivenessDraftV5):
         return await preview_forgiveness(
             session, owner_id=owner_id, ledger_id=ledger_id, draft=draft, lock=lock
@@ -338,8 +353,13 @@ async def execute_create_settlement(
     | SettlementCommandV3
     | SettlementCommandV4
     | ForgivenessCommandV5
-    | CombinedSettlementCommandV6,
+    | CombinedSettlementCommandV6
+    | CreditApplicationCommandV7,
 ) -> UUID:
+    if isinstance(command, CreditApplicationCommandV7):
+        return await execute_credit_application(
+            session, owner_id=owner_id, ledger_id=ledger_id, command=command
+        )
     if isinstance(command, ForgivenessCommandV5):
         return await execute_create_forgiveness(
             session, owner_id=owner_id, ledger_id=ledger_id, command=command
@@ -347,7 +367,7 @@ async def execute_create_settlement(
     preview = await preview_settlement(
         session, owner_id=owner_id, ledger_id=ledger_id, draft=command, lock=True
     )
-    assert not isinstance(preview, ForgivenessPreview)
+    assert not isinstance(preview, (ForgivenessPreview, CreditApplicationPreview))
     settlement = FinanceSettlement(
         ledger_id=ledger_id,
         participant_id=command.participant_id,
@@ -436,6 +456,8 @@ async def inspect_settlement(
     )
     if settlement is None:
         raise _problem(404, "finance_settlement_not_found", "Settlement was not found.")
+    if settlement.action_kind == "creditApplication":
+        return await inspect_credit_application(session, settlement)
     rows = (
         await session.execute(
             select(FinanceSettlementAllocation, FinanceObligation, FinanceAdvance)
@@ -567,7 +589,11 @@ async def inspect_settlement(
                 **result.model_dump(by_alias=True),
                 "transactionIds": [*result.transaction_ids, origin.transaction_id],
             },
-            creditOrigin=_origin_response(origin, settlement),
+            creditOrigin=next(
+                row
+                for row in await _credit_origins(session, ledger_id, settlement.participant_id)
+                if row.settlement_id == settlement.id
+            ),
         )
     return (
         SelectedSettlementResponse.model_validate({**result.model_dump(by_alias=True), **scope})
@@ -654,42 +680,6 @@ async def _record_credit(
             ),
         ]
     )
-
-
-def _origin_response(
-    origin: FinanceCreditOrigin, settlement: FinanceSettlement
-) -> CreditOriginResponse:
-    assert settlement.receiving_account_id is not None
-    return CreditOriginResponse(
-        settlementId=settlement.id,
-        ledgerId=settlement.ledger_id,
-        participantId=settlement.participant_id,
-        receivingAccountId=settlement.receiving_account_id,
-        liabilityAccountId=origin.liability_account_id,
-        transactionId=origin.transaction_id,
-        transactionDate=settlement.transaction_date,
-        confirmedAt=settlement.confirmed_at,
-        confirmationOrder=settlement.confirmation_order,
-        amount=_money(origin.amount, settlement.currency),
-        available=_money(origin.amount, settlement.currency),
-    )
-
-
-async def _credit_origins(
-    session: AsyncSession, ledger_id: UUID, participant_id: UUID
-) -> list[CreditOriginResponse]:
-    rows = (
-        await session.execute(
-            select(FinanceCreditOrigin, FinanceSettlement)
-            .join(FinanceSettlement, FinanceSettlement.id == FinanceCreditOrigin.settlement_id)
-            .where(
-                FinanceSettlement.ledger_id == ledger_id,
-                FinanceSettlement.participant_id == participant_id,
-            )
-            .order_by(FinanceSettlement.confirmation_order, FinanceSettlement.id)
-        )
-    ).all()
-    return [_origin_response(origin, settlement) for origin, settlement in rows]
 
 
 async def list_participant_credits(

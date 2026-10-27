@@ -28,10 +28,13 @@ class FinanceSettlement(Base):
     __tablename__ = "finance_settlements"
     __table_args__ = (
         CheckConstraint(
-            "(receiving_account_id IS NOT NULL AND reason IS NULL) OR "
+            "(action_kind = 'creditApplication' AND receiving_account_id IS NULL "
+            "AND reason IS NULL AND selected_obligation_ids IS NOT NULL) OR "
+            "(action_kind = 'standard' AND "
+            "((receiving_account_id IS NOT NULL AND reason IS NULL) OR "
             "(reason IS NOT NULL "
             "AND reason = btrim(reason) AND char_length(reason) BETWEEN 1 AND 500 "
-            "AND selected_obligation_ids IS NOT NULL)",
+            "AND selected_obligation_ids IS NOT NULL)))",
             name="ck_finance_settlements_action",
         ),
         CheckConstraint(
@@ -71,6 +74,7 @@ class FinanceSettlement(Base):
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
     ledger_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     participant_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    action_kind: Mapped[str] = mapped_column(Text, server_default="standard")
     receiving_account_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
     reason: Mapped[str | None] = mapped_column(Text)
     transaction_date: Mapped[date] = mapped_column(Date)
@@ -139,6 +143,7 @@ class FinanceCreditOrigin(Base):
 
     __tablename__ = "finance_credit_origins"
     __table_args__ = (
+        UniqueConstraint("settlement_id", "ledger_id", name="uq_finance_credit_origin_ledger"),
         UniqueConstraint("liability_account_id", name="uq_finance_credit_account"),
         UniqueConstraint("transaction_id", name="uq_finance_credit_transaction"),
         ForeignKeyConstraint(

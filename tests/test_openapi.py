@@ -1002,6 +1002,7 @@ def test_combined_settlement_contract_retains_typed_stages_and_versioned_recover
             "4",
             "5",
             "6",
+            "7",
         ]
     for path, method, status in (
         ("/settlements/preview", "post", "200"),
@@ -1016,6 +1017,55 @@ def test_combined_settlement_contract_retains_typed_stages_and_versioned_recover
         if "$ref" in response:
             response = schema["components"]["schemas"][response["$ref"].rsplit("/", 1)[1]]
         assert any("CombinedSettlement" in branch.get("$ref", "") for branch in response["anyOf"])
+
+
+def test_credit_application_contract_exposes_closed_intent_provenance_and_v7_recovery(
+    app: FastAPI,
+) -> None:
+    schema = app.openapi()
+    base = "/finance/ledgers/{ledgerId}"
+    for path in ("/settlements/preview", "/settlements"):
+        branches = schema["paths"][base + path]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]["anyOf"]
+        command = next(
+            branch
+            for branch in branches
+            if branch.get("properties", {}).get("kind", {}).get("const") == "creditApplication"
+        )
+        assert command["additionalProperties"] is False
+        assert set(command["properties"]) == {
+            "kind",
+            "participantId",
+            "selectedObligationIds",
+            "transactionDate",
+            "amount",
+            "note",
+        } | ({"previewToken"} if path == "/settlements" else set())
+        assert command["properties"]["amount"]["additionalProperties"] is False
+        assert {
+            "kind",
+            "participantId",
+            "selectedObligationIds",
+            "transactionDate",
+            "amount",
+        } <= set(command["required"])
+    for name in ("CreditApplicationPreview", "CreditApplicationResponse"):
+        properties = schema["components"]["schemas"][name]["properties"]
+        assert properties["kind"]["const"] == "creditApplication"
+        assert {"allocations", "origins", "amount"} <= set(properties)
+        assert not {"receivingAccountId", "receivingBalance", "expense", "income"} & set(properties)
+    allocation = schema["components"]["schemas"]["CreditApplicationAllocationResponse"][
+        "properties"
+    ]
+    assert allocation["kind"]["const"] == "creditApplication"
+    assert {
+        "creditApplied",
+        "originSettlementId",
+        "obligationId",
+        "position",
+        "remainingAfter",
+    } <= set(allocation)
 
 
 def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI) -> None:
@@ -1039,7 +1089,7 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
         "application/json"
     ]["schema"]["anyOf"]
     commands = [*commands[:3], *commands[3]["anyOf"], *commands[4:]]
-    assert len(commands) == 8
+    assert len(commands) == 9
     command, credit_command, income_command = commands[:3]
     for original, selected in zip(commands[:3], commands[3:6], strict=True):
         assert selected["additionalProperties"] is False
@@ -1066,7 +1116,7 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     assert "previewToken" in credit_command["required"]
     assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4", "5", "6"]
+    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4", "5", "6", "7"]
     forgiveness = commands[6]
     assert forgiveness["additionalProperties"] is False
     assert forgiveness["properties"]["kind"]["const"] == "forgiveness"

@@ -3488,6 +3488,265 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CreditApplicationAllocationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "advanceId": {
+            "format": "uuid",
+            "title": "Advanceid",
+            "type": "string"
+          },
+          "creditApplied": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "kind": {
+            "const": "creditApplication",
+            "default": "creditApplication",
+            "title": "Kind",
+            "type": "string"
+          },
+          "obligationId": {
+            "format": "uuid",
+            "title": "Obligationid",
+            "type": "string"
+          },
+          "originSettlementId": {
+            "format": "uuid",
+            "title": "Originsettlementid",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "remainingAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "sourceDate": {
+            "format": "date",
+            "title": "Sourcedate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "position",
+          "obligationId",
+          "advanceId",
+          "sourceDate",
+          "originSettlementId",
+          "creditApplied",
+          "remainingAfter"
+        ],
+        "title": "CreditApplicationAllocationResponse",
+        "type": "object"
+      },
+      "CreditApplicationPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CreditApplicationAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "availableCreditAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "availableCreditBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "kind": {
+            "const": "creditApplication",
+            "default": "creditApplication",
+            "title": "Kind",
+            "type": "string"
+          },
+          "origins": {
+            "items": {
+              "$ref": "#/components/schemas/CreditConsumptionResponse"
+            },
+            "title": "Origins",
+            "type": "array"
+          },
+          "outstandingAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "outstandingBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "previewToken": {
+            "title": "Previewtoken",
+            "type": "string"
+          }
+        },
+        "required": [
+          "previewToken",
+          "amount",
+          "availableCreditBefore",
+          "availableCreditAfter",
+          "outstandingBefore",
+          "outstandingAfter",
+          "allocations",
+          "origins"
+        ],
+        "title": "CreditApplicationPreview",
+        "type": "object"
+      },
+      "CreditApplicationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/CreditApplicationAllocationResponse"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "creditApplication",
+            "default": "creditApplication",
+            "title": "Kind",
+            "type": "string"
+          },
+          "ledgerId": {
+            "format": "uuid",
+            "title": "Ledgerid",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "origins": {
+            "items": {
+              "$ref": "#/components/schemas/CreditConsumptionResponse"
+            },
+            "title": "Origins",
+            "type": "array"
+          },
+          "participantId": {
+            "format": "uuid",
+            "title": "Participantid",
+            "type": "string"
+          },
+          "selectedObligationIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Selectedobligationids",
+            "type": "array"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transactionids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selectedObligationIds",
+          "id",
+          "ledgerId",
+          "participantId",
+          "transactionDate",
+          "amount",
+          "note",
+          "confirmedAt",
+          "confirmationOrder",
+          "transactionIds",
+          "allocations",
+          "origins"
+        ],
+        "title": "CreditApplicationResponse",
+        "type": "object"
+      },
+      "CreditConsumptionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "availableAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "availableBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "liabilityAccountId": {
+            "format": "uuid",
+            "title": "Liabilityaccountid",
+            "type": "string"
+          },
+          "originConfirmationOrder": {
+            "title": "Originconfirmationorder",
+            "type": "integer"
+          },
+          "originDate": {
+            "format": "date",
+            "title": "Origindate",
+            "type": "string"
+          },
+          "originSettlementId": {
+            "format": "uuid",
+            "title": "Originsettlementid",
+            "type": "string"
+          },
+          "originTransactionId": {
+            "format": "uuid",
+            "title": "Origintransactionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "originSettlementId",
+          "originTransactionId",
+          "liabilityAccountId",
+          "originDate",
+          "originConfirmationOrder",
+          "amount",
+          "availableBefore",
+          "availableAfter"
+        ],
+        "title": "CreditConsumptionResponse",
+        "type": "object"
+      },
       "CreditOriginResponse": {
         "additionalProperties": false,
         "properties": {
@@ -5934,7 +6193,8 @@
               "3",
               "4",
               "5",
-              "6"
+              "6",
+              "7"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6052,7 +6312,8 @@
               "3",
               "4",
               "5",
-              "6"
+              "6",
+              "7"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6305,7 +6566,8 @@
               "3",
               "4",
               "5",
-              "6"
+              "6",
+              "7"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6432,6 +6694,9 @@
       "SettlementSource": {
         "anyOf": [
           {
+            "$ref": "#/components/schemas/CreditApplicationResponse"
+          },
+          {
             "$ref": "#/components/schemas/CombinedSettlementResponse"
           },
           {
@@ -6472,7 +6737,8 @@
               "3",
               "4",
               "5",
-              "6"
+              "6",
+              "7"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -6543,7 +6809,8 @@
               "3",
               "4",
               "5",
-              "6"
+              "6",
+              "7"
             ],
             "title": "Commandversion",
             "type": "string"
@@ -11737,7 +12004,7 @@
     },
     "/finance/ledgers/{ledgerId}/settlements": {
       "post": {
-        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation equal to the positive actual surplus, creating linked Income without credit. Version 4 requires selectedObligationIds and allocates only within that eligible outstanding subset, with the same explicit excess choices. Version 5 requires kind=forgiveness, selectedObligationIds, a positive amount and reason. It records non-cash Expense against selected receivables without a receiving Account. Version 6 requires kind=combined, selectedObligationIds, positive cash amount, positive same-currency forgivenessAmount and reason. Cash allocates first, then forgiveness within remaining selected capacity; one atomic outcome retains both. Credit use and Corrections are not supported. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
+        "description": "Confirm one participant's accumulated cash repayment. Version 1 requires the matching previewToken and allocates all eligible debt oldest Advance date first. Version 2 requires excessDisposition=retainCredit and records any unallocated actual receipt as a participant credit Liability, including without eligible debt. Version 3 requires excessDisposition=acceptIncome and one complete Category Allocation equal to the positive actual surplus, creating linked Income without credit. Version 4 requires selectedObligationIds and allocates only within that eligible outstanding subset, with the same explicit excess choices. Version 5 requires kind=forgiveness, selectedObligationIds, a positive amount and reason. It records non-cash Expense against selected receivables without a receiving Account. Version 6 requires kind=combined, selectedObligationIds, positive cash amount, positive same-currency forgivenessAmount and reason. Cash allocates first, then forgiveness within remaining selected capacity; one atomic outcome retains both. Version 7 requires kind=creditApplication, selectedObligationIds and a positive amount. It consumes oldest credit origins and selected debt without cash or Income/Expense. Credit return and Corrections are not supported. Prepare one immutable submission identity before dispatch; recover under that same identity using getFinanceSubmission or an explicit retry.",
         "operationId": "createFinanceSettlement",
         "parameters": [
           {
@@ -12580,6 +12847,87 @@
                       "previewToken"
                     ],
                     "title": "CombinedSettlementCommandV6",
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "creditApplication",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
+                        "type": "string"
+                      },
+                      "previewToken": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "title": "Previewtoken",
+                        "type": "string"
+                      },
+                      "selectedObligationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "title": "Selectedobligationids",
+                        "type": "array"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "selectedObligationIds",
+                      "transactionDate",
+                      "kind",
+                      "participantId",
+                      "amount",
+                      "previewToken"
+                    ],
+                    "title": "CreditApplicationCommandV7",
                     "type": "object"
                   }
                 ]
@@ -13448,6 +13796,81 @@
                     ],
                     "title": "ForgivenessDraftV5",
                     "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "description": "Plain base-10 decimal string. A non-zero value may have at most 131,072 integer digits after insignificant leading zeros are removed. V1 precision is CNY/USD: 2 and JPY: 0; excess fractional digits are invalid, even zeros.",
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "enum": [
+                              "CNY",
+                              "JPY",
+                              "USD"
+                            ],
+                            "title": "Currency",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "currency"
+                        ],
+                        "title": "OpeningBalanceV1",
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "creditApplication",
+                        "title": "Kind",
+                        "type": "string"
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "maxLength": 500,
+                        "title": "Note"
+                      },
+                      "participantId": {
+                        "format": "uuid",
+                        "title": "Participantid",
+                        "type": "string"
+                      },
+                      "selectedObligationIds": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "title": "Selectedobligationids",
+                        "type": "array"
+                      },
+                      "transactionDate": {
+                        "format": "date",
+                        "title": "Transactiondate",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "selectedObligationIds",
+                      "transactionDate",
+                      "kind",
+                      "participantId",
+                      "amount"
+                    ],
+                    "title": "CreditApplicationDraftV7",
+                    "type": "object"
                   }
                 ]
               }
@@ -13461,6 +13884,9 @@
               "application/json": {
                 "schema": {
                   "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CreditApplicationPreview"
+                    },
                     {
                       "$ref": "#/components/schemas/CombinedSettlementPreview"
                     },

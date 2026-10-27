@@ -26,6 +26,9 @@ from core_console.modules.finance.advance_models import (
     FinanceAdvanceTransaction,
     FinanceObligation,
 )
+from core_console.modules.finance.credit_application_models import (
+    FinanceCreditApplicationAllocation,
+)
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -220,6 +223,7 @@ async def postgres_session(
             await session.rollback()
             await session.execute(delete(FinanceSubmission))
             await session.execute(delete(FinanceSettlementIncome))
+            await session.execute(delete(FinanceCreditApplicationAllocation))
             await session.execute(delete(FinanceCreditOrigin))
             await session.execute(delete(FinanceSettlementAllocation))
             await session.execute(delete(FinanceSettlement))

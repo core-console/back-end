@@ -15,6 +15,9 @@ from core_console.modules.finance.settlement_schemas import (
     CombinedSettlementCommandV6,
     CombinedSettlementDraftV6,
     CombinedSettlementPreview,
+    CreditApplicationCommandV7,
+    CreditApplicationDraftV7,
+    CreditApplicationPreview,
     CreditOriginResponse,
     CreditSettlementPreview,
     ForgivenessCommandV5,
@@ -75,7 +78,8 @@ def _request_schema(model: Any) -> dict[str, object]:
 @router.post(
     "/settlements/preview",
     operation_id="previewFinanceSettlement",
-    response_model=CombinedSettlementPreview
+    response_model=CreditApplicationPreview
+    | CombinedSettlementPreview
     | ForgivenessPreview
     | IncomeSettlementPreview
     | CreditSettlementPreview
@@ -94,6 +98,7 @@ def _request_schema(model: Any) -> dict[str, object]:
                         | SettlementDraftV4
                         | CombinedSettlementDraftV6
                         | ForgivenessDraftV5
+                        | CreditApplicationDraftV7
                     )
                 }
             },
@@ -111,6 +116,7 @@ async def post_preview(
     | IncomeSettlementPreview
     | ForgivenessPreview
     | CombinedSettlementPreview
+    | CreditApplicationPreview
 ):
     await _run_finance_workflow(require_advance_ledger(session, actor.id, ledger_id))
     try:
@@ -121,6 +127,7 @@ async def post_preview(
             | SettlementDraftV4
             | CombinedSettlementDraftV6
             | ForgivenessDraftV5
+            | CreditApplicationDraftV7
         ) = TypeAdapter(
             SettlementDraftV1
             | SettlementDraftV2
@@ -128,6 +135,7 @@ async def post_preview(
             | SettlementDraftV4
             | CombinedSettlementDraftV6
             | ForgivenessDraftV5
+            | CreditApplicationDraftV7
         ).validate_json(await request.body())
     except ValidationError:
         raise _problem(
@@ -154,7 +162,9 @@ async def post_preview(
         "Version 6 requires kind=combined, selectedObligationIds, positive cash amount, "
         "positive same-currency forgivenessAmount and reason. Cash allocates first, then "
         "forgiveness within remaining selected capacity; one atomic outcome retains both. "
-        "Credit use and Corrections are not supported. "
+        "Version 7 requires kind=creditApplication, selectedObligationIds and a positive amount. "
+        "It consumes oldest credit origins and selected debt without cash or Income/Expense. "
+        "Credit return and Corrections are not supported. "
         "Prepare one immutable submission identity before dispatch; recover under that "
         "same identity using getFinanceSubmission or an explicit retry."
     ),
@@ -184,6 +194,7 @@ async def post_preview(
                         | SettlementCommandV4
                         | ForgivenessCommandV5
                         | CombinedSettlementCommandV6
+                        | CreditApplicationCommandV7
                     )
                 }
             },
