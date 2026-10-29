@@ -414,6 +414,12 @@ COMMAND_CHECK = (
 )
 
 
+COMMAND_CHECK = (
+    f"({COMMAND_CHECK}) OR "
+    "(command_version = '8' AND finance_settlement_v8_command_valid(canonical_command))"
+)
+
+
 class FinanceSubmission(Base):
     """Exactly unfinished or terminal, unique across one user's commands."""
 

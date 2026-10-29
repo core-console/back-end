@@ -1003,6 +1003,7 @@ def test_combined_settlement_contract_retains_typed_stages_and_versioned_recover
             "5",
             "6",
             "7",
+            "8",
         ]
     for path, method, status in (
         ("/settlements/preview", "post", "200"),
@@ -1089,7 +1090,7 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
         "application/json"
     ]["schema"]["anyOf"]
     commands = [*commands[:3], *commands[3]["anyOf"], *commands[4:]]
-    assert len(commands) == 9
+    assert len(commands) == 10
     command, credit_command, income_command = commands[:3]
     for original, selected in zip(commands[:3], commands[3:6], strict=True):
         assert selected["additionalProperties"] is False
@@ -1116,7 +1117,16 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     assert "previewToken" in credit_command["required"]
     assert credit_command["properties"]["excessDisposition"]["const"] == "retainCredit"
     receipt = schema["components"]["schemas"]["SettlementCreatedReceipt"]
-    assert receipt["properties"]["commandVersion"]["enum"] == ["1", "2", "3", "4", "5", "6", "7"]
+    assert receipt["properties"]["commandVersion"]["enum"] == [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+    ]
     forgiveness = commands[6]
     assert forgiveness["additionalProperties"] is False
     assert forgiveness["properties"]["kind"]["const"] == "forgiveness"
@@ -1163,3 +1173,50 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
     } <= set(preview["required"])
     detail = schema["components"]["schemas"]["IncomeSettlementResponse"]
     assert {"acceptedSurplus", "incomeTransactionId"} <= set(detail["required"])
+
+
+def test_credit_return_contract_exposes_actual_account_and_origin_provenance(app: FastAPI) -> None:
+    schema = app.openapi()
+    base = "/finance/ledgers/{ledgerId}"
+    for path in ("/settlements/preview", "/settlements"):
+        branches = schema["paths"][base + path]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]["anyOf"]
+        command = next(
+            branch
+            for branch in branches
+            if branch.get("properties", {}).get("kind", {}).get("const") == "creditReturn"
+        )
+        assert command["additionalProperties"] is False
+        assert set(command["properties"]) == {
+            "kind",
+            "participantId",
+            "payingAccountId",
+            "transactionDate",
+            "amount",
+            "note",
+        } | ({"previewToken"} if path == "/settlements" else set())
+        assert set(command["required"]) == {
+            "kind",
+            "participantId",
+            "payingAccountId",
+            "transactionDate",
+            "amount",
+        } | ({"previewToken"} if path == "/settlements" else set())
+        assert command["properties"]["amount"]["additionalProperties"] is False
+    for name in ("CreditReturnPreview", "CreditReturnResponse"):
+        properties = schema["components"]["schemas"][name]["properties"]
+        assert properties["kind"]["const"] == "creditReturn"
+        assert {"amount", "origins"} <= set(properties)
+        assert not {"receivingAccountId", "allocations", "expense", "income"} & set(properties)
+    preview = schema["components"]["schemas"]["CreditReturnPreview"]["properties"]
+    assert {
+        "payingBalance",
+        "payingBalanceAfter",
+        "availableCreditBefore",
+        "availableCreditAfter",
+    } <= set(preview)
+    detail = schema["components"]["schemas"]["CreditReturnResponse"]["properties"]
+    assert {"payingAccountId", "transactionDate", "confirmationOrder", "transactionIds"} <= set(
+        detail
+    )

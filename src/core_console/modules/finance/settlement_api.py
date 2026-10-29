@@ -19,6 +19,9 @@ from core_console.modules.finance.settlement_schemas import (
     CreditApplicationDraftV7,
     CreditApplicationPreview,
     CreditOriginResponse,
+    CreditReturnCommandV8,
+    CreditReturnDraftV8,
+    CreditReturnPreview,
     CreditSettlementPreview,
     ForgivenessCommandV5,
     ForgivenessDraftV5,
@@ -78,7 +81,8 @@ def _request_schema(model: Any) -> dict[str, object]:
 @router.post(
     "/settlements/preview",
     operation_id="previewFinanceSettlement",
-    response_model=CreditApplicationPreview
+    response_model=CreditReturnPreview
+    | CreditApplicationPreview
     | CombinedSettlementPreview
     | ForgivenessPreview
     | IncomeSettlementPreview
@@ -98,6 +102,7 @@ def _request_schema(model: Any) -> dict[str, object]:
                         | SettlementDraftV4
                         | CombinedSettlementDraftV6
                         | ForgivenessDraftV5
+                        | CreditReturnDraftV8
                         | CreditApplicationDraftV7
                     )
                 }
@@ -116,6 +121,7 @@ async def post_preview(
     | IncomeSettlementPreview
     | ForgivenessPreview
     | CombinedSettlementPreview
+    | CreditReturnPreview
     | CreditApplicationPreview
 ):
     await _run_finance_workflow(require_advance_ledger(session, actor.id, ledger_id))
@@ -127,6 +133,7 @@ async def post_preview(
             | SettlementDraftV4
             | CombinedSettlementDraftV6
             | ForgivenessDraftV5
+            | CreditReturnDraftV8
             | CreditApplicationDraftV7
         ) = TypeAdapter(
             SettlementDraftV1
@@ -135,6 +142,7 @@ async def post_preview(
             | SettlementDraftV4
             | CombinedSettlementDraftV6
             | ForgivenessDraftV5
+            | CreditReturnDraftV8
             | CreditApplicationDraftV7
         ).validate_json(await request.body())
     except ValidationError:
@@ -164,7 +172,9 @@ async def post_preview(
         "forgiveness within remaining selected capacity; one atomic outcome retains both. "
         "Version 7 requires kind=creditApplication, selectedObligationIds and a positive amount. "
         "It consumes oldest credit origins and selected debt without cash or Income/Expense. "
-        "Credit return and Corrections are not supported. "
+        "Version 8 requires kind=creditReturn, payingAccountId and a positive amount. "
+        "It returns actual money using oldest credit origins with no Income/Expense. "
+        "Corrections are not supported. "
         "Prepare one immutable submission identity before dispatch; recover under that "
         "same identity using getFinanceSubmission or an explicit retry."
     ),
@@ -194,6 +204,7 @@ async def post_preview(
                         | SettlementCommandV4
                         | ForgivenessCommandV5
                         | CombinedSettlementCommandV6
+                        | CreditReturnCommandV8
                         | CreditApplicationCommandV7
                     )
                 }
@@ -254,7 +265,8 @@ async def get_settlements(
     "/participants/{participantId}/credits",
     operation_id="listFinanceParticipantCredits",
     description="Receipt-backed credit origins in immutable receipt confirmation order. "
-    "Financial event dates do not change origin ordering; credit use and return are not supported.",
+    "Financial event dates do not change origin ordering. Available amounts exclude "
+    "confirmed applications and actual returns.",
     response_model=list[CreditOriginResponse],
     responses=_READ_ERRORS,
     openapi_extra={"security": []},

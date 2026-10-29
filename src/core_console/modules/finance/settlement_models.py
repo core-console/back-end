@@ -28,13 +28,17 @@ class FinanceSettlement(Base):
     __tablename__ = "finance_settlements"
     __table_args__ = (
         CheckConstraint(
-            "(action_kind = 'creditApplication' AND receiving_account_id IS NULL "
+            "(action_kind = 'creditReturn' AND paying_account_id IS NOT NULL "
+            "AND receiving_account_id IS NULL AND reason IS NULL "
+            "AND selected_obligation_ids IS NULL) OR "
+            "(paying_account_id IS NULL AND ((action_kind = 'creditApplication' "
+            "AND receiving_account_id IS NULL "
             "AND reason IS NULL AND selected_obligation_ids IS NOT NULL) OR "
             "(action_kind = 'standard' AND "
             "((receiving_account_id IS NOT NULL AND reason IS NULL) OR "
             "(reason IS NOT NULL "
             "AND reason = btrim(reason) AND char_length(reason) BETWEEN 1 AND 500 "
-            "AND selected_obligation_ids IS NOT NULL)))",
+            "AND selected_obligation_ids IS NOT NULL)))))",
             name="ck_finance_settlements_action",
         ),
         CheckConstraint(
@@ -52,6 +56,11 @@ class FinanceSettlement(Base):
         ForeignKeyConstraint(
             ["receiving_account_id", "ledger_id"],
             ["finance_accounts.id", "finance_accounts.ledger_id"],
+        ),
+        ForeignKeyConstraint(
+            ["paying_account_id", "ledger_id"],
+            ["finance_accounts.id", "finance_accounts.ledger_id"],
+            name="fk_finance_settlement_paying_account",
         ),
         CheckConstraint(
             "amount > 0 AND amount NOT IN "
@@ -76,6 +85,7 @@ class FinanceSettlement(Base):
     participant_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     action_kind: Mapped[str] = mapped_column(Text, server_default="standard")
     receiving_account_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    paying_account_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
     reason: Mapped[str | None] = mapped_column(Text)
     transaction_date: Mapped[date] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(Numeric())

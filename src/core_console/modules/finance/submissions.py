@@ -42,6 +42,7 @@ from core_console.modules.finance.service import (
 from core_console.modules.finance.settlement_schemas import (
     CombinedSettlementCommandV6,
     CreditApplicationCommandV7,
+    CreditReturnCommandV8,
     ForgivenessCommandV5,
     SelectedCreditSettlementCommandV4,
     SelectedIncomeSettlementCommandV4,
@@ -91,7 +92,7 @@ from core_console.problems import ApplicationProblem
 # budgets to each transaction, including uniqueness waits and Finance locks.
 ADMISSION_LOCK_TIMEOUT_MS = 250
 EXECUTION_LOCK_TIMEOUT_MS = 250
-OPEN_ADMISSION_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7"})
+OPEN_ADMISSION_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7", "8"})
 
 
 def submission_problem(status: int, code: str, detail: str) -> ApplicationProblem:
@@ -283,7 +284,7 @@ async def _submit_create(
         _compare(row, version)
     if version != "1" and not (
         (version == "2" and operation in ("createFinanceAdvance", "createFinanceSettlement"))
-        or (version in ("3", "4", "5", "6", "7") and operation == "createFinanceSettlement")
+        or (version in ("3", "4", "5", "6", "7", "8") and operation == "createFinanceSettlement")
     ):
         raise submission_problem(
             422, "finance_command_version_unsupported", "Command version is not supported."
@@ -318,7 +319,9 @@ async def _submit_create(
             else SettlementCommandV3,
         }
         body = (
-            CreditApplicationCommandV7.model_validate(attempted_body)
+            CreditReturnCommandV8.model_validate(attempted_body)
+            if operation == "createFinanceSettlement" and version == "8"
+            else CreditApplicationCommandV7.model_validate(attempted_body)
             if operation == "createFinanceSettlement" and version == "7"
             else CombinedSettlementCommandV6.model_validate(attempted_body)
             if operation == "createFinanceSettlement" and version == "6"
@@ -443,6 +446,7 @@ async def _submit_create(
                 ForgivenessCommandV5,
                 CombinedSettlementCommandV6,
                 CreditApplicationCommandV7,
+                CreditReturnCommandV8,
             ),
         )
         else {"name": body.name},
@@ -502,6 +506,7 @@ async def _submit_create(
                     ForgivenessCommandV5,
                     CombinedSettlementCommandV6,
                     CreditApplicationCommandV7,
+                    CreditReturnCommandV8,
                 ),
             ):
                 assert target_ledger_id is not None

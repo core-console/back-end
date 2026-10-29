@@ -186,7 +186,7 @@ async def test_all_combined_submission_states_prevent_destructive_downgrade(
     async with postgres_engine.connect() as connection:
         assert (
             await connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261027_01"
+            == "20261029_01"
         )
 
 

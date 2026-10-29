@@ -464,8 +464,65 @@ class CreditApplicationResponse(_Projection, SelectedScope):
     origins: list[CreditConsumptionResponse]
 
 
+class CreditReturnDraftV8(_TransactionCommandV1):
+    kind: Literal["creditReturn"]
+    participant_id: UUID = Field(alias="participantId")
+    paying_account_id: UUID = Field(alias="payingAccountId")
+    amount: OpeningBalanceV1
+
+    @model_validator(mode="after")
+    def positive_return(self) -> Self:
+        if Decimal(self.amount.amount) <= 0:
+            raise ValueError("Credit return must be positive.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "participantId": str(self.participant_id),
+            "payingAccountId": str(self.paying_account_id),
+            "transactionDate": self.transaction_date.isoformat(),
+            "amount": self.amount.canonical(),
+            "note": self.note,
+        }
+
+
+class CreditReturnCommandV8(CreditReturnDraftV8):
+    preview_token: str = Field(alias="previewToken", strict=True, pattern=r"^[0-9a-f]{64}$")
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "previewToken": self.preview_token}
+
+
+class CreditReturnPreview(_Projection):
+    kind: Literal["creditReturn"] = "creditReturn"
+    preview_token: str = Field(alias="previewToken")
+    amount: MoneyResponse
+    paying_balance: MoneyResponse = Field(alias="payingBalance")
+    paying_balance_after: MoneyResponse = Field(alias="payingBalanceAfter")
+    available_credit_before: MoneyResponse = Field(alias="availableCreditBefore")
+    available_credit_after: MoneyResponse = Field(alias="availableCreditAfter")
+    origins: list[CreditConsumptionResponse]
+
+
+class CreditReturnResponse(_Projection):
+    kind: Literal["creditReturn"] = "creditReturn"
+    id: UUID
+    ledger_id: UUID = Field(alias="ledgerId")
+    participant_id: UUID = Field(alias="participantId")
+    paying_account_id: UUID = Field(alias="payingAccountId")
+    transaction_date: date = Field(alias="transactionDate")
+    amount: MoneyResponse
+    note: str | None
+    confirmed_at: datetime = Field(alias="confirmedAt")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_ids: list[UUID] = Field(alias="transactionIds")
+    origins: list[CreditConsumptionResponse]
+
+
 type SettlementSource = (
-    CreditApplicationResponse
+    CreditReturnResponse
+    | CreditApplicationResponse
     | CombinedSettlementResponse
     | ForgivenessResponse
     | SelectedIncomeSettlementResponse

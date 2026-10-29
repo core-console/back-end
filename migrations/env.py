@@ -14,6 +14,7 @@ from core_console.modules.finance.advance_models import FinanceAdvance, FinanceO
 from core_console.modules.finance.credit_application_models import (
     FinanceCreditApplicationAllocation,
 )
+from core_console.modules.finance.credit_return_models import FinanceCreditReturnFragment
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceCategory,
@@ -42,6 +43,7 @@ assert target_metadata is FinanceAdvance.metadata
 assert target_metadata is FinanceObligation.metadata
 assert target_metadata is FinanceSubmission.metadata
 assert target_metadata is FinanceCreditApplicationAllocation.metadata
+assert target_metadata is FinanceCreditReturnFragment.metadata
 assert target_metadata is FinanceCreditOrigin.metadata
 assert target_metadata is FinanceSettlement.metadata
 assert target_metadata is FinanceSettlementAllocation.metadata

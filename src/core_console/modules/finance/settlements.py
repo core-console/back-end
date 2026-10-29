@@ -21,6 +21,11 @@ from core_console.modules.finance.credit_applications import (
     inspect_credit_application,
     preview_credit_application,
 )
+from core_console.modules.finance.credit_returns import (
+    execute_credit_return,
+    inspect_credit_return,
+    preview_credit_return,
+)
 from core_console.modules.finance.credits import _credit_origins
 from core_console.modules.finance.forgiveness import (
     execute_create_forgiveness,
@@ -57,6 +62,9 @@ from core_console.modules.finance.settlement_schemas import (
     CreditApplicationDraftV7,
     CreditApplicationPreview,
     CreditOriginResponse,
+    CreditReturnCommandV8,
+    CreditReturnDraftV8,
+    CreditReturnPreview,
     CreditSettlementPreview,
     CreditSettlementResponse,
     ForgivenessAllocationResponse,
@@ -96,6 +104,7 @@ async def preview_settlement(
     | SettlementDraftV4
     | ForgivenessDraftV5
     | CombinedSettlementDraftV6
+    | CreditReturnDraftV8
     | CreditApplicationDraftV7,
     lock: bool = False,
 ) -> (
@@ -104,8 +113,13 @@ async def preview_settlement(
     | IncomeSettlementPreview
     | ForgivenessPreview
     | CombinedSettlementPreview
+    | CreditReturnPreview
     | CreditApplicationPreview
 ):
+    if isinstance(draft, CreditReturnDraftV8):
+        return await preview_credit_return(
+            session, owner_id=owner_id, ledger_id=ledger_id, draft=draft, lock=lock
+        )
     if isinstance(draft, CreditApplicationDraftV7):
         return await preview_credit_application(
             session, owner_id=owner_id, ledger_id=ledger_id, draft=draft, lock=lock
@@ -354,8 +368,13 @@ async def execute_create_settlement(
     | SettlementCommandV4
     | ForgivenessCommandV5
     | CombinedSettlementCommandV6
+    | CreditReturnCommandV8
     | CreditApplicationCommandV7,
 ) -> UUID:
+    if isinstance(command, CreditReturnCommandV8):
+        return await execute_credit_return(
+            session, owner_id=owner_id, ledger_id=ledger_id, command=command
+        )
     if isinstance(command, CreditApplicationCommandV7):
         return await execute_credit_application(
             session, owner_id=owner_id, ledger_id=ledger_id, command=command
@@ -367,7 +386,9 @@ async def execute_create_settlement(
     preview = await preview_settlement(
         session, owner_id=owner_id, ledger_id=ledger_id, draft=command, lock=True
     )
-    assert not isinstance(preview, (ForgivenessPreview, CreditApplicationPreview))
+    assert not isinstance(
+        preview, (ForgivenessPreview, CreditApplicationPreview, CreditReturnPreview)
+    )
     settlement = FinanceSettlement(
         ledger_id=ledger_id,
         participant_id=command.participant_id,
@@ -456,6 +477,8 @@ async def inspect_settlement(
     )
     if settlement is None:
         raise _problem(404, "finance_settlement_not_found", "Settlement was not found.")
+    if settlement.action_kind == "creditReturn":
+        return await inspect_credit_return(session, settlement)
     if settlement.action_kind == "creditApplication":
         return await inspect_credit_application(session, settlement)
     rows = (

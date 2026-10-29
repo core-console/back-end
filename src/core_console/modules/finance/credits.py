@@ -10,6 +10,7 @@ from core_console.modules.finance.advances import _money
 from core_console.modules.finance.credit_application_models import (
     FinanceCreditApplicationAllocation,
 )
+from core_console.modules.finance.credit_return_models import FinanceCreditReturnFragment
 from core_console.modules.finance.money import subtract_money_amounts_exact as subtract
 from core_console.modules.finance.settlement_models import FinanceCreditOrigin, FinanceSettlement
 from core_console.modules.finance.settlement_schemas import CreditOriginResponse
@@ -64,6 +65,24 @@ async def _credit_origins(
             )
         ).all()
     )
+    returned = dict(
+        (
+            await session.execute(
+                select(
+                    FinanceCreditReturnFragment.origin_settlement_id,
+                    func.sum(FinanceCreditReturnFragment.amount),
+                )
+                .where(
+                    FinanceCreditReturnFragment.origin_settlement_id.in_(
+                        [o.settlement_id for o, _ in rows]
+                    )
+                )
+                .group_by(FinanceCreditReturnFragment.origin_settlement_id)
+            )
+        ).all()
+    )
+    for id, amount in returned.items():
+        consumed[id] = subtract(consumed.get(id, Decimal(0)), subtract(Decimal(0), amount))
     return [
         _origin_response(origin, settlement, consumed.get(origin.settlement_id, Decimal(0)))
         for origin, settlement in rows
