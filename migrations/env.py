@@ -10,6 +10,7 @@ from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from core_console.config import load_settings
+from core_console.modules.finance.advance_correction_models import FinanceAdvanceCorrection
 from core_console.modules.finance.advance_models import FinanceAdvance, FinanceObligation
 from core_console.modules.finance.credit_application_models import (
     FinanceCreditApplicationAllocation,
@@ -39,6 +40,7 @@ target_metadata = FinanceAccount.metadata
 assert target_metadata is FinanceCategory.metadata
 assert target_metadata is FinanceLedger.metadata
 assert target_metadata is FinanceParticipant.metadata
+assert target_metadata is FinanceAdvanceCorrection.metadata
 assert target_metadata is FinanceAdvance.metadata
 assert target_metadata is FinanceObligation.metadata
 assert target_metadata is FinanceSubmission.metadata

@@ -21,7 +21,7 @@ from core_console.database.base import Base
 
 
 class FinanceAdvance(Base):
-    """Immutable source of one funded event and its explicit owner share."""
+    """Effective source of one funded event and its explicit owner share."""
 
     __tablename__ = "finance_advances"
     __table_args__ = (
@@ -81,7 +81,7 @@ class FinanceObligation(Base):
             ["finance_accounts.id", "finance_accounts.ledger_id"],
         ),
         CheckConstraint(
-            "principal > 0 AND principal NOT IN "
+            "principal >= 0 AND principal NOT IN "
             "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
             name="ck_finance_obligations_principal",
         ),

@@ -15,6 +15,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 
+from core_console.modules.finance.advance_correction_schemas import AdvanceCorrectionCommandV1
+from core_console.modules.finance.advance_corrections import execute_create_advance_correction
 from core_console.modules.finance.advance_schemas import AdvanceCommandV1, AdvanceCommandV2
 from core_console.modules.finance.advances import execute_create_advance
 from core_console.modules.finance.models import FinanceLedger
@@ -70,6 +72,8 @@ from core_console.modules.finance.submission_schemas import (
     AdjustmentCommandValidationRejection,
     AdjustmentValidationProblem,
     AdvanceCommandValidationRejection,
+    AdvanceCorrectionCommandValidationRejection,
+    AdvanceCorrectionValidationProblem,
     AdvanceValidationProblem,
     CategoryCommandValidationRejection,
     CategoryValidationProblem,
@@ -301,12 +305,14 @@ async def _submit_create(
             | type[CategoryCommandV1]
             | type[AccountCommandV1]
             | type[AdjustmentCommandV1]
+            | type[AdvanceCorrectionCommandV1]
             | type[AdvanceCommandV1]
             | type[AdvanceCommandV2]
             | type[SettlementCommandV1]
             | type[SettlementCommandV2]
             | type[SettlementCommandV3],
         ] = {
+            "createFinanceAdvanceCorrection": AdvanceCorrectionCommandV1,
             "createFinanceLedger": LedgerCommandV1,
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,
@@ -376,6 +382,7 @@ async def _submit_create(
                 | type[CategoryCommandValidationRejection]
                 | type[TransactionCommandValidationRejection]
                 | type[AdjustmentCommandValidationRejection]
+                | type[AdvanceCorrectionCommandValidationRejection]
                 | type[AdvanceCommandValidationRejection]
                 | type[SettlementCommandValidationRejection]
             ),
@@ -385,6 +392,7 @@ async def _submit_create(
             "createFinanceCategory": CategoryCommandValidationRejection,
             "createFinanceTransaction": TransactionCommandValidationRejection,
             "createBalanceAdjustment": AdjustmentCommandValidationRejection,
+            "createFinanceAdvanceCorrection": AdvanceCorrectionCommandValidationRejection,
             "createFinanceAdvance": AdvanceCommandValidationRejection,
             "createFinanceSettlement": SettlementCommandValidationRejection,
         }
@@ -409,6 +417,7 @@ async def _submit_create(
                 | type[CategoryValidationProblem]
                 | type[TransactionValidationProblem]
                 | type[AdjustmentValidationProblem]
+                | type[AdvanceCorrectionValidationProblem]
                 | type[AdvanceValidationProblem]
                 | type[SettlementValidationProblem]
             ),
@@ -418,6 +427,7 @@ async def _submit_create(
             "createFinanceCategory": CategoryValidationProblem,
             "createFinanceTransaction": TransactionValidationProblem,
             "createBalanceAdjustment": AdjustmentValidationProblem,
+            "createFinanceAdvanceCorrection": AdvanceCorrectionValidationProblem,
             "createFinanceAdvance": AdvanceValidationProblem,
             "createFinanceSettlement": SettlementValidationProblem,
         }
@@ -435,6 +445,7 @@ async def _submit_create(
                 OrdinaryTransactionCommandV1,
                 TransferCommandV1,
                 AdjustmentCommandV1,
+                AdvanceCorrectionCommandV1,
                 AdvanceCommandV1,
                 AdvanceCommandV2,
                 SettlementCommandV1,
@@ -514,6 +525,12 @@ async def _submit_create(
                     session, owner_id=owner_id, ledger_id=target_ledger_id, command=body
                 )
                 resource_type = "settlement"
+            elif isinstance(body, AdvanceCorrectionCommandV1):
+                assert target_ledger_id is not None
+                resource_id = await execute_create_advance_correction(
+                    session, owner_id=owner_id, ledger_id=target_ledger_id, command=body
+                )
+                resource_type = "advanceCorrection"
             elif isinstance(body, (AdvanceCommandV1, AdvanceCommandV2)):
                 assert target_ledger_id is not None
                 resource_id = await execute_create_advance(
@@ -616,6 +633,16 @@ async def _submit_create(
         }
         if not (
             (operation == "createFinanceAdvance" and business_problem.code in advance_codes)
+            or (
+                operation == "createFinanceAdvanceCorrection"
+                and business_problem.code
+                in (advance_codes - {"finance_advance_preview_stale"})
+                | {
+                    "finance_advance_not_found",
+                    "finance_advance_correction_preview_stale",
+                    "finance_advance_correction_ineligible",
+                }
+            )
             or (
                 operation == "createFinanceSettlement"
                 and business_problem.code

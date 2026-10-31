@@ -36,6 +36,9 @@ from core_console.modules.finance.submission_schemas import (
     AdjustmentSuccessReceipt,
     AdjustmentValidationProblem,
     AdjustmentValidationResponse,
+    AdvanceCorrectionRejectedOutcome,
+    AdvanceCorrectionTerminalProblem,
+    AdvanceCorrectionValidationProblem,
     AdvanceRejectedOutcome,
     AdvanceTerminalProblem,
     AdvanceValidationProblem,
@@ -422,6 +425,7 @@ async def _post_create(
             CategoryValidationProblem,
             TransactionValidationProblem,
             AdjustmentValidationProblem,
+            AdvanceCorrectionValidationProblem,
             AdvanceValidationProblem,
             SettlementValidationProblem,
         ),
@@ -435,6 +439,7 @@ async def _post_create(
             CategoryRejectedOutcome,
             TransactionRejectedOutcome,
             AdjustmentRejectedOutcome,
+            AdvanceCorrectionRejectedOutcome,
             AdvanceRejectedOutcome,
             SettlementRejectedOutcome,
         ),
@@ -464,6 +469,7 @@ async def _post_create(
             CreateOperation,
             (
                 type[SettlementTerminalProblem]
+                | type[AdvanceCorrectionTerminalProblem]
                 | type[AdvanceTerminalProblem]
                 | type[LedgerTerminalProblem]
                 | type[AccountTerminalProblem]
@@ -476,6 +482,7 @@ async def _post_create(
                 | type[AdjustmentInvalidTerminalProblem]
             ),
         ] = {
+            "createFinanceAdvanceCorrection": AdvanceCorrectionTerminalProblem,
             "createFinanceAdvance": AdvanceTerminalProblem,
             "createFinanceSettlement": SettlementTerminalProblem,
             "createFinanceLedger": LedgerTerminalProblem,

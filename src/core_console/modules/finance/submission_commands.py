@@ -239,4 +239,5 @@ type CreateOperation = Literal[
     "createBalanceAdjustment",
     "createFinanceAdvance",
     "createFinanceSettlement",
+    "createFinanceAdvanceCorrection",
 ]

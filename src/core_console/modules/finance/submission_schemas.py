@@ -796,6 +796,122 @@ class SettlementFailureResponse(
     """Unresolved failure, guarded pre-admission proof, or terminal rejection."""
 
 
+class AdvanceCorrectionCreatedResource(_Evidence):
+    type: Literal["advanceCorrection"]
+    id: UUID
+
+
+class AdvanceCorrectionCreatedOutcome(_Evidence):
+    kind: Literal["created"]
+    resource: AdvanceCorrectionCreatedResource
+
+
+class AdvanceCorrectionInvalidProblem(TransactionInvalidProblem):
+    pass
+
+
+class AdvanceCorrectionConflictProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[409]
+    code: Literal[
+        "finance_account_archived",
+        "finance_participant_archived",
+        "finance_advance_correction_preview_stale",
+        "finance_advance_correction_ineligible",
+        "finance_linked_record_protected",
+    ]
+    detail: str
+
+
+class AdvanceCorrectionMissingProblem(_Evidence):
+    type: str
+    title: str
+    status: Literal[404]
+    code: Literal[
+        "finance_account_not_found", "finance_participant_not_found", "finance_advance_not_found"
+    ]
+    detail: str
+
+
+class AdvanceCorrectionRejectedOutcome(_Evidence):
+    kind: Literal["rejected"]
+    problem: Annotated[
+        AdvanceCorrectionInvalidProblem
+        | AdvanceCorrectionConflictProblem
+        | AdvanceCorrectionMissingProblem,
+        Field(discriminator="code"),
+    ]
+
+
+class _AdvanceCorrectionReceipt(_ReceiptMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    operation: Literal["createFinanceAdvanceCorrection"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdvanceCorrectionCreatedReceipt(_AdvanceCorrectionReceipt):
+    outcome: AdvanceCorrectionCreatedOutcome
+
+
+class AdvanceCorrectionRejectedReceipt(_AdvanceCorrectionReceipt):
+    outcome: AdvanceCorrectionRejectedOutcome
+
+
+class AdvanceCorrectionSubmissionReceipt(_AdvanceCorrectionReceipt):
+    outcome: Annotated[
+        AdvanceCorrectionCreatedOutcome | AdvanceCorrectionRejectedOutcome,
+        Field(discriminator="kind"),
+    ]
+
+
+class AdvanceCorrectionSubmissionUnfinished(_UnfinishedMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    operation: Literal["createFinanceAdvanceCorrection"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdvanceCorrectionCommandValidationRejection(_CommandValidationRejectionMetadata):
+    command_version: Literal["1"] = Field(alias="commandVersion")
+    operation: Literal["createFinanceAdvanceCorrection"]
+    target_ledger_id: UUID = Field(alias="targetLedgerId")
+
+
+class AdvanceCorrectionValidationProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[422]
+    code: Literal["validation_error"]
+    errors: list[dict[str, JsonValue]]
+    commandValidationRejection: AdvanceCorrectionCommandValidationRejection
+
+
+class AdvanceCorrectionTerminalProblem(ProblemDetails):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[404, 409, 422]
+    code: Literal[
+        "validation_error",
+        "finance_account_archived",
+        "finance_participant_archived",
+        "finance_advance_correction_preview_stale",
+        "finance_advance_correction_ineligible",
+        "finance_linked_record_protected",
+        "finance_account_not_found",
+        "finance_participant_not_found",
+        "finance_advance_not_found",
+    ]
+    submissionReceipt: AdvanceCorrectionRejectedReceipt
+
+
+class AdvanceCorrectionFailureResponse(
+    RootModel[
+        SubmissionNonterminalProblem
+        | AdvanceCorrectionValidationProblem
+        | AdvanceCorrectionTerminalProblem
+    ]
+):
+    """Unresolved failure, guarded pre-admission proof, or terminal rejection."""
+
+
 type SubmissionReceipt = Annotated[
     LedgerSubmissionReceipt
     | AccountSubmissionReceipt
@@ -803,7 +919,8 @@ type SubmissionReceipt = Annotated[
     | TransactionSubmissionReceipt
     | AdjustmentSubmissionReceipt
     | AdvanceSubmissionReceipt
-    | SettlementSubmissionReceipt,
+    | SettlementSubmissionReceipt
+    | AdvanceCorrectionSubmissionReceipt,
     Field(discriminator="operation"),
 ]
 type SubmissionValidationProblem = (
@@ -814,6 +931,7 @@ type SubmissionValidationProblem = (
     | AdjustmentValidationProblem
     | AdvanceValidationProblem
     | SettlementValidationProblem
+    | AdvanceCorrectionValidationProblem
 )
 
 type SubmissionUnfinished = Annotated[
@@ -823,7 +941,8 @@ type SubmissionUnfinished = Annotated[
     | TransactionSubmissionUnfinished
     | AdjustmentSubmissionUnfinished
     | AdvanceSubmissionUnfinished
-    | SettlementSubmissionUnfinished,
+    | SettlementSubmissionUnfinished
+    | AdvanceCorrectionSubmissionUnfinished,
     Field(discriminator="operation"),
 ]
 

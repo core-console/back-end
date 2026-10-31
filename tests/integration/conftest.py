@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from core_console.config import AuthMode, Environment, Settings
+from core_console.modules.finance.advance_correction_models import FinanceAdvanceCorrection
 from core_console.modules.finance.advance_models import (
     FinanceAdvance,
     FinanceAdvanceTransaction,
@@ -222,6 +223,7 @@ async def postgres_session(
             yield session
         finally:
             await session.rollback()
+            await session.execute(delete(FinanceAdvanceCorrection))
             await session.execute(delete(FinanceSubmission))
             await session.execute(delete(FinanceSettlementIncome))
             await session.execute(delete(FinanceCreditApplicationAllocation))
