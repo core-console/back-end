@@ -45,6 +45,10 @@ from core_console.modules.finance.queries import (
     get_finance_account_for_update,
     get_finance_category,
 )
+from core_console.modules.finance.settlement_correction_models import (
+    FinanceSettlementCorrection,
+    FinanceSettlementCorrectionTransaction,
+)
 from core_console.modules.finance.settlement_models import (
     FinanceCreditOrigin,
     FinanceSettlement,
@@ -565,6 +569,21 @@ async def inspect_settlement(
             ],
         )
     assert settlement.receiving_account_id is not None
+    correction_transactions = list(
+        await session.scalars(
+            select(FinanceSettlementCorrectionTransaction.transaction_id)
+            .join(
+                FinanceSettlementCorrection,
+                FinanceSettlementCorrection.id
+                == FinanceSettlementCorrectionTransaction.correction_id,
+            )
+            .where(FinanceSettlementCorrection.settlement_id == settlement_id)
+            .order_by(
+                FinanceSettlementCorrection.revision,
+                FinanceSettlementCorrectionTransaction.transaction_id,
+            )
+        )
+    )
     result = SettlementResponse(
         id=settlement.id,
         ledgerId=ledger_id,
@@ -575,15 +594,31 @@ async def inspect_settlement(
         note=settlement.note,
         confirmedAt=settlement.confirmed_at,
         confirmationOrder=settlement.confirmation_order,
-        transactionIds=[allocation.transaction_id for allocation, _, _ in rows],
+        transactionIds=[
+            *[allocation.transaction_id for allocation, _, _ in rows],
+            *correction_transactions,
+        ],
         allocations=[
             CashAllocationResponse(
                 position=allocation.position,
                 obligationId=obligation.id,
                 advanceId=advance.id,
                 sourceDate=advance.transaction_date,
-                cashPaid=_money(allocation.cash_paid, settlement.currency),
-                remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                cashPaid=_money(
+                    allocation.effective_cash_paid
+                    if allocation.effective_cash_paid is not None
+                    else allocation.cash_paid,
+                    settlement.currency,
+                ),
+                remainingAfter=_money(
+                    subtract(
+                        allocation.remaining_after,
+                        subtract(allocation.effective_cash_paid, allocation.cash_paid),
+                    )
+                    if allocation.effective_cash_paid is not None
+                    else allocation.remaining_after,
+                    settlement.currency,
+                ),
             )
             for allocation, obligation, advance in rows
         ],

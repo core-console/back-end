@@ -65,6 +65,7 @@ def _use_problem_details_media_type(contract_paths: dict[str, Any]) -> None:
                     "#/components/schemas/AdjustmentValidationResponse",
                     "#/components/schemas/AdvanceFailureResponse",
                     "#/components/schemas/AdvanceCorrectionFailureResponse",
+                    "#/components/schemas/SettlementCorrectionFailureResponse",
                     "#/components/schemas/SettlementFailureResponse",
                     "#/components/schemas/SubmissionNonterminalProblem",
                 }:

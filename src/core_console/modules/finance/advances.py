@@ -348,7 +348,12 @@ async def _resolution_totals(
     rows = await session.execute(
         select(
             FinanceSettlementAllocation.obligation_id,
-            func.sum(FinanceSettlementAllocation.cash_paid),
+            func.sum(
+                func.coalesce(
+                    FinanceSettlementAllocation.effective_cash_paid,
+                    FinanceSettlementAllocation.cash_paid,
+                )
+            ),
             func.sum(FinanceSettlementAllocation.forgiven),
         )
         .where(FinanceSettlementAllocation.obligation_id.in_(obligation_ids))

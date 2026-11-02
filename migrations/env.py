@@ -22,6 +22,10 @@ from core_console.modules.finance.models import (
     FinanceLedger,
     FinanceParticipant,
 )
+from core_console.modules.finance.settlement_correction_models import (
+    FinanceSettlementCorrection,
+    FinanceSettlementCorrectionTransaction,
+)
 from core_console.modules.finance.settlement_models import (
     FinanceCreditOrigin,
     FinanceSettlement,
@@ -41,6 +45,8 @@ assert target_metadata is FinanceCategory.metadata
 assert target_metadata is FinanceLedger.metadata
 assert target_metadata is FinanceParticipant.metadata
 assert target_metadata is FinanceAdvanceCorrection.metadata
+assert target_metadata is FinanceSettlementCorrection.metadata
+assert target_metadata is FinanceSettlementCorrectionTransaction.metadata
 assert target_metadata is FinanceAdvance.metadata
 assert target_metadata is FinanceObligation.metadata
 assert target_metadata is FinanceSubmission.metadata

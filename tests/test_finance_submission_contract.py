@@ -305,6 +305,12 @@ def test_nested_receipt_and_lookup_cannot_encode_impossible_combinations(
             "SettlementCreatedReceipt",
         ),
         (
+            "/finance/ledgers/{ledgerId}/settlement-corrections",
+            "createFinanceSettlementCorrection",
+            "201",
+            "SettlementCorrectionCreatedReceipt",
+        ),
+        (
             "/finance/ledgers/{ledgerId}/advance-corrections",
             "createFinanceAdvanceCorrection",
             "201",
@@ -340,6 +346,7 @@ def test_cumulative_create_schema_header_status_and_lookup_matrix(
         "createFinanceAdvance",
         "createFinanceSettlement",
         "createFinanceAdvanceCorrection",
+        "createFinanceSettlementCorrection",
     }
     components = schema["components"]["schemas"]
     assert set(

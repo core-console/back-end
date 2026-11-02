@@ -20,6 +20,7 @@ def _origin_response(
     origin: FinanceCreditOrigin, settlement: FinanceSettlement, consumed: Decimal = Decimal(0)
 ) -> CreditOriginResponse:
     assert settlement.receiving_account_id is not None
+    amount = origin.effective_amount if origin.effective_amount is not None else origin.amount
     return CreditOriginResponse(
         settlementId=settlement.id,
         ledgerId=settlement.ledger_id,
@@ -30,8 +31,8 @@ def _origin_response(
         transactionDate=settlement.transaction_date,
         confirmedAt=settlement.confirmed_at,
         confirmationOrder=settlement.confirmation_order,
-        amount=_money(origin.amount, settlement.currency),
-        available=_money(subtract(origin.amount, consumed), settlement.currency),
+        amount=_money(amount, settlement.currency),
+        available=_money(subtract(amount, consumed), settlement.currency),
     )
 
 

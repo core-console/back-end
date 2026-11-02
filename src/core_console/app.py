@@ -14,6 +14,9 @@ from core_console.modules.finance.advance_api import router as advance_router
 from core_console.modules.finance.advance_correction_api import router as advance_correction_router
 from core_console.modules.finance.api import router as finance_router
 from core_console.modules.finance.settlement_api import router as settlement_router
+from core_console.modules.finance.settlement_correction_api import (
+    router as settlement_correction_router,
+)
 from core_console.modules.finance.submission_api import (
     SubmissionLookupNoStoreMiddleware,
 )
@@ -65,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(submission_router)
     app.include_router(advance_router)
     app.include_router(advance_correction_router)
+    app.include_router(settlement_correction_router)
     app.include_router(settlement_router)
     app.include_router(health_router)
     return app

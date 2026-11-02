@@ -121,6 +121,12 @@ class FinanceSettlementAllocation(Base):
         ),
         CheckConstraint("position >= 1", name="ck_finance_settlement_allocation_position"),
         CheckConstraint(
+            "effective_cash_paid IS NULL OR (kind = 'cash' AND effective_cash_paid >= 0 "
+            "AND effective_cash_paid NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))",
+            name="ck_finance_settlement_allocation_effective_cash",
+        ),
+        CheckConstraint(
             "cash_paid >= 0 AND cash_paid NOT IN "
             "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
             name="ck_finance_settlement_allocation_cash",
@@ -143,6 +149,7 @@ class FinanceSettlementAllocation(Base):
     obligation_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     cash_paid: Mapped[Decimal] = mapped_column(Numeric())
+    effective_cash_paid: Mapped[Decimal | None] = mapped_column(Numeric())
     kind: Mapped[str] = mapped_column(Text, server_default="cash")
     forgiven: Mapped[Decimal] = mapped_column(Numeric(), server_default="0")
     remaining_after: Mapped[Decimal] = mapped_column(Numeric())
@@ -153,6 +160,11 @@ class FinanceCreditOrigin(Base):
 
     __tablename__ = "finance_credit_origins"
     __table_args__ = (
+        CheckConstraint(
+            "effective_amount IS NULL OR (effective_amount >= 0 AND effective_amount NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))",
+            name="ck_finance_credit_effective_amount",
+        ),
         UniqueConstraint("settlement_id", "ledger_id", name="uq_finance_credit_origin_ledger"),
         UniqueConstraint("liability_account_id", name="uq_finance_credit_account"),
         UniqueConstraint("transaction_id", name="uq_finance_credit_transaction"),
@@ -179,6 +191,7 @@ class FinanceCreditOrigin(Base):
     liability_account_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     amount: Mapped[Decimal] = mapped_column(Numeric())
+    effective_amount: Mapped[Decimal | None] = mapped_column(Numeric())
 
 
 class FinanceSettlementIncome(Base):
