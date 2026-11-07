@@ -57,6 +57,33 @@ interfere with each other. Parallel test processes require separately provisione
 guarded databases. Intentional concurrency scenarios within a single test remain
 allowed.
 
+## Stage a fresh Finance compatibility campaign
+
+Use `tests/browser/stage-finance-compatibility.mjs` with Node.js 24 for every
+fresh compatibility campaign. Pass the seed directory, a new output directory,
+and the exact producer and consumer commits for both the seed and the target.
+The seed must contain `acceptance.py`, `run.py`, `database.py`, and an unpatched
+`browser.mjs`. Each of the three pair-bound files must contain the seed's exact
+producer and consumer SHAs once. For the existing launcher, use a direct child
+of the backend's `.agent/` directory so the launcher resolves both repositories.
+The output directory must not already exist and its parent must exist.
+
+```powershell
+node tests/browser/stage-finance-compatibility.mjs $seed $fresh `
+  --from-producer $seedProducer --from-consumer $seedConsumer `
+  --producer $producer --consumer $consumer
+```
+
+The command rebinds the pair in `acceptance.py`, `run.py`, and `browser.mjs`,
+preserves the seed's database helper, and applies the route drain before writing
+the `browser.mjs` that `run.py` launches. Use the staged `run.py` only after
+staging succeeds and the campaign's separate setup and qualification gates pass.
+The command stages source files only. It leaves the seed, historical evidence,
+and campaign results alone and does not start services or access a database.
+
+Run the database-free staging regression with
+`node --test tests/browser/stage-finance-compatibility.test.mjs`.
+
 ## Snapshot digest
 
 Snapshot schema `core-console-agent-snapshot/v1` is SHA-256 over ordered,
