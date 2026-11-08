@@ -36,7 +36,7 @@ dev = [
 ]
 
 [tool.uv]
-required-version = "==0.12.22"
+required-version = "==0.13.7"
 # Build isolation resolves separately from uv.lock; constrain Hatchling's toolchain too.
 build-constraint-dependencies = [
     "packaging==26.3",

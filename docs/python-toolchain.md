@@ -1,14 +1,40 @@
 # Python toolchain assessment
 
+## November 2026 security update
+
+Local development and CI use uv 0.13.7 and CPython 3.14.10 through the
+existing project pins. The locked HTTPX development dependency tree now uses
+certifi 2026.10.23, and the FastAPI runtime tree uses OpenTelemetry API 1.45.2.
+These releases address the emSign root distrust advisories for
+[uv](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62) and
+[certifi](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2),
+the [CPython eMudhra intermediate key advisory](https://www.python.org/downloads/release/python-31410/),
+and the [OpenTelemetry tracestate parsing advisory](https://github.com/advisories/GHSA-xcq7-p3pf-p88h).
+
+### Supported deployment scope
+
+Supported Backend deployments neither require nor enable OpenSSL FIPS mode.
+CPython 3.14.10 is supported only within this non-FIPS scope. It remains affected
+by CVE-2026-119170 when OpenSSL runs in FIPS mode.
+[Python security advisory](https://mail.python.org/archives/list/security-announce%40python.org/thread/PXVTTOBPUMFJSSUXN6XCS7FC5DZOSZXK/)
+
+FIPS-enabled deployments are currently unsupported. Future FIPS support requires
+an officially released CPython build containing the upstream fix, followed by
+verification of the actual serving runtime with OpenSSL FIPS mode enabled.
+Reassess this policy when a serving deployment environment is introduced.
+[Upstream fix](https://github.com/python/cpython/pull/160984)
+
+## October 2026 assessment
+
 Assessed against upstream stable releases on 2026-10-02. The modernization keeps
 the existing uv project, `src` layout, FastAPI factory/lifespan, explicit Psycopg
 dialect, migrations, and snapshot-bound validation/publication harness.
 
-## Runtime and dependencies
+### Runtime and dependencies
 
-Python 3.14.8 is the newest stable release currently listed by
-[Python.org](https://www.python.org/downloads/). Python 3.15 is still listed as a
-prerelease; a scheduled release date alone does not establish availability.
+At the time of this assessment, Python 3.14.8 was the newest stable release
+listed by [Python.org](https://www.python.org/downloads/) and Python 3.15 was
+still a prerelease.
 `.python-version` pins the patch used locally and in CI. `requires-python`
 deliberately retains `>=3.14,<3.15`: this backend is an application with a tested
 runtime, and does not claim compatibility with an unvalidated future minor.
@@ -36,7 +62,7 @@ CI retains PostgreSQL 17 and updates its patch to 17.11, the
 Changing the database major would be a separate database upgrade rather than a
 Python toolchain requirement. The explicit test-target guard remains mandatory.
 
-## Configuration and packaging conventions
+### Configuration and packaging conventions
 
 - `[project]`, `[build-system]`, and `[project.scripts]` already follow
   [PyPA's pyproject conventions](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/).
@@ -76,7 +102,7 @@ publication metadata policy, or application architecture change is needed to
 meet current Python/PyPA/uv conventions. Existing explicit loop factories remain
 necessary for Psycopg on Windows; they avoid deprecated asyncio policy APIs.
 
-## Verification and security
+### Verification and security
 
 The authoritative acceptance path is the protected repository harness described
 in [`agents/harness.md`](agents/harness.md). It retains lock consistency,
