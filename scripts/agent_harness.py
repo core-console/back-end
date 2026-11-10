@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -20,10 +21,24 @@ SCRIPT_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_REPOSITORY_ROOT))
 
+from scripts.database_diagnostics import DatabaseRedactor  # noqa: E402
+from scripts.validation_evidence import (  # noqa: E402
+    HISTORICAL_VALIDATION_SCHEMA,
+    PYTEST_ARGS,
+    VALIDATION_SCHEMA,
+    execution_directory,
+    inspect_pytest,
+    postgres_target,
+    read_object,
+    reserve_execution,
+    seal_receipt,
+    sha256,
+    timestamp,
+)
+
 SNAPSHOT_SCHEMA = "core-console-agent-snapshot/v1"
 OUTPUT_DIRECTORY = ".agent"
-REVIEW_SCHEMA = "core-console-agent-review/v2"
-VALIDATION_SCHEMA = "core-console-agent-validation/v1"
+REVIEW_SCHEMA = "core-console-agent-review/v3"
 PREFLIGHT_SCHEMA = "core-console-agent-preflight/v1"
 PUBLICATION_SCHEMA = "core-console-agent-publication/v1"
 PUBLICATION_REMOTE_READ_ATTEMPTS = 3
@@ -102,6 +117,9 @@ class ReviewValidationState:
     protected_requested: bool | None
     protected_exercised: bool | None
     receipt_path: str | None
+    execution_id: str | None = None
+    receipt_sha256: str | None = None
+    evidence_class: str | None = None
 
 
 class ReviewSnapshotStaleError(RuntimeError):
@@ -151,6 +169,7 @@ class PublicationGit:
         self._root = root
         self._log_directory = log_directory
         self._command_index = 0
+        self._redact = DatabaseRedactor(root)
 
     def _run_once(
         self,
@@ -180,15 +199,8 @@ class PublicationGit:
         log_path = self._log_directory / f"{self._command_index:02d}-{_safe_label(phase)}-git.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         timeout_note = f"\n[timeout]\n{timeout_seconds} seconds\n" if timed_out else ""
-        log_path.write_text(
-            (
-                f"$ {subprocess.list2cmdline(command)}\n\n[stdout]\n"
-                f"{result.stdout.decode('utf-8', errors='replace')}\n[stderr]\n"
-                f"{result.stderr.decode('utf-8', errors='replace')}"
-                f"{timeout_note}"
-            ),
-            encoding="utf-8",
-        )
+        transcript = _diagnostic_transcript(command, result.stdout, result.stderr, self._redact)
+        log_path.write_text(transcript + timeout_note, encoding="utf-8")
         return result, log_path, timed_out
 
     def _run(self, phase: str, *arguments: str) -> bytes:
@@ -282,6 +294,7 @@ class GitHubCli:
         self._log_directory = log_directory
         self._repository = repository
         self._command_index = 0
+        self._redact = DatabaseRedactor(root)
 
     def _run(self, *arguments: str, timeout_seconds: float | None = None) -> bytes:
         self._command_index += 1
@@ -317,12 +330,7 @@ class GitHubCli:
         log_path = self._log_directory / f"{self._command_index:02d}-github.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
-            (
-                f"$ {subprocess.list2cmdline(command)}\n\n[stdout]\n"
-                f"{stdout.decode('utf-8', errors='replace')}\n[stderr]\n"
-                f"{stderr.decode('utf-8', errors='replace')}"
-            ),
-            encoding="utf-8",
+            _diagnostic_transcript(command, stdout, stderr, self._redact), encoding="utf-8"
         )
         return log_path
 
@@ -459,7 +467,8 @@ def _git(repository: Path, *arguments: str) -> bytes:
     )
     if result.returncode != 0:
         message = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"git {' '.join(arguments)} failed: {message}")
+        diagnostic = f"git {' '.join(arguments)} failed: {message}"
+        raise RuntimeError(DatabaseRedactor(repository)(diagnostic))
     return result.stdout
 
 
@@ -630,68 +639,214 @@ def _review_validation_data(validation: ReviewValidationState) -> dict[str, obje
             "exercised": validation.protected_exercised,
         },
         "receiptPath": validation.receipt_path,
+        "executionId": validation.execution_id,
+        "receiptSha256": validation.receipt_sha256,
+        "evidenceClass": validation.evidence_class,
     }
+
+
+def _repository_identity(root: Path) -> str:
+    origins = _git_config_values(root, "remote.origin.url")
+    if not origins:
+        return f"local:{root.as_posix()}"
+    identity = _github_repository_identity_from_url(origins[0]) if len(origins) == 1 else None
+    return identity or f"origin-sha256:{hashlib.sha256(json.dumps(origins).encode()).hexdigest()}"
+
+
+def _validation_identity(root: Path, snapshot: RepositorySnapshot) -> dict[str, object]:
+    return {
+        "schema": VALIDATION_SCHEMA,
+        "repository": _repository_identity(root),
+        "baseSha": snapshot.base_sha,
+        "headSha": snapshot.head_sha,
+        "snapshotDigest": snapshot.digest,
+    }
+
+
+def _validation_path(root: Path, snapshot: RepositorySnapshot, execution_id: str) -> Path:
+    return (
+        root / OUTPUT_DIRECTORY / "receipts" / f"validation-{snapshot.digest}-{execution_id}.json"
+    )
+
+
+def _check_configuration(checks: Sequence[ValidationCheck]) -> list[dict[str, object]]:
+    return [{"label": check.label, "command": list(check.command)} for check in checks]
+
+
+def _read_execution(
+    root: Path, snapshot: RepositorySnapshot, execution_id: str
+) -> tuple[dict[str, object], str | None]:
+    """Recheck the execution envelope and all files required for a claimed PASS."""
+    directory = execution_directory(root / OUTPUT_DIRECTORY, execution_id)
+    if directory is None:
+        return {}, None
+    start_path = directory / "started.json"
+    start = read_object(start_path)
+    identity = _validation_identity(root, snapshot) | {"executionId": execution_id}
+    if any(start.get(key) != value for key, value in identity.items()):
+        return {}, None
+    receipt_path = _validation_path(root, snapshot, execution_id)
+    data = read_object(receipt_path)
+    if not data:
+        return {}, "incomplete" if not receipt_path.exists() else None
+    if any(data.get(key) != value for key, value in start.items()) or (
+        data.get("invocationSha256") != sha256(start_path)
+        or data.get("status") not in ("completed", "interrupted")
+        or (data.get("status") != "completed" and data.get("outcome") == "PASS")
+        or not isinstance(data.get("completedAt"), str)
+        or data.get("outcome") not in ("PASS", "FAIL", "STALE")
+    ):
+        return {}, None
+    if data["outcome"] == "PASS":
+        try:
+            checks = data["checks"]
+            configuration = start["configuration"]
+            if (
+                data.get("failedCheck") is not None
+                or data.get("snapshotAfterDigest") != snapshot.digest
+                or data.get("snapshotUnchanged") is not True
+                or not isinstance(checks, list)
+                or not isinstance(configuration, list)
+                or len(checks) != len(configuration)
+            ):
+                return {}, None
+            for index, (check, expected) in enumerate(zip(checks, configuration, strict=True), 1):
+                log = directory / f"{index:02d}-{_safe_label(expected['label'])}.log"
+                if check != {
+                    "label": expected["label"],
+                    "status": "PASS",
+                    "returnCode": 0,
+                    "logPath": log.relative_to(root).as_posix(),
+                    "logSha256": sha256(log),
+                }:
+                    return {}, None
+            if start["profile"] == "protected":
+                executable = start.get("pythonExecutable")
+                if not isinstance(executable, str) or not executable:
+                    return {}, None
+                canonical = _validation_checks(
+                    snapshot.base_sha,
+                    snapshot.head_sha,
+                    None,
+                    protected=True,
+                    python_executable=executable,
+                )
+                proof_data, proof = inspect_pytest(start_path)
+                if (
+                    configuration != _check_configuration(canonical)
+                    or not proof
+                    or data.get("pytest") != proof_data
+                    or data.get("protectedPostgresql") != {"requested": True, "exercised": True}
+                ):
+                    return {}, None
+            elif start["profile"] not in ("standard", "custom") or data.get(
+                "protectedPostgresql"
+            ) != {"requested": False, "exercised": False}:
+                return {}, None
+        except KeyError, OSError, TypeError, ValueError:
+            return {}, None
+    purpose = start.get("purpose")
+    if purpose not in ("current", "recovery"):
+        return {}, None
+    return data, "interrupted" if data["status"] == "interrupted" else str(purpose)
 
 
 def _validation_binding(
     root: Path,
     snapshot: RepositorySnapshot,
+    execution_id: str | None = None,
 ) -> ReviewValidationState:
-    """Classify available validation evidence for the current snapshot."""
-
-    receipts = root / OUTPUT_DIRECTORY / "receipts"
-    current = receipts / f"validation-{snapshot.digest}.json"
-    if current.is_file():
-        try:
-            data = json.loads(current.read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
-            data = None
-        identity_fields: dict[str, object] = {
-            "schema": VALIDATION_SCHEMA,
-            "baseSha": snapshot.base_sha,
-            "headSha": snapshot.head_sha,
-            "snapshotDigest": snapshot.digest,
-        }
-        if isinstance(data, dict) and all(
-            data.get(key) == value for key, value in identity_fields.items()
-        ):
-            outcome = data.get("outcome")
-            protected = data.get("protectedPostgresql")
+    """Prefer the latest current protected start, with explicit selection by execution ID."""
+    output = root / OUTPUT_DIRECTORY
+    receipts = output / "receipts"
+    if execution_id is None:
+        candidates: list[tuple[bool, str, str]] = []
+        identity = _validation_identity(root, snapshot)
+        for start_path in (output / "validation").glob("*/started.json"):
+            start = read_object(start_path)
+            started = start.get("startedAt")
             if (
-                outcome in {"PASS", "FAIL", "STALE"}
-                and isinstance(protected, dict)
+                isinstance(started, str)
+                and start.get("purpose") == "current"
+                and start.get("executionId") == start_path.parent.name
+                and all(start.get(key) == value for key, value in identity.items())
+            ):
+                candidates.append(
+                    (start.get("profile") == "protected", started, start_path.parent.name)
+                )
+        if candidates:
+            execution_id = max(candidates)[2]
+
+    if execution_id is not None:
+        data, evidence_class = _read_execution(root, snapshot, execution_id)
+        if data:
+            path = _validation_path(root, snapshot, execution_id)
+            protected = data.get("protectedPostgresql")
+            outcome = data["outcome"]
+            if (
+                isinstance(protected, dict)
                 and isinstance(protected.get("requested"), bool)
                 and isinstance(protected.get("exercised"), bool)
+                and outcome in ("PASS", "FAIL", "STALE")
             ):
-                snapshot_status: ValidationSnapshotStatus = "stale"
-                if (
-                    data.get("snapshotAfterDigest") == snapshot.digest
-                    and data.get("snapshotUnchanged") is True
-                ):
-                    snapshot_status = "matching"
                 return ReviewValidationState(
-                    snapshot_status=snapshot_status,
-                    outcome=outcome,
-                    protected_requested=protected["requested"],
-                    protected_exercised=protected["exercised"],
-                    receipt_path=current.relative_to(root).as_posix(),
+                    "matching"
+                    if data.get("snapshotAfterDigest") == snapshot.digest
+                    and data.get("snapshotUnchanged") is True
+                    else "stale",
+                    outcome,
+                    protected["requested"],
+                    protected["exercised"],
+                    path.relative_to(root).as_posix(),
+                    execution_id,
+                    sha256(path),
+                    evidence_class,
                 )
-        return ReviewValidationState("stale", None, None, None, None)
-    if receipts.is_dir() and any(receipts.glob("validation-*.json")):
-        return ReviewValidationState("stale", None, None, None, None)
-    return ReviewValidationState("absent", None, None, None, None)
+        if evidence_class == "incomplete":
+            return ReviewValidationState(
+                "matching", None, None, None, None, execution_id, None, evidence_class
+            )
+        return ReviewValidationState("stale", None, None, None, None, execution_id)
+
+    legacy_path = receipts / f"validation-{snapshot.digest}.json"
+    legacy = read_object(legacy_path)
+    if (
+        legacy.get("schema") == HISTORICAL_VALIDATION_SCHEMA
+        and legacy.get("baseSha") == snapshot.base_sha
+        and legacy.get("headSha") == snapshot.head_sha
+        and legacy.get("snapshotDigest") == legacy.get("snapshotAfterDigest") == snapshot.digest
+        and legacy.get("snapshotUnchanged") is True
+    ):
+        outcome = legacy.get("outcome")
+        protected = legacy.get("protectedPostgresql")
+        if outcome in ("PASS", "FAIL", "STALE") and isinstance(protected, dict):
+            return ReviewValidationState(
+                "matching",
+                outcome,
+                protected.get("requested"),
+                protected.get("exercised"),
+                legacy_path.relative_to(root).as_posix(),
+                None,
+                sha256(legacy_path),
+                "historical-v1",
+            )
+    available = any(receipts.glob("validation-*.json")) or any(
+        (output / "validation").glob("*/started.json")
+    )
+    return ReviewValidationState("stale" if available else "absent", None, None, None, None)
 
 
-def create_review_state(repository: Path, base: str) -> ReviewState:
+def create_review_state(
+    repository: Path, base: str, *, execution_id: str | None = None
+) -> ReviewState:
     """Write complete worktree-aware review evidence for one snapshot."""
-
     root = Path(_text(_git(repository, "rev-parse", "--show-toplevel")))
     snapshot = snapshot_repository(root, base)
     changed_files = _changed_files(root, snapshot.base_sha, snapshot.head_sha)
     untracked_paths = [item.path for item in changed_files if item.untracked]
     output_root = root / OUTPUT_DIRECTORY
-    artifact_path = output_root / "reviews" / f"{snapshot.digest}.json"
-    receipt_path = output_root / "receipts" / f"review-{snapshot.digest}.json"
+    artifact_path = output_root / "reviews" / f"v3-{snapshot.digest}.json"
+    receipt_path = output_root / "receipts" / f"review-v3-{snapshot.digest}.json"
 
     artifact: dict[str, object] = {
         "schema": REVIEW_SCHEMA,
@@ -715,7 +870,7 @@ def create_review_state(repository: Path, base: str) -> ReviewState:
         f"{json.dumps(artifact, indent=2, sort_keys=True, ensure_ascii=False)}\n",
         encoding="utf-8",
     )
-    validation = _validation_binding(root, snapshot)
+    validation = _validation_binding(root, snapshot, execution_id)
     receipt: dict[str, object] = {
         "schema": REVIEW_SCHEMA,
         "baseSha": snapshot.base_sha,
@@ -723,6 +878,7 @@ def create_review_state(repository: Path, base: str) -> ReviewState:
         "snapshotDigest": snapshot.digest,
         "changedFiles": _changed_file_data(changed_files),
         "artifactPath": artifact_path.relative_to(root).as_posix(),
+        "artifactSha256": sha256(artifact_path),
         "validation": _review_validation_data(validation),
     }
     receipt_path.write_text(
@@ -742,6 +898,9 @@ def _validation_checks(
     base_sha: str,
     head_sha: str,
     authority_checks: Sequence[ValidationCheck] | None,
+    *,
+    protected: bool = False,
+    python_executable: str = sys.executable,
 ) -> tuple[ValidationCheck, ...]:
     """Extend the existing validation authority with worktree whitespace gates."""
 
@@ -749,10 +908,34 @@ def _validation_checks(
         from scripts.validate import CHECKS
 
         checks = tuple(
-            ValidationCheck(label=label, command=tuple(command)) for label, command in CHECKS
+            ValidationCheck(
+                label,
+                (python_executable, *command[1:])
+                if command[0] == sys.executable
+                else tuple(command),
+            )
+            for label, command in CHECKS
         )
     else:
         checks = tuple(authority_checks)
+    if protected and authority_checks is None:
+        checks = tuple(
+            ValidationCheck(
+                "pytest",
+                (
+                    python_executable,
+                    "-I",
+                    "-B",
+                    "-c",
+                    "import sys; from pathlib import Path; sys.path.insert(0, str(Path.cwd())); "
+                    "from scripts.protected_pytest import main; "
+                    "raise SystemExit(main(Path(sys.argv[1])))",
+                ),
+            )
+            if check.label == "pytest"
+            else check
+            for check in checks
+        )
     return (
         *checks,
         ValidationCheck(
@@ -767,22 +950,30 @@ def _validation_checks(
     )
 
 
+def _diagnostic_transcript(
+    command: Sequence[str], stdout: bytes, stderr: bytes, redact: DatabaseRedactor
+) -> str:
+    # Command-line quoting can change individual credential spellings.
+    safe_command = subprocess.list2cmdline(tuple(map(redact, command)))
+    return (
+        f"$ {safe_command}\n\n[stdout]\n"
+        f"{redact.subprocess_text(stdout)}\n[stderr]\n"
+        f"{redact.subprocess_text(stderr)}"
+    )
+
+
 def _write_check_log(
     path: Path,
     check: ValidationCheck,
     stdout: bytes,
     stderr: bytes,
+    redact: DatabaseRedactor,
 ) -> None:
-    """Retain complete quality-gate output outside normal agent context."""
+    """Retain sanitized quality-gate output outside normal agent context."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    command = subprocess.list2cmdline(check.command)
-    content = (
-        f"$ {command}\n\n[stdout]\n"
-        f"{stdout.decode('utf-8', errors='replace')}\n[stderr]\n"
-        f"{stderr.decode('utf-8', errors='replace')}"
-    )
-    path.write_text(content, encoding="utf-8")
+    with path.open("x", encoding="utf-8") as output:
+        output.write(_diagnostic_transcript(check.command, stdout, stderr, redact))
 
 
 def _safe_label(label: str) -> str:
@@ -802,44 +993,6 @@ def _test_summary(checks: Sequence[ValidationCheckResult]) -> str:
     return matches[-1] if matches else "see log"
 
 
-def _write_validation_receipt(
-    root: Path,
-    result: ValidationResult,
-    protected_requested: bool,
-) -> None:
-    """Persist a versioned machine-readable validation result."""
-
-    receipt: dict[str, object] = {
-        "schema": VALIDATION_SCHEMA,
-        "outcome": result.outcome,
-        "baseSha": result.snapshot_before.base_sha,
-        "headSha": result.snapshot_before.head_sha,
-        "snapshotDigest": result.snapshot_before.digest,
-        "snapshotAfterDigest": result.snapshot_after.digest,
-        "snapshotUnchanged": (result.snapshot_before.digest == result.snapshot_after.digest),
-        "failedCheck": result.failed_check,
-        "testSummary": result.test_summary,
-        "protectedPostgresql": {
-            "requested": protected_requested,
-            "exercised": result.protected_postgresql_exercised,
-        },
-        "checks": [
-            {
-                "label": check.label,
-                "status": check.status,
-                "returnCode": check.return_code,
-                "logPath": check.log_path.relative_to(root).as_posix(),
-            }
-            for check in result.checks
-        ],
-    }
-    result.receipt_path.parent.mkdir(parents=True, exist_ok=True)
-    result.receipt_path.write_text(
-        f"{json.dumps(receipt, indent=2, sort_keys=True)}\n",
-        encoding="utf-8",
-    )
-
-
 def validate_repository(
     repository: Path,
     base: str,
@@ -847,90 +1000,142 @@ def validate_repository(
     protected: bool,
     checks: Sequence[ValidationCheck] | None = None,
     environment: Mapping[str, str] | None = None,
+    purpose: Literal["current", "recovery"] = "current",
 ) -> ValidationResult:
-    """Run ordered gates and issue PASS only for an unchanged snapshot."""
-
+    """Run ordered gates and seal the result for this execution alone."""
     root = Path(_text(_git(repository, "rev-parse", "--show-toplevel")))
-    snapshot_before = snapshot_repository(root, base)
-    receipt_path = (
-        root / OUTPUT_DIRECTORY / "receipts" / f"validation-{snapshot_before.digest}.json"
+    before = snapshot_repository(root, base)
+    execution_id, directory = reserve_execution(root / OUTPUT_DIRECTORY)
+    receipt_path = _validation_path(root, before, execution_id)
+    start_path = directory / "started.json"
+    selected_checks = _validation_checks(
+        before.base_sha, before.head_sha, checks, protected=protected
     )
     command_environment = dict(os.environ if environment is None else environment)
-    check_results: list[ValidationCheckResult] = []
-
-    if protected and not command_environment.get("TEST_DATABASE_URL"):
-        snapshot_after = snapshot_repository(root, base)
-        result = ValidationResult(
-            outcome="FAIL",
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot_after,
-            checks=(),
-            receipt_path=receipt_path,
-            failed_check="protected PostgreSQL preflight",
-            test_summary="not run",
-            protected_postgresql_exercised=False,
-        )
-        _write_validation_receipt(root, result, protected)
-        return result
-
-    failed_check: str | None = None
-    selected_checks = _validation_checks(
-        snapshot_before.base_sha,
-        snapshot_before.head_sha,
-        checks,
-    )
-    for index, check in enumerate(selected_checks, start=1):
-        check_environment = command_environment.copy()
-        if protected and check.label == "pytest":
-            check_environment["CI"] = "true"
-        completed = subprocess.run(
-            check.command,
-            cwd=root,
-            check=False,
-            capture_output=True,
-            env=check_environment,
-        )
-        log_path = (
-            root
-            / OUTPUT_DIRECTORY
-            / "logs"
-            / snapshot_before.digest
-            / f"{index:02d}-{_safe_label(check.label)}.log"
-        )
-        _write_check_log(log_path, check, completed.stdout, completed.stderr)
-        status = "PASS" if completed.returncode == 0 else "FAIL"
-        check_results.append(
-            ValidationCheckResult(
-                label=check.label,
-                status=status,
-                return_code=completed.returncode,
-                log_path=log_path,
+    redact = DatabaseRedactor(root, command_environment)
+    target = postgres_target(command_environment.get("TEST_DATABASE_URL")) if protected else None
+    start = _validation_identity(root, before) | {
+        "executionId": execution_id,
+        "startedAt": timestamp(),
+        "profile": "custom" if checks is not None else "protected" if protected else "standard",
+        "purpose": purpose,
+        "configuration": _check_configuration(
+            selected_checks
+            if checks is None
+            else tuple(
+                ValidationCheck(redact(check.label), tuple(map(redact, check.command)))
+                for check in selected_checks
             )
-        )
-        if completed.returncode != 0:
-            failed_check = check.label
-            break
+        ),
+        "pythonVersion": platform.python_version(),
+        "pythonExecutable": sys.executable,
+        "pytestArguments": list(PYTEST_ARGS) if protected else None,
+        "postgresTarget": (
+            {
+                key: redact(value) if isinstance(value, str) else value
+                for key, value in target.items()
+            }
+            if target is not None
+            else None
+        ),
+    }
+    seal_receipt(start_path, directory / "start.pending", start)
 
-    snapshot_after = snapshot_repository(root, base)
-    unchanged = snapshot_before.digest == snapshot_after.digest
-    outcome = "PASS" if failed_check is None and unchanged else "FAIL"
+    check_results: list[ValidationCheckResult] = []
+    proof_data: dict[str, object] | None = None
+    proof = False
+    failed_check: str | None = None
+    status = "completed"
+    if protected and target is None:
+        failed_check = "protected PostgreSQL preflight"
+    elif protected and checks is not None:
+        failed_check = "protected validation requires the canonical check configuration"
+    else:
+        for index, check in enumerate(selected_checks, start=1):
+            protected_pytest = protected and check.label == "pytest"
+            arguments = (*check.command, str(start_path)) if protected_pytest else check.command
+            try:
+                completed = subprocess.run(
+                    arguments,
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    env=command_environment,
+                )
+            except KeyboardInterrupt:
+                failed_check = check.label if checks is None else redact(check.label)
+                status = "interrupted"
+                break
+            except OSError:
+                completed = subprocess.CompletedProcess(
+                    arguments, 1, b"", b"Could not start the validation command.\n"
+                )
+            log_label = check.label if checks is None else redact(check.label)
+            log_path = directory / f"{index:02d}-{_safe_label(log_label)}.log"
+            _write_check_log(
+                log_path,
+                ValidationCheck(check.label, arguments),
+                completed.stdout,
+                completed.stderr,
+                redact,
+            )
+            if protected_pytest:
+                proof_data, verified = inspect_pytest(start_path)
+                proof = completed.returncode == 0 and verified
+            passed = completed.returncode == 0 and (not protected_pytest or proof)
+            check_results.append(
+                ValidationCheckResult(
+                    log_label,
+                    "PASS" if passed else "FAIL",
+                    completed.returncode,
+                    log_path,
+                )
+            )
+            if not passed:
+                failed_check = check.label if checks is None else redact(check.label)
+                if protected_pytest and completed.returncode == 0:
+                    failed_check = "pytest execution evidence"
+                break
+
+    after = snapshot_repository(root, base)
+    unchanged = before == after and start["repository"] == _repository_identity(root)
+    outcome: ValidationOutcome = "PASS" if failed_check is None else "FAIL"
     if not unchanged:
         outcome = "STALE"
         failed_check = "implementation snapshot changed during validation"
-    protected_exercised = protected and any(
-        result.label == "pytest" and result.status == "PASS" for result in check_results
-    )
     result = ValidationResult(
-        outcome=outcome,
-        snapshot_before=snapshot_before,
-        snapshot_after=snapshot_after,
-        checks=tuple(check_results),
-        receipt_path=receipt_path,
-        failed_check=failed_check,
-        test_summary=_test_summary(check_results),
-        protected_postgresql_exercised=protected_exercised,
+        outcome,
+        before,
+        after,
+        tuple(check_results),
+        receipt_path,
+        failed_check,
+        _test_summary(check_results),
+        proof,
     )
-    _write_validation_receipt(root, result, protected)
+    receipt = start | {
+        "status": status,
+        "completedAt": timestamp(),
+        "invocationSha256": sha256(start_path),
+        "outcome": outcome,
+        "snapshotAfterDigest": after.digest,
+        "snapshotUnchanged": unchanged,
+        "failedCheck": failed_check,
+        "testSummary": result.test_summary,
+        "protectedPostgresql": {"requested": protected, "exercised": proof},
+        "pytest": proof_data,
+        "checks": [
+            {
+                "label": check.label,
+                "status": check.status,
+                "returnCode": check.return_code,
+                "logPath": check.log_path.relative_to(root).as_posix(),
+                "logSha256": sha256(check.log_path),
+            }
+            for check in result.checks
+        ],
+    }
+    seal_receipt(receipt_path, directory / "receipt.pending", receipt)
     return result
 
 
@@ -1068,27 +1273,7 @@ def publish_repository(
         raise PublicationError("local origin tracking state is behind or diverged")
 
     snapshot = snapshot_repository(root, base_sha)
-    validation_path = root / OUTPUT_DIRECTORY / "receipts" / f"validation-{snapshot.digest}.json"
-    validation = _read_json_object(validation_path, "validation receipt is stale")
-    validation_identity = {
-        "schema": VALIDATION_SCHEMA,
-        "baseSha": base_sha,
-        "headSha": approved_sha,
-        "snapshotDigest": snapshot.digest,
-        "snapshotAfterDigest": snapshot.digest,
-        "snapshotUnchanged": True,
-    }
-    if any(validation.get(key) != value for key, value in validation_identity.items()):
-        raise PublicationError("validation receipt is stale")
-    if validation.get("outcome") != "PASS":
-        raise PublicationError("validation outcome is not PASS")
-    protected = validation.get("protectedPostgresql")
-    if not isinstance(protected, dict) or not (
-        protected.get("requested") is True and protected.get("exercised") is True
-    ):
-        raise PublicationError("protected PostgreSQL evidence is required")
-
-    review_path = root / OUTPUT_DIRECTORY / "receipts" / f"review-{snapshot.digest}.json"
+    review_path = root / OUTPUT_DIRECTORY / "receipts" / f"review-v3-{snapshot.digest}.json"
     review = _read_json_object(review_path, "review-state receipt is stale")
     if any(
         review.get(key) != value
@@ -1101,17 +1286,29 @@ def publish_repository(
     ):
         raise PublicationError("review-state receipt is stale")
     review_validation = review.get("validation")
-    if not isinstance(review_validation, dict) or review_validation != {
-        "snapshotStatus": "matching",
-        "outcome": "PASS",
-        "protectedPostgresql": {"requested": True, "exercised": True},
-        "receiptPath": validation_path.relative_to(root).as_posix(),
-    }:
+    execution_id = (
+        review_validation.get("executionId") if isinstance(review_validation, dict) else None
+    )
+    if not isinstance(execution_id, str):
+        raise PublicationError("validation receipt is stale")
+    binding = _validation_binding(root, snapshot, execution_id)
+    if binding.snapshot_status != "matching" or binding.receipt_path is None:
+        raise PublicationError("validation receipt is stale")
+    if binding.outcome != "PASS":
+        raise PublicationError("validation outcome is not PASS")
+    if not (binding.protected_requested and binding.protected_exercised):
+        raise PublicationError("protected PostgreSQL evidence is required")
+    if binding.evidence_class != "current" or review_validation != _review_validation_data(binding):
         raise PublicationError("review-state receipt is stale")
+    validation_path = root / binding.receipt_path
     artifact_relative = review.get("artifactPath")
-    if not isinstance(artifact_relative, str):
+    canonical_artifact = f"{OUTPUT_DIRECTORY}/reviews/v3-{snapshot.digest}.json"
+    if artifact_relative != canonical_artifact:
         raise PublicationError("review-state receipt is stale")
-    artifact = _read_json_object(root / artifact_relative, "review-state artifact is stale")
+    artifact_path = root / canonical_artifact
+    artifact = _read_json_object(artifact_path, "review-state artifact is stale")
+    if sha256(artifact_path) != review.get("artifactSha256"):
+        raise PublicationError("review-state artifact is stale")
     if any(
         artifact.get(key) != value
         for key, value in {
@@ -1445,6 +1642,7 @@ def _publication_receipt_envelope(
         "validationReceipt": {
             "schema": VALIDATION_SCHEMA,
             "path": validation_path.relative_to(root).as_posix(),
+            "sha256": sha256(validation_path),
             "snapshotDigest": snapshot_digest,
         },
         "reviewReceipt": {
@@ -1625,6 +1823,8 @@ def _parser() -> argparse.ArgumentParser:
     validation = subcommands.add_parser("validate")
     validation.add_argument("--base", required=True)
     validation.add_argument("--protected", action="store_true")
+    validation.add_argument("--purpose", choices=("current", "recovery"), default="current")
+    subcommands.choices["review-state"].add_argument("--validation-execution")
     publication = subcommands.add_parser("publish")
     publication.add_argument(
         "--issue", type=int, help="explicit issue to verify and close after CI"
@@ -1647,7 +1847,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(json.dumps(collect_preflight(repository, base), sort_keys=True))
         return 0
     if options.command == "review-state":
-        review = create_review_state(repository, base)
+        review = create_review_state(repository, base, execution_id=options.validation_execution)
         output = {
             "status": "READY",
             "baseSha": review.snapshot.base_sha,
@@ -1693,6 +1893,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         repository,
         base,
         protected=bool(options.protected),
+        purpose=options.purpose,
     )
     print(format_validation_result(result))
     if result.outcome != "PASS":

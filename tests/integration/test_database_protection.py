@@ -141,3 +141,25 @@ def test_missing_test_database_fails_closed_in_ci(
 
     with pytest.raises(pytest.fail.Exception, match="required in CI"):
         _validated_test_database_url()
+
+
+def test_rejects_ambient_port_before_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """libpq can redirect a URL with no port to an otherwise excluded development server."""
+    clear_database_environment(monkeypatch)
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL", "postgresql+psycopg://user:password@localhost/core_console_test"
+    )
+    monkeypatch.setenv("DATABASE_URL", database_url("localhost", port=25432))
+    monkeypatch.setenv("PGPORT", "25432")
+
+    with pytest.raises(pytest.fail.Exception, match="routing or session overrides"):
+        _validated_test_database_url()
+
+
+def test_rejects_ambiguous_development_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_database_environment(monkeypatch)
+    monkeypatch.setenv("TEST_DATABASE_URL", database_url("localhost", port=25432))
+    monkeypatch.setenv("DATABASE_URL", f"{database_url('localhost')}?port=25432")
+
+    with pytest.raises(pytest.fail.Exception, match="separation from DATABASE_URL"):
+        _validated_test_database_url()

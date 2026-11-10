@@ -1942,6 +1942,8 @@ async def _wait_for_postgres_backend_lock(
                             FROM pg_locks
                             WHERE pid = :backend_pid
                               AND locktype = 'advisory'
+                              AND mode = 'ExclusiveLock'
+                              AND objsubid = 1
                               AND granted
                         ) AS owns_advisory_lock
                     FROM pg_stat_activity AS activity

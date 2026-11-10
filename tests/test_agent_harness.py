@@ -2,18 +2,21 @@
 
 import json
 import os
+import platform
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import scripts.agent_harness as agent_harness
+import scripts.validation_evidence as validation_evidence
 from scripts.agent_harness import (
     GitHubCli,
     PublicationError,
@@ -24,6 +27,15 @@ from scripts.agent_harness import (
     format_validation_result,
     snapshot_repository,
     validate_repository,
+)
+from scripts.validation_evidence import (
+    PYTEST_ARGS,
+    inspect_pytest,
+    reserve_execution,
+    seal_receipt,
+    sha256,
+    timestamp,
+    write_new,
 )
 
 TEST_REPOSITORY_URL = "https://github.com/core-console/back-end.git"
@@ -474,24 +486,119 @@ def write_publication_evidence(
     protected: bool,
     passing: bool,
 ) -> Path:
-    """Create real snapshot-bound validation and review receipts for a candidate."""
+    """Supply synthetic local evidence to exercise publication with a fake remote."""
+    if not (protected and passing):
+        validation = validate_repository(
+            repository,
+            base_sha,
+            protected=protected,
+            checks=(ValidationCheck("pytest", (sys.executable, "-c", "pass")),),
+            environment={},
+        )
+        create_review_state(repository, base_sha)
+        return validation.receipt_path
 
-    environment = os.environ.copy()
-    if protected:
-        environment["TEST_DATABASE_URL"] = "postgresql+psycopg://test.invalid/core_test"
-    check = ValidationCheck(
-        "pytest",
-        (sys.executable, "-c", f"raise SystemExit({0 if passing else 1})"),
-    )
-    validation = validate_repository(
-        repository,
-        base_sha,
-        protected=protected,
-        checks=(check,),
-        environment=environment,
+    snapshot = snapshot_repository(repository, base_sha)
+    execution_id, directory = reserve_execution(repository / ".agent")
+    gates = agent_harness._validation_checks(base_sha, snapshot.head_sha, None, protected=True)
+    start = agent_harness._validation_identity(repository, snapshot) | {
+        "executionId": execution_id,
+        "startedAt": timestamp(),
+        "profile": "protected",
+        "purpose": "current",
+        "pythonExecutable": sys.executable,
+        "configuration": agent_harness._check_configuration(gates),
+        "pythonVersion": platform.python_version(),
+        "pytestArguments": list(PYTEST_ARGS),
+        "postgresTarget": {"host": "localhost", "port": 5432, "database": "db_test"},
+    }
+    start_path = directory / "started.json"
+    write_new(start_path, start)
+    write_synthetic_pytest(start_path, execution_id)
+    evidence, proven = inspect_pytest(start_path)
+    assert proven
+    logs = []
+    for index, check in enumerate(gates, 1):
+        log_path = directory / f"{index:02d}-{agent_harness._safe_label(check.label)}.log"
+        log_path.write_text("synthetic gate output", encoding="utf-8")
+        logs.append(
+            {
+                "label": check.label,
+                "status": "PASS",
+                "returnCode": 0,
+                "logPath": log_path.relative_to(repository).as_posix(),
+                "logSha256": sha256(log_path),
+            }
+        )
+    receipt_path = agent_harness._validation_path(repository, snapshot, execution_id)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    write_new(
+        receipt_path,
+        start
+        | {
+            "status": "completed",
+            "completedAt": timestamp(),
+            "outcome": "PASS",
+            "snapshotUnchanged": True,
+            "snapshotAfterDigest": snapshot.digest,
+            "invocationSha256": sha256(start_path),
+            "protectedPostgresql": {"requested": True, "exercised": True},
+            "pytest": evidence,
+            "checks": logs,
+        },
     )
     create_review_state(repository, base_sha)
-    return validation.receipt_path
+    return receipt_path
+
+
+def write_synthetic_pytest(start_path: Path, execution_id: str) -> None:
+    """Supply a structurally complete observer report for reader-only tests."""
+    write_new(
+        start_path.with_name("pytest.json"),
+        {
+            "executionId": execution_id,
+            "invocationSha256": sha256(start_path),
+            "pythonVersion": platform.python_version(),
+            "pytestVersion": "9.1.1",
+            "pytestArgs": list(PYTEST_ARGS),
+            "pytestExitCode": 0,
+            "sessionExitCode": 0,
+            "deselected": 0,
+            "collected": ["tests/test_db.py::test_query", "tests/test_db.py::test_opt_in"],
+            "started": ["tests/test_db.py::test_query", "tests/test_db.py::test_opt_in"],
+            "called": ["tests/test_db.py::test_query"],
+            "reports": {
+                "tests/test_db.py::test_query": {
+                    "setup": "passed",
+                    "call": "passed",
+                    "teardown": "passed",
+                },
+                "tests/test_db.py::test_opt_in": {"setup": "skipped", "teardown": "passed"},
+            },
+            "postgresSqlItems": ["tests/test_db.py::test_query"],
+            "postgresLifecycle": [
+                {
+                    "stage": "connected",
+                    "database": "db_test",
+                    "expectedDatabase": "db_test",
+                    "databaseOid": "10",
+                    "targetHost": "localhost",
+                    "targetPort": 5432,
+                    "serverVersion": "18.6",
+                    "serverStartedAt": "timestamp",
+                    "backendPid": 123,
+                },
+                {"stage": "acquired"},
+                {
+                    "stage": "initialized",
+                    "migrationHeads": ["head"],
+                    "schemaOidBefore": "20",
+                    "schemaOidAfter": "21",
+                },
+                {"stage": "released", "migrationHeads": ["head"]},
+            ],
+        },
+    )
 
 
 @pytest.mark.parametrize("issue", (15, None))
@@ -1027,7 +1134,7 @@ def test_publish_without_issue_rejects_stale_review_evidence(tmp_path: Path, evi
     repository, base_sha, approved_sha = committed_publication_candidate(tmp_path)
     write_publication_evidence(repository, base_sha, protected=True, passing=True)
     snapshot = snapshot_repository(repository, base_sha)
-    review_path = repository / ".agent" / "receipts" / f"review-{snapshot.digest}.json"
+    review_path = repository / ".agent" / "receipts" / f"review-v3-{snapshot.digest}.json"
     review = json.loads(review_path.read_text(encoding="utf-8"))
     target = review_path if evidence == "receipt" else repository / review["artifactPath"]
     data = json.loads(target.read_text(encoding="utf-8"))
@@ -1989,8 +2096,8 @@ def test_review_state_rejects_worktree_mutation_during_evidence_collection(
             review.result(timeout=5)
 
     output = repository / ".agent"
-    assert not (output / "reviews" / f"{starting_snapshot.digest}.json").exists()
-    assert not (output / "receipts" / f"review-{starting_snapshot.digest}.json").exists()
+    assert not (output / "reviews" / f"v3-{starting_snapshot.digest}.json").exists()
+    assert not (output / "receipts" / f"review-v3-{starting_snapshot.digest}.json").exists()
 
 
 def test_validation_receipt_matches_only_the_validated_snapshot(tmp_path: Path) -> None:
@@ -2031,7 +2138,7 @@ def test_review_rejects_mismatched_receipt_content_even_when_filename_matches(
     (
         pytest.param(1, False, "FAIL", False, False, id="matching-fail"),
         pytest.param(0, False, "PASS", False, False, id="matching-unprotected-pass"),
-        pytest.param(0, True, "PASS", True, True, id="matching-protected-pass"),
+        pytest.param(0, True, "FAIL", True, False, id="exit-zero-without-execution-proof"),
     ),
 )
 def test_review_cli_distinguishes_validation_identity_outcome_and_protection(
@@ -2052,7 +2159,7 @@ def test_review_cli_distinguishes_validation_identity_outcome_and_protection(
         "pytest",
         (sys.executable, "-c", f"raise SystemExit({return_code})"),
     )
-    validate_repository(
+    validation = validate_repository(
         repository,
         base_sha,
         protected=protected,
@@ -2086,7 +2193,10 @@ def test_review_cli_distinguishes_validation_identity_outcome_and_protection(
             "requested": requested,
             "exercised": exercised,
         },
-        "receiptPath": f".agent/receipts/validation-{output['snapshotDigest']}.json",
+        "receiptPath": validation.receipt_path.relative_to(repository).as_posix(),
+        "executionId": validation.receipt_path.stem.rsplit("-", 1)[1],
+        "receiptSha256": sha256(validation.receipt_path),
+        "evidenceClass": "current",
     }
 
 
@@ -2279,3 +2389,252 @@ def test_direct_cli_can_load_existing_validation_authority(tmp_path: Path) -> No
     assert completed.returncode == 1
     assert "check=uv lock" in completed.stdout
     assert "ModuleNotFoundError" not in completed.stderr
+
+
+def test_same_snapshot_keeps_both_execution_receipts(tmp_path: Path) -> None:
+    repository, base = initialized_repository(tmp_path)
+    checks = (ValidationCheck("pytest", (sys.executable, "-c", "print('gate')")),)
+    first = validate_repository(repository, base, protected=False, checks=checks)
+    first_digest = sha256(first.receipt_path)
+    second = validate_repository(repository, base, protected=False, checks=checks)
+
+    assert first.snapshot_before == second.snapshot_before
+    assert first.receipt_path != second.receipt_path
+    assert first.checks[0].log_path != second.checks[0].log_path
+    assert sha256(first.receipt_path) == first_digest
+    assert create_review_state(repository, base).validation.receipt_sha256 == sha256(
+        second.receipt_path
+    )
+
+
+def test_duplicate_execution_id_and_receipt_replacement_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, base = initialized_repository(tmp_path)
+    fixed_id = uuid4()
+    monkeypatch.setattr(validation_evidence, "uuid4", lambda: fixed_id)
+    first = validate_repository(repository, base, protected=True, environment={})
+    first_digest = sha256(first.receipt_path)
+
+    with pytest.raises(FileExistsError):
+        validate_repository(repository, base, protected=True, environment={})
+    with pytest.raises(FileExistsError):
+        seal_receipt(first.receipt_path, tmp_path / "pending", {"outcome": "PASS"})
+    assert sha256(first.receipt_path) == first_digest
+
+
+@pytest.mark.parametrize(
+    "defect", ["wrong-run", "no-call", "test-failure", "no-release", "wrong-db", "deselected"]
+)
+def test_incomplete_observations_do_not_prove_protected_execution(
+    tmp_path: Path, defect: str
+) -> None:
+    start = tmp_path / "started.json"
+    write_new(
+        start,
+        {
+            "executionId": "run",
+            "pythonVersion": platform.python_version(),
+            "pytestArguments": list(PYTEST_ARGS),
+            "postgresTarget": {"host": "localhost", "port": 5432, "database": "db_test"},
+        },
+    )
+    write_synthetic_pytest(start, "run")
+    evidence, proof = inspect_pytest(start)
+    assert proof and evidence is not None
+    assert evidence["counts"] == {
+        "collected": 2,
+        "selected": 2,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 1,
+        "xfailed": 0,
+        "xpassed": 0,
+        "neverStarted": 0,
+        "neverReachedCall": 1,
+        "incomplete": 0,
+        "postgresExecuted": 1,
+        "postgresPassed": 1,
+    }
+    report_path = start.with_name("pytest.json")
+    report = json.loads(report_path.read_bytes())
+    phases = report["reports"]["tests/test_db.py::test_query"]
+    if defect == "wrong-run":
+        report["executionId"] = "another-run"
+    elif defect == "no-call":
+        del phases["call"]
+    elif defect == "test-failure":
+        phases["call"] = "failed"
+    elif defect == "no-release":
+        report["postgresLifecycle"].pop()
+    elif defect == "wrong-db":
+        report["postgresLifecycle"][0]["database"] = "another_test"
+    else:
+        report["deselected"] = 1
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    assert inspect_pytest(start)[1] is False
+
+
+def test_review_keeps_legacy_claims_historical_and_prefers_current_runs(tmp_path: Path) -> None:
+    repository, base = initialized_repository(tmp_path)
+    snapshot = snapshot_repository(repository, base)
+    legacy = repository / ".agent" / "receipts" / f"validation-{snapshot.digest}.json"
+    legacy.parent.mkdir(parents=True)
+    write_new(
+        legacy,
+        {
+            "schema": "core-console-agent-validation/v1",
+            "baseSha": base,
+            "headSha": base,
+            "snapshotDigest": snapshot.digest,
+            "snapshotAfterDigest": snapshot.digest,
+            "snapshotUnchanged": True,
+            "outcome": "PASS",
+            "protectedPostgresql": {"requested": True, "exercised": True},
+        },
+    )
+    original = legacy.read_bytes()
+    assert create_review_state(repository, base).validation.evidence_class == "historical-v1"
+
+    recovery = validate_repository(
+        repository, base, protected=True, environment={}, purpose="recovery"
+    )
+    recovery_id = recovery.receipt_path.stem.rsplit("-", 1)[1]
+    assert create_review_state(repository, base).validation.evidence_class == "historical-v1"
+    assert (
+        create_review_state(repository, base, execution_id=recovery_id).validation.evidence_class
+        == "recovery"
+    )
+    current = validate_repository(repository, base, protected=True, environment={})
+    assert create_review_state(repository, base).validation.receipt_sha256 == sha256(
+        current.receipt_path
+    )
+    assert legacy.read_bytes() == original
+
+
+def test_publication_rejects_modified_execution_log(tmp_path: Path) -> None:
+    repository, base, head = committed_publication_candidate(tmp_path)
+    receipt = write_publication_evidence(repository, base, protected=True, passing=True)
+    data = json.loads(receipt.read_bytes())
+    (repository / data["checks"][0]["logPath"]).write_text("substituted", encoding="utf-8")
+    with pytest.raises(PublicationError, match="validation receipt is stale"):
+        publish_repository(
+            repository, base=base, approved_sha=head, branch="main", github=UnexpectedGitHub()
+        )
+
+
+@pytest.mark.parametrize("option", ["--collect-only", "-k skip_integration", "-c override.ini"])
+def test_protected_pytest_rejects_external_options(tmp_path: Path, option: str) -> None:
+    env = os.environ | {"PYTEST_ADDOPTS": option}
+    run = run_pytest_probe(tmp_path, env)
+    assert run.returncode != 0
+    assert "Protected pytest rejects external PYTEST_ADDOPTS" in run.stderr
+    assert not (tmp_path / "pytest.json").exists()
+
+
+def test_protected_pytest_rejects_external_plugins(tmp_path: Path) -> None:
+    env = os.environ | {"PYTEST_PLUGINS": "does_not_exist"}
+    run = run_pytest_probe(tmp_path, env)
+    assert run.returncode != 0
+    assert "Protected pytest rejects external PYTEST_PLUGINS" in run.stderr
+    assert not (tmp_path / "pytest.json").exists()
+
+
+def test_protected_pytest_ignores_config_addopts_and_requires_sql(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest]\naddopts = ["--collect-only"]\n', encoding="utf-8"
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_probe.py").write_text(
+        "import pytest\ndef test_run():\n    pass\ndef test_skip():\n    pytest.skip('opt in')\n",
+        encoding="utf-8",
+    )
+    run = run_pytest_probe(tmp_path, dict(os.environ))
+    assert run.returncode == 0, run.stdout + run.stderr
+    evidence, proof = inspect_pytest(tmp_path / "started.json")
+    assert evidence is not None and isinstance(evidence["counts"], dict)
+    assert evidence["counts"]["executed"] == 2
+    assert evidence["counts"]["passed"] == evidence["counts"]["skipped"] == 1
+    assert proof is False
+
+
+@pytest.mark.parametrize("mode", ["collect-only", "test-failure", "interrupted"])
+def test_protected_observer_records_nonqualifying_real_pytest_runs(
+    tmp_path: Path, mode: str
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest]\n", encoding="utf-8")
+    suite = tmp_path / "tests"
+    suite.mkdir()
+    body = "raise KeyboardInterrupt" if mode == "interrupted" else "assert False"
+    (suite / "test_probe.py").write_text(f"def test_body():\n    {body}\n", encoding="utf-8")
+    if mode == "collect-only":
+        (suite / "conftest.py").write_text(
+            "def pytest_configure(config):\n    config.option.collectonly = True\n",
+            encoding="utf-8",
+        )
+    run = run_pytest_probe(tmp_path, dict(os.environ))
+    expected_code = {"collect-only": 0, "test-failure": 1, "interrupted": 2}
+    assert run.returncode == expected_code[mode], run.stdout + run.stderr
+    evidence, proof = inspect_pytest(tmp_path / "started.json")
+    assert evidence is not None and isinstance(evidence["counts"], dict)
+    assert evidence["counts"]["collected"] == 1
+    assert evidence["counts"]["executed"] == (0 if mode == "collect-only" else 1)
+    assert evidence["counts"]["failed"] == (1 if mode == "test-failure" else 0)
+    if mode == "interrupted":
+        assert evidence["counts"]["incomplete"] == 1
+        assert evidence["counts"]["neverReachedCall"] == 0
+    assert proof is False
+
+
+def test_incomplete_execution_is_selected_without_reusing_older_pass(tmp_path: Path) -> None:
+    repository, base, _ = committed_publication_candidate(tmp_path)
+    previous = write_publication_evidence(repository, base, protected=True, passing=True)
+    data = json.loads(previous.read_bytes())
+    snapshot = snapshot_repository(repository, base)
+    execution_id, directory = reserve_execution(repository / ".agent")
+    write_new(
+        directory / "started.json",
+        agent_harness._validation_identity(repository, snapshot)
+        | {
+            "executionId": execution_id,
+            "purpose": "current",
+            "profile": "protected",
+            "startedAt": "9999-01-01T00:00:00+00:00",
+        },
+    )
+
+    current = create_review_state(repository, base).validation
+    assert current.execution_id == execution_id
+    assert current.evidence_class == "incomplete"
+    assert current.outcome is None
+    assert (
+        create_review_state(repository, base, execution_id=data["executionId"]).validation.outcome
+        == "PASS"
+    )
+
+
+def run_pytest_probe(
+    tmp_path: Path, environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    start_path = tmp_path / "started.json"
+    write_new(start_path, {"executionId": "probe", "pythonVersion": platform.python_version()})
+    source = Path(__file__).resolve().parents[1]
+    return subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+            "from scripts.protected_pytest import main; raise SystemExit(main(Path(sys.argv[2])))",
+            str(source),
+            str(start_path),
+        ),
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )

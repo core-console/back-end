@@ -46,16 +46,77 @@ uv run --frozen python scripts/agent_harness.py review-state --base <sha>
 Preflight reads the existing local `origin/main` ref and never fetches. Full protected
 validation preserves the checks and order owned by `scripts/validate.py`, then runs
 resolved base-to-HEAD, unstaged, and staged `git diff --check`. It requires
-`TEST_DATABASE_URL`, forces the existing PostgreSQL fixtures to fail rather than skip,
-and reports success only after pytest actually passes in that mode. It never falls back
-to `DATABASE_URL`.
+`TEST_DATABASE_URL`, forces the existing PostgreSQL fixtures to fail when it is
+missing, and never falls back to `DATABASE_URL`.
 
-Test processes sharing the same `TEST_DATABASE_URL` must run serially, including
-focused tests, protected validation, migration tests, and reviewer checks: integration
-fixtures reset the schema and delete shared records, so overlapping processes can
-interfere with each other. Parallel test processes require separately provisioned
-guarded databases. Intentional concurrency scenarios within a single test remain
-allowed.
+The protected pytest child uses isolated Python, the repository's `pyproject.toml`,
+a fixed full-suite argument list, and an explicit AnyIO plugin. It rejects
+`PYTEST_ADDOPTS` and `PYTEST_PLUGINS`, disables plugin autoload, and overrides
+configuration `addopts` with the checked-in protected profile. Use ordinary pytest
+for ad hoc options and selections. A protected PASS requires successful session
+completion, test-body entry and complete setup/call/teardown evidence for the selected collection,
+zero deselections or failures, and a passing test whose call issued SQL against
+the guarded PostgreSQL target. Legitimate skips are counted separately, including
+items skipped during setup that never entered the test body.
+
+### Safe diagnostics
+
+Pytest scrubs diagnostic values before warning formatting, truncation, or wrapping. It
+also scrubs failure representations, report identifiers, captured output, and JUnit
+metadata before the standard reporters persist or display them. It includes the
+invocation directory's dotenv file when pytest selects a different root. The local/CI
+validation entry point and the Harness sanitize subprocess output before displaying
+or saving it.
+Redaction includes database URLs from the environment and local dotenv file, their
+credential components, and encoded forms. The same redactor checks nested Python and
+JSON representations and captured subprocess text in UTF-8, the platform encoding,
+and any configured `PYTHONIOENCODING`. Receipts record safe database identifiers
+and structured outcomes. Gate log hashes cover the sanitized bytes written to disk.
+
+Use captured pytest reporting for diagnostic runs. An explicitly uncaptured shell,
+debugger, or custom reporter that bypasses the report hooks can expose raw input.
+
+### Disposable database ownership
+
+The fixture checks the URL and development-target separation before opening the
+owner connection, then verifies the actual database identity before attempting a
+nonblocking, database-local PostgreSQL advisory lease. Routing and session
+overrides that would bypass those checks are rejected. The same owner session
+resets the public schema and runs Alembic in a transaction. Evidence includes the
+database identity, server version, public schema OIDs before and after reset, and
+the expected Alembic heads read from the live database. The owner verifies the heads
+again and releases its lease after all dependent fixture cleanup.
+
+The Harness enrolls SQLAlchemy pools on the guarded Psycopg route. Before handing a
+physical session to application SQL, pool checkout verifies its database identity on first use,
+acquires the shared advisory lock once per session, and checks that both the owner
+and client locks are held. Normal reuse verifies the locks without acquiring another
+one. Invalidation and reconnection go through checkout even when SQLAlchemy keeps the
+same connection wrapper. A checkout that cannot establish protection fails closed.
+
+The shared lock survives rollback and checkin. Closing a physical session releases
+its lock, including when a pool disposes idle sessions or an invalidated session is
+discarded. A replacement run needs the exclusive form of the shared key before reset,
+so surviving clients from a lost owner still exclude a reset. A busy target or an
+incomplete lifecycle fails the gate. Use direct PostgreSQL connections with session
+semantics. Clients outside the guarded Harness route can bypass advisory coordination.
+
+Schedule processes sharing a target serially and provision distinct guarded targets
+for independent parallel jobs. The lease coordinates the repository integration
+fixture, including direct pytest and CI runs. Other tools that mutate the target
+must be scheduled separately. Tests may still exercise concurrency within a run.
+
+The kill/recovery, synchronous revalidation, migration rollback, and wrong-target probes reset
+the same disposable database. Run them as a separate, serial command:
+
+```powershell
+$env:CORE_CONSOLE_TEST_POSTGRES_RECOVERY = "1"
+uv run --frozen python -m pytest tests/integration/test_postgres_ownership.py -k "not concurrent_reset and not async_revalidation"
+Remove-Item Env:CORE_CONSOLE_TEST_POSTGRES_RECOVERY
+```
+
+The normal suite runs the contention and asynchronous revalidation probes while its own
+fixture holds the lease.
 
 ## Stage a fresh Finance compatibility campaign
 
@@ -105,28 +166,48 @@ Any implementation path or content change affects at least one digest record.
 
 ## Receipts and review policy
 
-Versioned JSON receipts are written under `.agent/receipts/`; detailed validation logs
-are under `.agent/logs/<snapshot-digest>/`; canonical review artifacts are under
-`.agent/reviews/`. Review artifacts contain committed, staged, and unstaged binary-
-capable full-index patches plus complete untracked UTF-8 content. Untracked binary or
-unusual content is identified by path, byte count, SHA-256, and lossless base64.
-Failed validation prints only the failed check and receipt/log locations; detailed
-output is read from the stored log on demand.
+Each validation attempt reserves a new execution ID under `.agent/validation/<id>/`
+and atomically writes a start record before running any gate. It retains the fixed ordered
+command configuration, purpose, profile, repository, base, HEAD, and snapshot
+digest. The pytest observer binds its phase reports and PostgreSQL lifecycle
+evidence to the hash of that start record. Logs and the observer report stay
+beside it. A completed v2 receipt is sealed atomically without replacement at
+`.agent/receipts/validation-<snapshot-digest>-<id>.json`. It records timestamps,
+outcome, counts, tool versions from the test invocation, and hashes for the
+observer report and every retained gate log. A forced stop can leave a start
+record and partial logs. A caught interruption seals a failure with interrupted
+status. Neither is eligible for PASS. Sealing requires a filesystem that supports
+hard links within `.agent/`.
 
-A validation PASS is valid only when its before/after snapshot digests match. Review
-evidence is assembled between two implementation snapshots; a digest change aborts
-generation without a READY artifact or receipt. Review schema
-`core-console-agent-review/v2` reports validation snapshot identity (`matching`,
-`stale`, or `absent`) separately from outcome, protected PostgreSQL requested/exercised
-state, and receipt path. Snapshot identity matching alone is not validation approval.
+By default, `review-state` selects the newest started current protected execution
+for the snapshot and reports failed or incomplete attempts without falling back
+to an older PASS. Supply `--validation-execution <id>` to select an exact attempt.
+Use `validate --protected --purpose recovery` for fresh recovery evidence. It has
+the same execution gates and requires explicit selection in review-state.
+Historical v1 delivery evidence retains its original filename, bytes, and meaning.
+The reader labels matching v1 evidence `historical-v1`. Publication requires a
+current, canonical, protected v2 PASS for the committed snapshot. Recovery and
+historical receipts remain evidence for their original purposes.
 
-A reviewer may trust a matching PASS receipt only when protected PostgreSQL was both
-requested and exercised, and normally run only targeted tests relevant to concrete
-findings. Rerun the full protected gate when the receipt is absent or stale, the outcome
-is not PASS, PostgreSQL was not requested or exercised, harness or validation
-infrastructure changed, dependencies or configuration changed materially, database
-protection/migrations/CI behavior changed, or environment-sensitive behavior is under
-review. A receipt never replaces Standards and Spec reasoning.
+Review artifacts under `.agent/reviews/` contain committed, staged, and unstaged
+binary-capable full-index patches plus complete untracked UTF-8 content. Untracked
+binary or unusual content includes the path, byte count, SHA-256, and lossless
+base64. Review v3 uses separate artifact and receipt paths from historical review
+files. The review-state receipt is the current selection for its snapshot. It
+binds the artifact hash and the chosen execution ID, receipt path, and receipt
+hash. Publication rechecks that exact execution's receipt, logs, and pytest proof
+before proceeding. These local hashes detect accidental changes and substitutions
+relative to the recorded binding. They do not authenticate a writer with access to
+all evidence files.
+
+A validation PASS requires matching before and after snapshots. Review evidence
+is also assembled between two implementation snapshots. Review schema
+`core-console-agent-review/v3` reports snapshot identity independently of outcome,
+protected PostgreSQL proof, and evidence class. Matching snapshot identity alone
+does not qualify a receipt. A reviewer can rely on a current protected PASS
+covering the exact candidate and run targeted tests for concrete findings. Rerun
+the protected gate after candidate changes or when the evidence is absent,
+failed, stale, incomplete, or from a different profile.
 
 ### Standards and Spec evidence
 

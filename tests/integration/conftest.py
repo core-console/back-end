@@ -1,18 +1,17 @@
 """Protected fixtures for real PostgreSQL integration tests."""
 
-import asyncio
 import ipaddress
-import platform
+import os
 import socket
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Connection, delete, make_url, text
+from scripts.protected_pytest import OBSERVER
+from scripts.test_postgres import prepare_postgres
+from sqlalchemy import delete, make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -55,7 +54,7 @@ from core_console.modules.users.models import User
 
 
 class TestDatabaseSettings(BaseSettings):
-    """Read only the explicit test database environment variable."""
+    """Read environment-only settings for the PostgreSQL test fixtures."""
 
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
@@ -65,6 +64,7 @@ class TestDatabaseSettings(BaseSettings):
     )
     ci: bool = Field(default=False, validation_alias="CI")
     github_actions: bool = Field(default=False, validation_alias="GITHUB_ACTIONS")
+    recovery_opt_in: str = Field(default="", validation_alias="CORE_CONSOLE_TEST_POSTGRES_RECOVERY")
 
 
 type DatabaseTarget = tuple[frozenset[str], int, str | None]
@@ -135,12 +135,18 @@ def _validated_test_database_url() -> str:
             dev_identity_subject="test-developer",
             database_url=test_environment.test_database_url,
         )
-    except Exception as exc:
-        pytest.fail(f"TEST_DATABASE_URL is not a valid PostgreSQL URL: {exc}")
+    except Exception:
+        pytest.fail("TEST_DATABASE_URL is not a valid PostgreSQL URL.")
     test_database_url = test_settings.database_url_value()
     if test_database_url is None:
         pytest.fail("TEST_DATABASE_URL must contain an explicit PostgreSQL URL.")
-    test_database_name = make_url(test_database_url).database
+    parsed = make_url(test_database_url)
+    routing_overrides = {"host", "hostaddr", "port", "dbname", "service", "options"}
+    if set(parsed.query) & routing_overrides or any(
+        os.environ.get(name) for name in ("PGHOSTADDR", "PGPORT", "PGSERVICE", "PGOPTIONS")
+    ):
+        pytest.fail("TEST_DATABASE_URL must not use PostgreSQL routing or session overrides.")
+    test_database_name = parsed.database
     if test_database_name is None or "test" not in test_database_name.casefold().replace(
         "-", "_"
     ).split("_"):
@@ -155,53 +161,36 @@ def _validated_test_database_url() -> str:
             dev_identity_issuer="https://identity.example.test",
             dev_identity_subject="test-developer",
         )
-    except Exception as exc:
-        pytest.fail(f"development DATABASE_URL is not a valid PostgreSQL URL: {exc}")
+    except Exception:
+        pytest.fail("development DATABASE_URL is not a valid PostgreSQL URL.")
     development_database_url = development_settings.database_url_value()
-    if development_database_url is not None and _database_targets_overlap(
-        _database_target(test_database_url),
-        _database_target(development_database_url),
-    ):
-        pytest.fail(
-            "TEST_DATABASE_URL points at the same PostgreSQL target as DATABASE_URL; "
-            "a dedicated test database is required."
-        )
+    if development_database_url is not None:
+        if set(make_url(development_database_url).query) & routing_overrides:
+            pytest.fail("Cannot establish separation from DATABASE_URL with routing overrides.")
+        if _database_targets_overlap(
+            _database_target(test_database_url),
+            _database_target(development_database_url),
+        ):
+            pytest.fail(
+                "TEST_DATABASE_URL points at the same PostgreSQL target as DATABASE_URL; "
+                "a dedicated test database is required."
+            )
 
     return test_database_url
 
 
-async def _reset_and_upgrade(database_url: str) -> None:
-    """Reset the protected test target, then apply every migration."""
-
-    engine = create_async_engine(database_url, pool_pre_ping=True)
-    try:
-        async with engine.begin() as connection:
-            await connection.execute(text("DROP SCHEMA public CASCADE"))
-            await connection.execute(text("CREATE SCHEMA public"))
-
-        async with engine.begin() as connection:
-
-            def upgrade(sync_connection: Connection) -> None:
-                config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
-                config.attributes["connection"] = sync_connection
-                command.upgrade(config, "head")
-
-            await connection.run_sync(upgrade)
-    finally:
-        await engine.dispose()
-
-
 @pytest.fixture(scope="session")
-def postgres_database_url() -> str:
-    """Prepare a dedicated TEST_DATABASE_URL and never fall back to DATABASE_URL."""
-
+def postgres_database_url(pytestconfig: pytest.Config) -> Iterator[str]:
+    """Prepare and own the dedicated database through all dependent fixture cleanup."""
     database_url = _validated_test_database_url()
-    if platform.system() == "Windows":
-        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
-            runner.run(_reset_and_upgrade(database_url))
-    else:
-        asyncio.run(_reset_and_upgrade(database_url))
-    return database_url
+    observer = pytestconfig.stash.get(OBSERVER, None)
+    with prepare_postgres(
+        database_url,
+        Path(__file__).resolve().parents[2] / "alembic.ini",
+        record=observer.postgres.append if observer is not None else lambda _event: None,
+        observe_sql=observer.record_sql if observer is not None else lambda: None,
+    ):
+        yield database_url
 
 
 @pytest.fixture

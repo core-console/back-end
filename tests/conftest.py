@@ -12,6 +12,8 @@ from httpx import ASGITransport, AsyncClient
 from core_console.app import create_app
 from core_console.config import AuthMode, Environment, Settings
 
+pytest_plugins = ("scripts.pytest_database_diagnostics",)
+
 
 @pytest.fixture
 def anyio_backend() -> str | tuple[str, dict[str, object]]:
