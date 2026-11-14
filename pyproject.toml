@@ -67,4 +67,5 @@ files = ["src", "tests", "scripts", "migrations/env.py"]
 
 [tool.pytest]
 addopts = ["-ra", "--strict-config", "--strict-markers"]
+pythonpath = ["."]
 testpaths = ["tests"]

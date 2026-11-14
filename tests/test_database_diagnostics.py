@@ -183,6 +183,36 @@ def assert_no_credentials(output: str) -> None:
                 pytest.fail("Synthetic database credential escaped the diagnostic boundary.")
 
 
+def test_pytest_console_loads_diagnostics_without_pythonpath() -> None:
+    executable = Path(sys.executable).with_name("pytest.exe" if os.name == "nt" else "pytest")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() != "PYTHONPATH" and not key.upper().startswith("PYTEST_")
+    }
+    result = subprocess.run(
+        (
+            str(executable),
+            "--disable-plugin-autoload",
+            "-p",
+            "anyio.pytest_plugin",
+            "--trace-config",
+            "--collect-only",
+            "-q",
+            "tests/test_health.py",
+        ),
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0
+    assert "scripts.pytest_database_diagnostics" in result.stdout
+    assert "test_liveness_does_not_require_database" in result.stdout
+
+
 def test_pytest_nested_comparison_redacts_before_diffing(tmp_path: Path) -> None:
     suite = tmp_path / "tests"
     suite.mkdir()
