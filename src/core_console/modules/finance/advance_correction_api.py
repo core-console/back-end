@@ -57,6 +57,7 @@ def _request_schema(model: type[AdvanceCorrectionDraftV1]) -> dict[str, object]:
     "/advance-corrections/preview",
     operation_id="previewFinanceAdvanceCorrection",
     response_model=AdvanceCorrectionPreview,
+    response_model_exclude_defaults=True,
     responses=_ERRORS,
     openapi_extra={
         "security": [],
@@ -122,6 +123,7 @@ async def post_correction(
     "/advance-corrections/{correctionId}",
     operation_id="getFinanceAdvanceCorrection",
     response_model=AdvanceCorrectionResponse,
+    response_model_exclude_defaults=True,
     responses=_ERRORS,
     openapi_extra={"security": []},
 )
@@ -142,6 +144,7 @@ async def get_correction(
     "/advances/{advanceId}/corrections",
     operation_id="listFinanceAdvanceCorrections",
     response_model=list[AdvanceCorrectionResponse],
+    response_model_exclude_defaults=True,
     responses=_ERRORS,
     openapi_extra={"security": []},
 )

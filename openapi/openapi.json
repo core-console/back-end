@@ -1932,6 +1932,13 @@
             ],
             "title": "Before"
           },
+          "cashReleases": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionCashRelease"
+            },
+            "title": "Cashreleases",
+            "type": "array"
+          },
           "financialEffectsAfter": {
             "items": {
               "$ref": "#/components/schemas/CorrectionFinancialEffect"
@@ -2099,6 +2106,13 @@
               }
             ],
             "title": "Before"
+          },
+          "cashReleases": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionCashRelease"
+            },
+            "title": "Cashreleases",
+            "type": "array"
           },
           "confirmedAt": {
             "format": "date-time",
@@ -4281,6 +4295,83 @@
           "cashPaid"
         ],
         "title": "CorrectionCashAllocation",
+        "type": "object"
+      },
+      "CorrectionCashRelease": {
+        "additionalProperties": false,
+        "properties": {
+          "cashAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "cashBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "title": "Confirmedat",
+            "type": "string"
+          },
+          "creditAccountId": {
+            "format": "uuid",
+            "title": "Creditaccountid",
+            "type": "string"
+          },
+          "creditAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "creditBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "financialEffect": {
+            "$ref": "#/components/schemas/CorrectionFinancialEffect"
+          },
+          "obligationId": {
+            "format": "uuid",
+            "title": "Obligationid",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "receiptAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "released": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "settlementId": {
+            "format": "uuid",
+            "title": "Settlementid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "settlementId",
+          "confirmationOrder",
+          "confirmedAt",
+          "transactionDate",
+          "receiptAmount",
+          "obligationId",
+          "position",
+          "cashBefore",
+          "cashAfter",
+          "released",
+          "creditAccountId",
+          "creditBefore",
+          "creditAfter",
+          "financialEffect"
+        ],
+        "title": "CorrectionCashRelease",
         "type": "object"
       },
       "CorrectionFinancialEffect": {

@@ -185,7 +185,7 @@ async def test_correct_attribution_repeatedly_retains_original_and_intermediate_
     )
 
 
-@pytest.mark.parametrize("activity", ["cash", "forgiveness", "credit"])
+@pytest.mark.parametrize("activity", ["forgiveness", "credit"])
 async def test_downstream_activity_rejects_preview_and_confirmation_without_changes(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
     activity: str,
@@ -196,9 +196,7 @@ async def test_downstream_activity_rejects_preview_and_confirmation_without_chan
     source = await advance(client, actor, base, draft, "100.00", "2026-10-20")
     body = correction(source)
     plan = (await client.post(f"{base}/advance-corrections/preview", json=body)).json()
-    if activity == "cash":
-        await confirm(client, actor, base, repayment(draft, "10.00"))
-    elif activity == "credit":
+    if activity == "credit":
         await apply_credit(
             client, actor, base, application(draft, [source["obligation"]["id"]], "10.00")
         )
@@ -291,7 +289,7 @@ async def test_removed_archived_participant_cannot_receive_new_debt_via_correcti
     assert rejected.json()["code"] == "finance_participant_archived"
 
 
-async def test_shared_correction_restates_all_effects_and_any_participant_settlement_blocks_it(
+async def test_shared_correction_restates_all_effects_and_retains_cash_settlement(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
 ) -> None:
     client, actor, base, draft = advance_client
@@ -339,7 +337,11 @@ async def test_shared_correction_restates_all_effects_and_any_participant_settle
     accounts = {a["id"]: a for a in (await client.get(f"{base}/accounts")).json()}
     assert accounts[str(draft["fundingAccountId"])]["currentBalance"] == money("-150.00")
     await confirm(client, actor, base, repayment({**draft, "participantId": other["id"]}, "10.00"))
-    rejected = await client.post(f"{base}/advance-corrections/preview", json=body)
-    assert rejected.status_code == 409
-    assert rejected.json()["code"] == "finance_advance_correction_ineligible"
-    assert (await client.get(f"{base}/advances/{source['id']}/corrections")).json() == [detail]
+    after_cash = await correct(client, actor, base, body)
+    obligations = {o["participantId"]: o for o in after_cash["after"]["obligations"]}
+    assert obligations[other["id"]]["cashPaid"] == money("10.00")
+    assert obligations[other["id"]]["remaining"] == money("100.00")
+    assert (await client.get(f"{base}/advances/{source['id']}/corrections")).json() == [
+        detail,
+        after_cash,
+    ]

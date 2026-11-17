@@ -27,6 +27,7 @@ class FinanceAdvanceCorrection(Base):
             ["ledger_id", "actor_id"], ["finance_ledgers.id", "finance_ledgers.owner_id"]
         ),
         UniqueConstraint("advance_id", "revision", name="uq_finance_advance_corrections_revision"),
+        UniqueConstraint("id", "ledger_id", name="uq_finance_advance_corrections_ledger"),
         CheckConstraint("revision > 0", name="ck_finance_advance_corrections_revision"),
         CheckConstraint(
             "jsonb_typeof(plan) = 'object'", name="ck_finance_advance_corrections_plan"
@@ -41,3 +42,27 @@ class FinanceAdvanceCorrection(Base):
     confirmed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class FinanceAdvanceCorrectionTransaction(Base):
+    """A protected receipt reclassification created by an Advance Correction."""
+
+    __tablename__ = "finance_advance_correction_transactions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["correction_id", "ledger_id"],
+            ["finance_advance_corrections.id", "finance_advance_corrections.ledger_id"],
+        ),
+        ForeignKeyConstraint(
+            ["settlement_id", "ledger_id"],
+            ["finance_settlements.id", "finance_settlements.ledger_id"],
+        ),
+        ForeignKeyConstraint(
+            ["transaction_id", "ledger_id"],
+            ["finance_transactions.id", "finance_transactions.ledger_id"],
+        ),
+    )
+    transaction_id: Mapped[UUID] = mapped_column(primary_key=True)
+    ledger_id: Mapped[UUID]
+    correction_id: Mapped[UUID]
+    settlement_id: Mapped[UUID]

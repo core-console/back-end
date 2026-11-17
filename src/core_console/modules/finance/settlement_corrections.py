@@ -9,6 +9,9 @@ from uuid import UUID, uuid5
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core_console.modules.finance.advance_correction_models import (
+    FinanceAdvanceCorrectionTransaction,
+)
 from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
     CorrectionMovement,
@@ -144,6 +147,13 @@ async def _effects(
                 == FinanceSettlementCorrectionTransaction.correction_id,
             )
             .where(FinanceSettlementCorrection.settlement_id == source.id)
+        )
+    )
+    ids.update(
+        await session.scalars(
+            select(FinanceAdvanceCorrectionTransaction.transaction_id).where(
+                FinanceAdvanceCorrectionTransaction.settlement_id == source.id
+            )
         )
     )
     result = []
@@ -386,7 +396,9 @@ async def preview_settlement_correction(
             paid[a.obligation_id] = subtract(paid[a.obligation_id], removed)
             release = subtract(release, removed)
     elif amount > source.amount:
-        left = subtract(amount, total_paid)
+        # Only newly corrected cash can resolve debt. Previously retained credit
+        # remains available until the owner explicitly applies or returns it.
+        left = subtract(amount, source.amount)
         for a in before.allocations:
             o = obligations[a.obligation_id]
             extra = min(left, Decimal(o.remaining.amount))

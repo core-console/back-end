@@ -62,6 +62,23 @@ class CorrectionAccountEffect(_Projection):
     balance_after: MoneyResponse = Field(alias="balanceAfter")
 
 
+class CorrectionCashRelease(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    confirmed_at: datetime = Field(alias="confirmedAt")
+    transaction_date: date = Field(alias="transactionDate")
+    receipt_amount: MoneyResponse = Field(alias="receiptAmount")
+    obligation_id: UUID = Field(alias="obligationId")
+    position: int
+    cash_before: MoneyResponse = Field(alias="cashBefore")
+    cash_after: MoneyResponse = Field(alias="cashAfter")
+    released: MoneyResponse
+    credit_account_id: UUID = Field(alias="creditAccountId")
+    credit_before: MoneyResponse = Field(alias="creditBefore")
+    credit_after: MoneyResponse = Field(alias="creditAfter")
+    financial_effect: CorrectionFinancialEffect = Field(alias="financialEffect")
+
+
 class AdvanceCorrectionPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     advance_id: UUID = Field(alias="advanceId")
@@ -74,6 +91,7 @@ class AdvanceCorrectionPreview(_Projection):
     )
     financial_effects_after: list[CorrectionFinancialEffect] = Field(alias="financialEffectsAfter")
     account_effects: list[CorrectionAccountEffect] = Field(alias="accountEffects")
+    cash_releases: list[CorrectionCashRelease] = Field(default_factory=list, alias="cashReleases")
 
 
 class AdvanceCorrectionResponse(AdvanceCorrectionPreview):

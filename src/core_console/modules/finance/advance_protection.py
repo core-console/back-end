@@ -6,6 +6,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core_console.modules.finance.advance_correction_models import (
+    FinanceAdvanceCorrectionTransaction,
+)
 from core_console.modules.finance.advance_models import (
     FinanceAdvance,
     FinanceAdvanceTransaction,
@@ -60,6 +63,8 @@ async def require_unmanaged_accounts(session: AsyncSession, account_ids: Collect
 
 
 async def require_unlinked_transaction(session: AsyncSession, transaction_id: UUID) -> None:
+    if await session.get(FinanceAdvanceCorrectionTransaction, transaction_id) is not None:
+        raise linked_record_problem()
     if await session.get(FinanceSettlementCorrectionTransaction, transaction_id) is not None:
         raise linked_record_problem()
     if (
