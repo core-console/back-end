@@ -18,7 +18,8 @@
 - The backend-generated, committed OpenAPI document is authoritative.
 - Preserve existing paths, operation IDs, status codes, and response structures
   unless a deliberate contract change is reviewed with its consumers.
-- Export OpenAPI deterministically and run the drift check with every change.
+- Export OpenAPI deterministically and check for drift when the API contract or
+  export process changes. CI also checks drift.
 - Return API errors as `application/problem+json` Problem Details with stable
   machine-readable codes.
 
@@ -44,38 +45,30 @@
   tests may use a dedicated local or CI PostgreSQL via `TEST_DATABASE_URL`, but
   must never fall back to or clean `DATABASE_URL`; Keycloak, Kubernetes, and
   real public networks remain outside current integration-test dependencies.
-- Run the protected repository harness validation documented in
-  `docs/agents/harness.md` before handing off a candidate. It owns the complete
-  validation sequence and all required diff checks.
+- For ordinary changes, understand the relevant implementation and specification,
+  then run focused tests and static checks appropriate to the change. Before
+  publishing, check the final source content once; CI runs the complete suite.
+- For changes to database ownership, credentials, validation infrastructure, or
+  other sensitive infrastructure, run protected validation and relevant focused
+  recovery and regression tests. See `docs/agents/harness.md`.
 - Follow Conventional Commits and keep each commit to one logical concern.
 
 ## Change approval boundary
 
 - Do not commit or push unless the user explicitly approves it in the current conversation.
-- Use Matt `implement` with the repository override in `docs/agents/harness.md`:
-  protected validation is the final suite, Standards and Spec review cover the
-  complete identity-bound candidate, and handoff stops uncommitted at
-  `READY_FOR_REVIEW`.
-- Reuse independent Standards and Spec reviews only when they cover the unchanged
-  complete candidate and meet the evidence policy in `docs/agents/harness.md`.
-  Otherwise obtain the missing or replacement reviews from the canonical harness
-  artifact. A separate fresh session is optional; explicit user approval is still
-  required before commit or publication.
-- A commit changes snapshot identity. Regenerate protected validation and
-  review-state evidence for that committed snapshot before publication; do not
-  reuse or promote the uncommitted receipts.
-- Implementation delivery and issue closure must go through the publication
-  harness; never run `gh issue close` directly for an implementation issue.
-  Issue linkage is optional; close only an explicitly supplied issue after the
-  harness's exact-SHA CI and remote checks. Direct closure remains available
-  only for non-delivery tracker work.
+- Use normal Git commit and push for ordinary publication, then verify GitHub CI
+  for the published commit. Committing unchanged, already-checked content does
+  not require repeating local validation. The protected publication harness is
+  available when its additional evidence is wanted.
+- Close an issue only when explicitly authorized and after its delivery and
+  acceptance requirements are satisfied.
 - Repository instructions take precedence over conflicting workflow defaults.
 - Do not expand the approved scope while addressing review findings.
 
 ## Agent skills
 
-Repository preflight, snapshot-bound validation, and worktree review evidence are
-documented in `docs/agents/harness.md`.
+Protected validation and the optional publication harness are documented in
+`docs/agents/harness.md`.
 
 ### Issue tracker
 

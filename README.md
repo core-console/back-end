@@ -127,8 +127,9 @@ under `/api`; the contract represents that prefix as an OpenAPI server and keeps
 the frontend-compatible path `/helloWorld`. Operational health endpoints are not
 frontend business APIs and are excluded from this contract.
 
-Contract changes must be reviewed with the backend API implementation and
-committed here before consumers synchronize them. The frontend snapshot is a
+Review contract changes with the backend API implementation. Consumers may sync
+an explicitly identified uncommitted backend candidate during local development;
+verify the final contract pairing before publication. The frontend snapshot is a
 consumer copy; backend validation and CI never write to the frontend repository.
 
 Export the deterministic contract:
@@ -148,14 +149,18 @@ machine paths, or random values.
 
 ## Quality checks
 
-For a candidate handoff, run the repository harness with the candidate's explicit
-review base. This is the canonical complete validation route:
+During ordinary development and before publishing, run focused tests and checks
+appropriate to the final source content. GitHub CI runs the complete validation
+suite. A commit alone does not require rerunning checks on unchanged content.
+
+For sensitive infrastructure changes, run protected validation with an explicit
+review base; see [the harness guide](docs/agents/harness.md):
 
 ```console
 uv run --frozen python scripts/agent_harness.py validate --base <sha> --protected
 ```
 
-The harness runs `scripts/validate.py`, which checks, in order:
+The protected harness uses the checks from `scripts/validate.py`, which run in CI:
 
 1. `uv.lock` consistency
 2. Ruff formatting
@@ -164,9 +169,8 @@ The harness runs `scripts/validate.py`, which checks, in order:
 5. pytest
 6. OpenAPI drift
 
-It then runs the committed, staged, and unstaged diff checks and writes
-snapshot-bound validation evidence. Do not run a second standalone full validation
-for the same candidate snapshot.
+The protected harness also runs diff checks and records validation evidence.
+It is not required for ordinary changes.
 
 Run an individual check with the same frozen environment, for example:
 

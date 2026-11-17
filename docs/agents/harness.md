@@ -1,53 +1,47 @@
-# Repository agent harness
+# Repository validation and agent harness
 
-The repository-local harness records deterministic Git/worktree state and validation
-evidence. It supports review; it does not automate Standards or Spec judgement.
+## Normal development
 
-## Candidate lifecycle
+Understand the relevant implementation and specification. Run focused tests and
+static checks appropriate to the change, and review the final diff. Independent
+Standards and Spec reports, snapshot manifests, historical evidence audits, and
+protected full validation are optional for ordinary changes.
 
-Use the installed Matt `implement` skill for the approved spec or tickets, with these
-repository overrides:
+## Before publishing
 
-1. Use Matt's TDD loop where possible at agreed seams, with targeted tests and
-   typechecking during implementation. Use protected harness validation below as
-   the final complete suite, rather than running a second standalone full suite.
-2. After protected validation, generate `review-state`. Use Matt `code-review`'s
-   parallel Standards and Spec sub-agents against that canonical artifact, or reuse
-   their existing reports when they meet the review evidence policy below. Supply
-   the approved user spec or ticket and repository standards to the reviewers.
-   Review all committed, staged, unstaged, and untracked candidate content; Matt's
-   default `git diff <fixed-point>...HEAD` alone omits uncommitted work and is not the
-   review input here. Resolve findings and regenerate evidence after candidate changes.
-3. Stop uncommitted at `READY_FOR_REVIEW` instead of Matt `implement`'s default commit
-   step. Keep the index untouched when the user requests an unstaged candidate.
+Run the relevant checks once against the final source content. With explicit user
+authorization, commit and push normally, then verify GitHub CI for the published
+commit. CI runs the complete checks in `scripts/validate.py` and the packaging
+checks. A commit alone does not require repeating local checks on unchanged content.
+Close an issue only when explicitly authorized and after its delivery and acceptance
+requirements are met.
 
-Matt skills own implementation and independent Standards/Spec judgement. The harness
-owns snapshot identity, protected validation, canonical review evidence, and separately
-authorized publication. A READY review-state artifact is preparation evidence, not a
-Standards or Spec approval. Valid independent Matt reviews satisfy the review gate in
-the implementation session; a separate fresh-session review is optional. User approval
-is still required after review and before commit or publication. Installed skills
-remain unchanged; this repository needs no separate candidate implementation skill.
+## Sensitive infrastructure changes
 
-Committing changes the snapshot identity, even when the worktree bytes are unchanged.
-Before publication, generate fresh protected validation and review-state evidence for
-the committed snapshot. Uncommitted receipts are neither promoted nor treated as
-content-equivalent. The publication harness then owns push, exact-SHA CI verification,
-and closure of an explicitly supplied implementation issue. Issue linkage is optional.
+For changes to database ownership, credentials, validation infrastructure, or other
+genuinely sensitive infrastructure, run protected validation before handoff or
+publishing, along with focused recovery or regression tests appropriate to the change.
+From the repository root, supply an explicit review base:
 
-Run commands from the repository root with an explicit review base:
+```powershell
+uv run --frozen python scripts/agent_harness.py validate --base <sha> --protected
+```
+
+Protected validation preserves the checks and order owned by `scripts/validate.py`,
+then runs resolved base-to-HEAD, unstaged, and staged `git diff --check`. It requires
+`TEST_DATABASE_URL`, forces the existing PostgreSQL fixtures to fail when it is
+missing, and never falls back to `DATABASE_URL`.
+
+The optional protected publication command below requires validation and review-state
+evidence for the committed snapshot. If using that command, commit with user
+authorization first, then run protected validation and `review-state` on that snapshot
+so unchanged content is not validated twice. Preflight is optional and reads the local
+`origin/main` ref without fetching:
 
 ```powershell
 uv run --frozen python scripts/agent_harness.py preflight --base <sha>
-uv run --frozen python scripts/agent_harness.py validate --base <sha> --protected
 uv run --frozen python scripts/agent_harness.py review-state --base <sha>
 ```
-
-Preflight reads the existing local `origin/main` ref and never fetches. Full protected
-validation preserves the checks and order owned by `scripts/validate.py`, then runs
-resolved base-to-HEAD, unstaged, and staged `git diff --check`. It requires
-`TEST_DATABASE_URL`, forces the existing PostgreSQL fixtures to fail when it is
-missing, and never falls back to `DATABASE_URL`.
 
 The protected pytest child uses isolated Python, the repository's `pyproject.toml`,
 a fixed full-suite argument list, and an explicit AnyIO plugin. It rejects
@@ -185,9 +179,9 @@ to an older PASS. Supply `--validation-execution <id>` to select an exact attemp
 Use `validate --protected --purpose recovery` for fresh recovery evidence. It has
 the same execution gates and requires explicit selection in review-state.
 Historical v1 delivery evidence retains its original filename, bytes, and meaning.
-The reader labels matching v1 evidence `historical-v1`. Publication requires a
-current, canonical, protected v2 PASS for the committed snapshot. Recovery and
-historical receipts remain evidence for their original purposes.
+The reader labels matching v1 evidence `historical-v1`. The protected publication
+command requires a current, canonical, protected v2 PASS for the committed snapshot.
+Recovery and historical receipts remain evidence for their original purposes.
 
 Review artifacts under `.agent/reviews/` contain committed, staged, and unstaged
 binary-capable full-index patches plus complete untracked UTF-8 content. Untracked
@@ -195,60 +189,23 @@ binary or unusual content includes the path, byte count, SHA-256, and lossless
 base64. Review v3 uses separate artifact and receipt paths from historical review
 files. The review-state receipt is the current selection for its snapshot. It
 binds the artifact hash and the chosen execution ID, receipt path, and receipt
-hash. Publication rechecks that exact execution's receipt, logs, and pytest proof
-before proceeding. These local hashes detect accidental changes and substitutions
+hash. Protected publication rechecks that exact execution's receipt, logs, and pytest
+proof before proceeding. These local hashes detect accidental changes and substitutions
 relative to the recorded binding. They do not authenticate a writer with access to
 all evidence files.
 
-A validation PASS requires matching before and after snapshots. Review evidence
-is also assembled between two implementation snapshots. Review schema
-`core-console-agent-review/v3` reports snapshot identity independently of outcome,
-protected PostgreSQL proof, and evidence class. Matching snapshot identity alone
-does not qualify a receipt. A reviewer can rely on a current protected PASS
-covering the exact candidate and run targeted tests for concrete findings. Rerun
-the protected gate after candidate changes or when the evidence is absent,
-failed, stale, incomplete, or from a different profile.
+A validation PASS requires matching before and after snapshots. Review evidence is
+also assembled between two snapshots. Review schema `core-console-agent-review/v3`
+reports snapshot identity, protected PostgreSQL proof, and evidence class. For protected
+publication, the required evidence must match the committed snapshot; staging or
+changing the base or HEAD changes that identity. Independent Standards or Spec reports
+are optional and are not generated or verified by the harness.
 
-### Standards and Spec evidence
+## Optional protected publication
 
-Retain both sub-agent reports in the conversation or a durable local file under
-`.agent/reviews/`, with a reference to each report in the candidate handoff. The harness
-does not generate or verify these judgements. Each axis must record:
-
-- its independent reviewer identity (sub-agent/session reference) and axis;
-- the resolved base SHA, HEAD SHA, snapshot digest, complete changed-file inventory,
-  canonical artifact path, and validation/review receipt paths it reviewed;
-- its sources: repository standards for Standards, and the approved user request or
-  ticket/spec for Spec;
-- its verdict, findings, and disposition of every finding. Blocking findings must be
-  resolved and reviewed on the final candidate; retain any non-blocking notes.
-
-Existing reports qualify only when both axes cover the complete current candidate,
-their sources still describe the approved scope and applicable standards, and the
-current receipt shows matching protected validation PASS with PostgreSQL requested
-and exercised. A skipped Spec review, self-review by the implementer, empty fixed-point
-diff, summary claiming PASS without the reports, or READY artifact alone is insufficient.
-
-Before handoff or relying on previous reviews for approval, rerun `review-state` with
-the pinned base and compare its identity and inventory with both reports. Reuse them
-only if these still match. Candidate changes, including staging or a changed base/HEAD,
-invalidate the old review binding. Regenerate protected validation and the artifact,
-then obtain replacement Standards and Spec reviews of the complete candidate. Do the
-same when scope or standards changes make the earlier review insufficient.
-
-When reports are missing or incomplete, obtain the missing or replacement independent
-axis reviews against the current canonical artifact. If validation is absent, stale,
-failed, or unprotected, first rerun the protected gate and regenerate `review-state`.
-A fresh session can perform this recovery or an additional review at the user's request;
-opening a new session alone never establishes coverage. Stop before handoff as
-`READY_FOR_REVIEW` or requesting delivery approval until both axes and validation qualify.
-The handoff includes the pinned candidate, evidence/report references, and separate
-Standards and Spec outcomes. Evidence reuse never supplies delivery authorization.
-
-## Explicit publication
-
-Publication is a separate, explicitly invoked operation. Validation and review receipts
-are evidence only; they never authorize a commit, push, CI rerun, or issue closure.
+Use normal Git and CI for ordinary publication. The following command is available
+when its additional evidence is wanted. It requires explicit authorization; validation
+and review receipts never authorize a commit, push, CI rerun, or issue closure.
 
 ```powershell
 uv run --frozen python scripts/agent_harness.py publish `
@@ -257,7 +214,7 @@ uv run --frozen python scripts/agent_harness.py publish `
 
 Add `--issue <number>` only when publication includes that issue. Without it, the
 harness neither looks up nor closes an issue, and publication needs no invented tracker
-item. Both paths require the same approved candidate and all validation, review,
+item. Both paths require the same approved candidate and all validation, review-state,
 destination, push, exact-SHA CI/job, final remote equality, and receipt evidence.
 
 Issue-specific cross-repository gates also remain required. Backend publication alone
