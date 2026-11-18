@@ -224,6 +224,45 @@ async def test_credit_only_receipt_correction_preserves_origin_identity_and_orde
     assert current["creditOrigin"]["available"] == money("40.00")
 
 
+async def test_replacing_retained_credit_with_income_keeps_credit_in_history(
+    advance_client: tuple[AsyncClient, User, str, dict[str, object]],
+) -> None:
+    client, actor, base, draft = advance_client
+    await advance(client, actor, base, draft, "100.00", "2026-10-20")
+    receipt = await retain_credit(client, actor, base, draft, "110.00")
+    origin = receipt["creditOrigin"]
+    original_transfer_url = f"{base}/transactions/{origin['transactionId']}"
+    original_transfer = await client.get(original_transfer_url)
+    assert original_transfer.status_code == 200
+
+    revision = await correct(client, actor, base, correction(receipt, "102.00", "acceptIncome"))
+
+    receipt_url = f"{base}/settlements/{receipt['id']}"
+    response = await client.get(receipt_url)
+    assert response.status_code == 200
+    current = response.json()
+    assert current["amount"] == money("102.00")
+    assert current["allocations"][0]["cashPaid"] == money("100.00")
+    assert current["acceptedSurplus"] == money("2.00")
+    assert "creditOrigin" not in current
+    assert current["incomeTransactionId"] in current["transactionIds"]
+    assert origin["transactionId"] not in current["transactionIds"]
+
+    assert revision["before"]["retainedCredit"] == origin["amount"] == money("10.00")
+    assert revision["after"]["retainedCredit"] == money("0.00")
+    assert revision["after"]["acceptedSurplus"] == money("2.00")
+    assert origin["transactionId"] in {
+        effect["transactionId"] for effect in revision["financialEffectsBefore"]
+    }
+    assert (await client.get(f"{receipt_url}/corrections")).json() == [revision]
+    assert (await client.get(original_transfer_url)).json() == original_transfer.json()
+    participant_url = f"{base}/participants/{receipt['participantId']}"
+    assert (await client.get(f"{participant_url}/credits")).json() == [
+        {**origin, "amount": money("0.00"), "available": money("0.00")}
+    ]
+    assert (await client.get(f"{participant_url}/settlements")).json() == [current]
+
+
 async def test_corrected_credit_keeps_oldest_origin_selection_for_later_explicit_use(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
 ) -> None:

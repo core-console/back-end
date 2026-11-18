@@ -365,6 +365,9 @@ class CreditSettlementResponse(SettlementResponse):
 class IncomeSettlementResponse(SettlementResponse):
     accepted_surplus: MoneyResponse = Field(alias="acceptedSurplus")
     income_transaction_id: UUID = Field(alias="incomeTransactionId")
+    credit_origin: CreditOriginResponse | None = Field(
+        default=None, alias="creditOrigin", exclude_if=lambda origin: origin is None
+    )
 
 
 class ParticipantPositionResponse(_Projection):

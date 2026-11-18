@@ -5740,6 +5740,16 @@
             "title": "Confirmedat",
             "type": "string"
           },
+          "creditOrigin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditOriginResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -7275,6 +7285,16 @@
             "format": "date-time",
             "title": "Confirmedat",
             "type": "string"
+          },
+          "creditOrigin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditOriginResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "format": "uuid",
