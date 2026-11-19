@@ -1140,15 +1140,18 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
         "previewToken",
     } == set(forgiveness["required"])
     assert "receivingAccountId" not in forgiveness["properties"]
-    assert set(schema["components"]["schemas"]["ForgivenessAllocationResponse"]["properties"]) == {
+    forgiveness_allocation = schema["components"]["schemas"]["ForgivenessAllocationResponse"]
+    assert set(forgiveness_allocation["properties"]) == {
         "kind",
         "position",
         "obligationId",
         "advanceId",
         "sourceDate",
         "forgiven",
+        "effectiveForgiven",
         "remainingAfter",
     }
+    assert "effectiveForgiven" not in forgiveness_allocation["required"]
     for name in ("ForgivenessPreview", "ForgivenessResponse"):
         assert "receivingAccountId" not in schema["components"]["schemas"][name]["properties"]
         assert "receivingBalance" not in schema["components"]["schemas"][name]["properties"]
