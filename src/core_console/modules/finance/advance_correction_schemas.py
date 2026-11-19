@@ -79,6 +79,18 @@ class CorrectionCashRelease(_Projection):
     financial_effect: CorrectionFinancialEffect = Field(alias="financialEffect")
 
 
+class CorrectionForgivenessRestatement(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_date: date = Field(alias="transactionDate")
+    obligation_id: UUID = Field(alias="obligationId")
+    position: int
+    expense_transaction_id: UUID = Field(alias="expenseTransactionId")
+    original_forgiven: MoneyResponse = Field(alias="originalForgiven")
+    forgiven_before: MoneyResponse = Field(alias="forgivenBefore")
+    forgiven_after: MoneyResponse = Field(alias="forgivenAfter")
+
+
 class AdvanceCorrectionPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     advance_id: UUID = Field(alias="advanceId")
@@ -92,6 +104,9 @@ class AdvanceCorrectionPreview(_Projection):
     financial_effects_after: list[CorrectionFinancialEffect] = Field(alias="financialEffectsAfter")
     account_effects: list[CorrectionAccountEffect] = Field(alias="accountEffects")
     cash_releases: list[CorrectionCashRelease] = Field(default_factory=list, alias="cashReleases")
+    forgiveness_restatements: list[CorrectionForgivenessRestatement] = Field(
+        default_factory=list, alias="forgivenessRestatements", exclude_if=lambda value: not value
+    )
 
 
 class AdvanceCorrectionResponse(AdvanceCorrectionPreview):

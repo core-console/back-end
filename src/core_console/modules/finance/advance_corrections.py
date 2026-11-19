@@ -21,6 +21,7 @@ from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
     CorrectionCashRelease,
     CorrectionFinancialEffect,
+    CorrectionForgivenessRestatement,
     CorrectionMovement,
 )
 from core_console.modules.finance.advance_models import (
@@ -63,7 +64,7 @@ def _add(left: Decimal, right: Decimal) -> Decimal:
     return subtract(left, subtract(Decimal(0), right))
 
 
-async def _cash_rows(
+async def _settlement_rows(
     session: AsyncSession, obligation_ids: list[UUID]
 ) -> list[tuple[FinanceSettlementAllocation, FinanceSettlement, FinanceCreditOrigin | None]]:
     rows = await session.execute(
@@ -170,12 +171,12 @@ async def preview_advance_correction(
     await require_advance_ledger(session, owner_id, ledger_id)
     source = await _source(session, ledger_id, draft.advance_id)
     obligations = await _obligations(session, source.id)
-    cash_rows = await _cash_rows(session, [o.id for o in obligations])
+    settlement_rows = await _settlement_rows(session, [o.id for o in obligations])
     account_ids = {
         source.funding_account_id,
         draft.funding_account_id,
         *(o.receivable_account_id for o in obligations),
-        *(origin.liability_account_id for _, _, origin in cash_rows if origin is not None),
+        *(origin.liability_account_id for _, _, origin in settlement_rows if origin is not None),
     }
     participant_ids = {
         *(o.participant_id for o in obligations),
@@ -196,7 +197,7 @@ async def preview_advance_correction(
         await session.scalar(
             select(FinanceAdvance.id).where(FinanceAdvance.id == source.id).with_for_update()
         )
-        for settlement_id in sorted({settlement.id for _, settlement, _ in cash_rows}):
+        for settlement_id in sorted({settlement.id for _, settlement, _ in settlement_rows}):
             await session.scalar(
                 select(FinanceSettlement.id)
                 .where(FinanceSettlement.id == settlement_id)
@@ -204,7 +205,7 @@ async def preview_advance_correction(
             )
         source = await _source(session, ledger_id, draft.advance_id)
         obligations = await _obligations(session, source.id)
-        current_rows = await _cash_rows(session, [o.id for o in obligations])
+        current_rows = await _settlement_rows(session, [o.id for o in obligations])
         if (
             source.funding_account_id not in account_ids
             or any(
@@ -216,32 +217,31 @@ async def preview_advance_correction(
                 origin is not None and origin.liability_account_id not in account_ids
                 for _, _, origin in current_rows
             )
-            or not {s.id for _, s, _ in current_rows}.issubset({s.id for _, s, _ in cash_rows})
+            or not {s.id for _, s, _ in current_rows}.issubset(
+                {s.id for _, s, _ in settlement_rows}
+            )
         ):
             raise _problem(
                 409,
                 "finance_advance_correction_preview_stale",
                 "Advance changed. Refresh the complete preview.",
             )
-        cash_rows = current_rows
+        settlement_rows = current_rows
     obligation_ids = [o.id for o in obligations]
-    if await session.scalar(
-        select(FinanceCreditApplicationAllocation.obligation_id)
-        .where(FinanceCreditApplicationAllocation.obligation_id.in_(obligation_ids))
-        .limit(1)
-    ) is not None or any(
-        allocation.kind != "cash"
-        or settlement.action_kind != "standard"
-        or settlement.receiving_account_id is None
-        or settlement.reason is not None
-        for allocation, settlement, _ in cash_rows
+    if (
+        await session.scalar(
+            select(FinanceCreditApplicationAllocation.obligation_id)
+            .where(FinanceCreditApplicationAllocation.obligation_id.in_(obligation_ids))
+            .limit(1)
+        )
+        is not None
     ):
         raise _problem(
             409,
             "finance_advance_correction_ineligible",
-            "Forgiveness and credit application require a later coordinated Correction workflow.",
+            "Applied credit requires a later coordinated Correction workflow.",
         )
-    for _, settlement, origin in cash_rows:
+    for _, settlement, origin in settlement_rows:
         if origin is not None:
             for model in (FinanceCreditApplicationAllocation, FinanceCreditReturnFragment):
                 if (
@@ -258,7 +258,7 @@ async def preview_advance_correction(
                         "Applied or returned receipt credit requires a later "
                         "coordinated Correction.",
                     )
-    if cash_rows and (
+    if settlement_rows and (
         draft.transaction_date != source.transaction_date
         or any(
             s.participant_id not in {o.participant_id for o in obligations}
@@ -329,33 +329,64 @@ async def preview_advance_correction(
             )
         )
     ) or 0
-    remaining_release = {
+    paid_after = {o.id: Decimal(previous[o.id].cash_paid.amount) for o in obligations}
+    forgiven_after = {o.id: Decimal(previous[o.id].forgiven.amount) for o in obligations}
+    # Unpaid debt absorbs the reduction until corrected principal falls below resolved debt.
+    excess_resolution = {
         o.id: max(
             Decimal(0),
             subtract(
-                Decimal(previous[o.id].cash_paid.amount), shares.get(o.participant_id, Decimal(0))
+                _add(paid_after[o.id], forgiven_after[o.id]),
+                shares.get(o.participant_id, Decimal(0)),
             ),
         )
         for o in obligations
     }
-    paid_after = {o.id: Decimal(previous[o.id].cash_paid.amount) for o in obligations}
+    restatements: list[CorrectionForgivenessRestatement] = []
+    for allocation, settlement, _ in settlement_rows:
+        if allocation.kind != "forgiveness":
+            continue
+        id = allocation.obligation_id
+        forgiven = (
+            allocation.effective_forgiven
+            if allocation.effective_forgiven is not None
+            else allocation.forgiven
+        )
+        reduction = min(excess_resolution[id], forgiven)
+        if reduction <= 0:
+            continue
+        assert allocation.transaction_id is not None
+        excess_resolution[id] = subtract(excess_resolution[id], reduction)
+        forgiven_after[id] = subtract(forgiven_after[id], reduction)
+        restatements.append(
+            CorrectionForgivenessRestatement(
+                settlementId=settlement.id,
+                confirmationOrder=settlement.confirmation_order,
+                transactionDate=settlement.transaction_date,
+                obligationId=id,
+                position=allocation.position,
+                expenseTransactionId=allocation.transaction_id,
+                originalForgiven=_money(allocation.forgiven, currency),
+                forgivenBefore=_money(forgiven, currency),
+                forgivenAfter=_money(subtract(forgiven, reduction), currency),
+            )
+        )
     credit_after: dict[UUID, Decimal] = {}
     releases: list[CorrectionCashRelease] = []
-    for allocation, settlement, origin in cash_rows:
+    for allocation, settlement, origin in settlement_rows:
+        if allocation.kind != "cash":
+            continue
         cash = (
             allocation.effective_cash_paid
             if allocation.effective_cash_paid is not None
             else allocation.cash_paid
         )
-        released = min(remaining_release[allocation.obligation_id], cash)
+        id = allocation.obligation_id
+        released = min(excess_resolution[id], cash)
         if released <= 0:
             continue
-        remaining_release[allocation.obligation_id] = subtract(
-            remaining_release[allocation.obligation_id], released
-        )
-        paid_after[allocation.obligation_id] = subtract(
-            paid_after[allocation.obligation_id], released
-        )
+        excess_resolution[id] = subtract(excess_resolution[id], released)
+        paid_after[id] = subtract(paid_after[id], released)
         prior_credit = credit_after.get(
             settlement.id,
             (origin.effective_amount if origin.effective_amount is not None else origin.amount)
@@ -406,13 +437,14 @@ async def preview_advance_correction(
                 financialEffect=effect,
             )
         )
-    if any(amount != 0 for amount in remaining_release.values()):
-        raise RuntimeError("Cash Allocations do not reconcile with the Advance")
+    if any(excess_resolution.values()):
+        raise RuntimeError("Settlement Allocations do not reconcile with the Advance")
     projected = []
     for id in sorted(old_participants | shares.keys()):
         old = existing.get(id)
         principal = shares.get(id, Decimal(0))
         cash_paid = paid_after.get(old.id, Decimal(0)) if old else Decimal(0)
+        forgiven = forgiven_after.get(old.id, Decimal(0)) if old else Decimal(0)
         projected.append(
             ObligationResponse(
                 id=old.id if old else uuid5(source.id, f"obligation:{id}"),
@@ -424,9 +456,9 @@ async def preview_advance_correction(
                 if old
                 else uuid5(source.id, f"receivable:{id}"),
                 principal=_money(principal, currency),
-                remaining=_money(subtract(principal, cash_paid), currency),
+                remaining=_money(subtract(subtract(principal, cash_paid), forgiven), currency),
                 cashPaid=_money(cash_paid, currency),
-                forgiven=_money(Decimal(0), currency),
+                forgiven=_money(forgiven, currency),
                 creditApplied=_money(Decimal(0), currency),
             )
         )
@@ -504,6 +536,15 @@ async def preview_advance_correction(
                     deltas.get(m.account_id, Decimal(0)),
                     value if sign == -1 else subtract(Decimal(0), value),
                 )
+    for restatement in restatements:
+        id = previous[restatement.obligation_id].receivable_account_id
+        deltas[id] = _add(
+            deltas[id],
+            subtract(
+                Decimal(restatement.forgiven_before.amount),
+                Decimal(restatement.forgiven_after.amount),
+            ),
+        )
     for release in releases:
         for movement in release.financial_effect.movements:
             deltas[movement.account_id] = _add(
@@ -537,6 +578,7 @@ async def preview_advance_correction(
         "financialEffectsAfter": effects_after,
         "accountEffects": account_effects,
         "cashReleases": releases,
+        "forgivenessRestatements": restatements,
     }
     state = {
         "plan": AdvanceCorrectionPreview.model_validate({"previewToken": "", **data}).model_dump(
@@ -556,7 +598,7 @@ async def preview_advance_correction(
             for id, b in sorted(balances.items())
         ],
         "participants": [[str(p.id), str(p.updated_at), p.name, p.status] for p in participants],
-        "cashAllocations": [
+        "settlementAllocations": [
             [
                 str(settlement.id),
                 settlement.confirmation_order,
@@ -567,6 +609,9 @@ async def preview_advance_correction(
                 allocation.position,
                 str(allocation.cash_paid),
                 str(allocation.effective_cash_paid),
+                str(allocation.transaction_id),
+                str(allocation.forgiven),
+                str(allocation.effective_forgiven),
                 str(origin.liability_account_id) if origin else None,
                 str(
                     origin.effective_amount
@@ -576,7 +621,7 @@ async def preview_advance_correction(
                 if origin
                 else None,
             ]
-            for allocation, settlement, origin in cash_rows
+            for allocation, settlement, origin in settlement_rows
         ],
     }
     token = sha256(
@@ -701,6 +746,39 @@ async def execute_create_advance_correction(
     )
     session.add(record)
     await session.flush()
+    for restatement in plan.forgiveness_restatements:
+        allocation = await session.get(
+            FinanceSettlementAllocation, (restatement.settlement_id, restatement.position)
+        )
+        assert (
+            allocation is not None
+            and allocation.transaction_id == restatement.expense_transaction_id
+        )
+        amount = Decimal(restatement.forgiven_after.amount)
+        allocation.effective_forgiven = amount
+        if amount == 0:
+            # The correction plan retains the original Expense ID.
+            allocation.transaction_id = None
+            await session.flush()
+            await session.execute(
+                delete(FinanceTransaction).where(
+                    FinanceTransaction.id == restatement.expense_transaction_id
+                )
+            )
+            continue
+        movement = await session.scalar(
+            select(FinanceAccountMovement).where(
+                FinanceAccountMovement.transaction_id == allocation.transaction_id
+            )
+        )
+        category = await session.scalar(
+            select(FinanceCategoryAllocation).where(
+                FinanceCategoryAllocation.transaction_id == allocation.transaction_id
+            )
+        )
+        assert movement is not None and category is not None
+        movement.amount = subtract(Decimal(0), amount)
+        category.amount = amount
     for release in plan.cash_releases:
         allocation = await session.get(
             FinanceSettlementAllocation, (release.settlement_id, release.position)

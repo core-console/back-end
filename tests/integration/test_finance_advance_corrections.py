@@ -185,38 +185,17 @@ async def test_correct_attribution_repeatedly_retains_original_and_intermediate_
     )
 
 
-@pytest.mark.parametrize("activity", ["forgiveness", "credit"])
-async def test_downstream_activity_rejects_preview_and_confirmation_without_changes(
+async def test_applied_credit_rejects_preview_and_confirmation_without_changes(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
-    activity: str,
 ) -> None:
     client, actor, base, draft = advance_client
-    if activity == "credit":
-        await retain_credit(client, actor, base, draft, "50.00")
+    await retain_credit(client, actor, base, draft, "50.00")
     source = await advance(client, actor, base, draft, "100.00", "2026-10-20")
     body = correction(source)
     plan = (await client.post(f"{base}/advance-corrections/preview", json=body)).json()
-    if activity == "credit":
-        await apply_credit(
-            client, actor, base, application(draft, [source["obligation"]["id"]], "10.00")
-        )
-    else:
-        forgiveness = {
-            "kind": "forgiveness",
-            "participantId": draft["participantId"],
-            "transactionDate": "2026-10-22",
-            "amount": money("10.00"),
-            "selectedObligationIds": [source["obligation"]["id"]],
-            "reason": "Forgive ten",
-        }
-        p = await client.post(f"{base}/settlements/preview", json=forgiveness)
-        assert p.status_code == 200, p.text
-        r = await client.post(
-            f"{base}/settlements",
-            json={**forgiveness, "previewToken": p.json()["previewToken"]},
-            headers={**submission_headers(actor.id), "Finance-Command-Version": "5"},
-        )
-        assert r.status_code == 201, r.text
+    await apply_credit(
+        client, actor, base, application(draft, [source["obligation"]["id"]], "10.00")
+    )
     before = (await client.get(f"{base}/advances/{source['id']}")).json()
     rejected = await client.post(f"{base}/advance-corrections/preview", json=body)
     assert rejected.status_code == 409, rejected.text

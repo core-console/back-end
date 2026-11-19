@@ -127,6 +127,15 @@ class FinanceSettlementAllocation(Base):
             name="ck_finance_settlement_allocation_effective_cash",
         ),
         CheckConstraint(
+            "effective_forgiven IS NULL OR (kind = 'forgiveness' AND effective_forgiven >= 0 "
+            "AND effective_forgiven <= forgiven)",
+            name="ck_finance_settlement_allocation_effective_forgiven",
+        ),
+        CheckConstraint(
+            "(transaction_id IS NULL) = (effective_forgiven IS NOT DISTINCT FROM 0)",
+            name="ck_finance_settlement_allocation_expense_link",
+        ),
+        CheckConstraint(
             "cash_paid >= 0 AND cash_paid NOT IN "
             "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)",
             name="ck_finance_settlement_allocation_cash",
@@ -147,11 +156,12 @@ class FinanceSettlementAllocation(Base):
     position: Mapped[int] = mapped_column(Integer, primary_key=True)
     ledger_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
     obligation_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
-    transaction_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True))
+    transaction_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True))
     cash_paid: Mapped[Decimal] = mapped_column(Numeric())
     effective_cash_paid: Mapped[Decimal | None] = mapped_column(Numeric())
     kind: Mapped[str] = mapped_column(Text, server_default="cash")
     forgiven: Mapped[Decimal] = mapped_column(Numeric(), server_default="0")
+    effective_forgiven: Mapped[Decimal | None] = mapped_column(Numeric())
     remaining_after: Mapped[Decimal] = mapped_column(Numeric())
 
 

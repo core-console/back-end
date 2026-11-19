@@ -354,7 +354,12 @@ async def _resolution_totals(
                     FinanceSettlementAllocation.cash_paid,
                 )
             ),
-            func.sum(FinanceSettlementAllocation.forgiven),
+            func.sum(
+                func.coalesce(
+                    FinanceSettlementAllocation.effective_forgiven,
+                    FinanceSettlementAllocation.forgiven,
+                )
+            ),
         )
         .where(FinanceSettlementAllocation.obligation_id.in_(obligation_ids))
         .group_by(FinanceSettlementAllocation.obligation_id)

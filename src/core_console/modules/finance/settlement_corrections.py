@@ -131,7 +131,11 @@ async def _facts(session: AsyncSession, source: FinanceSettlement) -> ReceiptCor
 async def _effects(
     session: AsyncSession, source: FinanceSettlement
 ) -> list[ReceiptFinancialEffect]:
-    ids = {a.transaction_id for a in await _allocations(session, source.id)}
+    ids = {
+        a.transaction_id
+        for a in await _allocations(session, source.id)
+        if a.transaction_id is not None
+    }
     for row in (
         await session.get(FinanceCreditOrigin, source.id, populate_existing=True),
         await session.get(FinanceSettlementIncome, source.id, populate_existing=True),

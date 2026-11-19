@@ -1,5 +1,7 @@
 """Frozen cash repayment intent and retained Allocation projections."""
 
+from __future__ import annotations
+
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Self
@@ -153,6 +155,9 @@ class ForgivenessAllocationResponse(_Projection):
     advance_id: UUID = Field(alias="advanceId")
     source_date: date = Field(alias="sourceDate")
     forgiven: MoneyResponse
+    effective_forgiven: MoneyResponse | None = Field(
+        default=None, alias="effectiveForgiven", exclude_if=lambda value: value is None
+    )
     remaining_after: MoneyResponse = Field(alias="remainingAfter")
 
 
@@ -275,6 +280,9 @@ class CombinedSettlementCommandV6(CombinedSettlementDraftV6):
 
 class CombinedCashAllocationResponse(CashAllocationResponse):
     kind: Literal["cash"] = "cash"
+    effective_cash_paid: MoneyResponse | None = Field(
+        default=None, alias="effectiveCashPaid", exclude_if=lambda value: value is None
+    )
 
 
 class CombinedSettlementPreview(_Projection):
@@ -305,6 +313,9 @@ class CombinedSettlementResponse(_Projection, SelectedScope):
     confirmation_order: int = Field(alias="confirmationOrder")
     transaction_ids: list[UUID] = Field(alias="transactionIds")
     allocations: list[CombinedCashAllocationResponse | ForgivenessAllocationResponse]
+    credit_origin: CreditOriginResponse | None = Field(
+        default=None, alias="creditOrigin", exclude_if=lambda value: value is None
+    )
 
 
 class SettlementPreview(_Projection):
