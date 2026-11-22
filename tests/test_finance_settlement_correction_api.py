@@ -96,6 +96,6 @@ def test_correction_contract_exposes_complete_plans_and_own_recovery_evidence(ap
     } <= preview.keys()
     receipt = components["SettlementCorrectionCreatedReceipt"]["properties"]
     assert receipt["operation"]["const"] == "createFinanceSettlementCorrection"
-    assert receipt["commandVersion"]["const"] == "1"
+    assert receipt["commandVersion"]["enum"] == ["1", "2"]
     recovery = components["SubmissionReceipt"]
     assert "createFinanceSettlementCorrection" in recovery["discriminator"]["mapping"]

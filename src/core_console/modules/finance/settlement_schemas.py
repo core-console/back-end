@@ -159,9 +159,16 @@ class ForgivenessAllocationResponse(_Projection):
         default=None, alias="effectiveForgiven", exclude_if=lambda value: value is None
     )
     remaining_after: MoneyResponse = Field(alias="remainingAfter")
+    effective_remaining_after: MoneyResponse | None = Field(
+        default=None,
+        alias="effectiveRemainingAfter",
+        exclude_if=lambda value: value is None,
+        description="Restated debt after this Allocation at the original Settlement boundary.",
+    )
 
 
 class ForgivenessPreview(_Projection):
+    selected_allocation_order: list[UUID] = Field(exclude=True)
     preview_token: str = Field(alias="previewToken")
     amount: MoneyResponse
     expense: MoneyResponse
@@ -177,6 +184,9 @@ class ForgivenessResponse(_Projection, SelectedScope):
     participant_id: UUID = Field(alias="participantId")
     transaction_date: date = Field(alias="transactionDate")
     amount: MoneyResponse
+    effective_forgiveness_amount: MoneyResponse | None = Field(
+        default=None, alias="effectiveForgivenessAmount", exclude_if=lambda value: value is None
+    )
     reason: str
     note: str | None
     confirmed_at: datetime = Field(alias="confirmedAt")
@@ -283,9 +293,16 @@ class CombinedCashAllocationResponse(CashAllocationResponse):
     effective_cash_paid: MoneyResponse | None = Field(
         default=None, alias="effectiveCashPaid", exclude_if=lambda value: value is None
     )
+    effective_remaining_after: MoneyResponse | None = Field(
+        default=None,
+        alias="effectiveRemainingAfter",
+        exclude_if=lambda value: value is None,
+        description="Restated debt after this Allocation at the original Settlement boundary.",
+    )
 
 
 class CombinedSettlementPreview(_Projection):
+    selected_allocation_order: list[UUID] = Field(exclude=True)
     kind: Literal["combined"] = "combined"
     preview_token: str = Field(alias="previewToken")
     receiving_balance: MoneyResponse = Field(alias="receivingBalance")
@@ -307,6 +324,18 @@ class CombinedSettlementResponse(_Projection, SelectedScope):
     transaction_date: date = Field(alias="transactionDate")
     amount: MoneyResponse
     forgiveness_amount: MoneyResponse = Field(alias="forgivenessAmount")
+    effective_cash_amount: MoneyResponse | None = Field(
+        default=None, alias="effectiveCashAmount", exclude_if=lambda value: value is None
+    )
+    effective_forgiveness_amount: MoneyResponse | None = Field(
+        default=None, alias="effectiveForgivenessAmount", exclude_if=lambda value: value is None
+    )
+    accepted_surplus: MoneyResponse | None = Field(
+        default=None, alias="acceptedSurplus", exclude_if=lambda value: value is None
+    )
+    income_transaction_id: UUID | None = Field(
+        default=None, alias="incomeTransactionId", exclude_if=lambda value: value is None
+    )
     reason: str
     note: str | None
     confirmed_at: datetime = Field(alias="confirmedAt")

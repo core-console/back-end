@@ -265,7 +265,11 @@ async def test_populated_t14_upgrade_preserves_finance_records_through_repeated_
     detail = (await client.get(f"{base}/{combined_path}")).json()
     assert detail["amount"] == money("60.00")
     assert detail["allocations"] == [
-        {**combined["allocations"][0], "effectiveCashPaid": money("35.00")},
+        {
+            **combined["allocations"][0],
+            "effectiveCashPaid": money("35.00"),
+            "effectiveRemainingAfter": money("0.00"),
+        },
         {**combined["allocations"][1], "effectiveForgiven": money("0.00")},
     ]
     assert detail["transactionIds"] == [

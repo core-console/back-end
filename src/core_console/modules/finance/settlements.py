@@ -21,6 +21,9 @@ from core_console.modules.finance.advances import (
     list_participant_obligations,
     require_advance_ledger,
 )
+from core_console.modules.finance.credit_application_models import (
+    FinanceCreditApplicationAllocation,
+)
 from core_console.modules.finance.credit_applications import (
     execute_credit_application,
     inspect_credit_application,
@@ -50,6 +53,7 @@ from core_console.modules.finance.queries import (
     get_finance_account_for_update,
     get_finance_category,
 )
+from core_console.modules.finance.schemas import MoneyResponse
 from core_console.modules.finance.settlement_correction_models import (
     FinanceSettlementCorrection,
     FinanceSettlementCorrectionTransaction,
@@ -337,6 +341,7 @@ async def preview_settlement(
             )
         amount = _money(Decimal(draft.forgiveness_amount.amount), account.currency)
         return CombinedSettlementPreview(
+            selected_allocation_order=[row.id for row in eligible],
             **preview.model_dump(by_alias=True, exclude={"allocations", "outstanding_after"}),
             allocations=combined_allocations,
             forgivenessAmount=amount,
@@ -410,6 +415,9 @@ async def execute_create_settlement(
         selected_obligation_ids=sorted(command.selected_obligation_ids)
         if isinstance(command, SelectedScope)
         else None,
+        selected_allocation_order=preview.selected_allocation_order
+        if isinstance(preview, CombinedSettlementPreview)
+        else None,
     )
     session.add(settlement)
     await session.flush()
@@ -475,6 +483,14 @@ async def execute_create_settlement(
     return settlement.id
 
 
+def _effective_remaining_after(
+    allocation: FinanceSettlementAllocation, remaining: Decimal, currency: str
+) -> MoneyResponse | None:
+    if remaining != allocation.remaining_after or not (allocation.cash_paid or allocation.forgiven):
+        return _money(remaining, currency)
+    return None
+
+
 async def inspect_settlement(
     session: AsyncSession, *, owner_id: UUID, ledger_id: UUID, settlement_id: UUID
 ) -> SettlementSource:
@@ -519,10 +535,26 @@ async def inspect_settlement(
     corrected_remaining = case(
         (corrected_after_receipt, FinanceObligation.principal - resolved_through_receipt)
     )
+    credit = FinanceCreditApplicationAllocation
+    credit_through_receipt = (
+        select(func.coalesce(func.sum(credit.amount), 0))
+        .join(FinanceSettlement, FinanceSettlement.id == credit.settlement_id)
+        .where(
+            credit.obligation_id == FinanceObligation.id,
+            FinanceSettlement.confirmation_order < settlement.confirmation_order,
+        )
+        .correlate(FinanceObligation)
+        .scalar_subquery()
+    )
+    remaining_projection = (
+        FinanceObligation.principal - resolved_through_receipt - credit_through_receipt
+        if settlement.reason is not None
+        else corrected_remaining
+    )
     rows = (
         await session.execute(
             select(
-                FinanceSettlementAllocation, FinanceObligation, FinanceAdvance, corrected_remaining
+                FinanceSettlementAllocation, FinanceObligation, FinanceAdvance, remaining_projection
             )
             .join(
                 FinanceObligation, FinanceObligation.id == FinanceSettlementAllocation.obligation_id
@@ -537,13 +569,49 @@ async def inspect_settlement(
         for allocation, _, _, _ in rows
         if allocation.transaction_id is not None
     ]
+    correction_transactions = list(
+        await session.scalars(
+            select(FinanceSettlementCorrectionTransaction.transaction_id)
+            .join(
+                FinanceSettlementCorrection,
+                FinanceSettlementCorrection.id
+                == FinanceSettlementCorrectionTransaction.correction_id,
+            )
+            .where(FinanceSettlementCorrection.settlement_id == settlement_id)
+            .order_by(
+                FinanceSettlementCorrection.revision,
+                FinanceSettlementCorrectionTransaction.transaction_id,
+            )
+        )
+    )
+    transaction_ids.extend(correction_transactions)
+    effective_forgiveness = None
+    if any(a.effective_forgiven is not None for a, _, _, _ in rows):
+        value = Decimal(0)
+        for a, _, _, _ in rows:
+            value = subtract(
+                value,
+                subtract(
+                    Decimal(0),
+                    a.effective_forgiven if a.effective_forgiven is not None else a.forgiven,
+                ),
+            )
+        effective_forgiveness = _money(value, settlement.currency)
     if settlement.reason is not None and settlement.receiving_account_id is not None:
         assert settlement.selected_obligation_ids is not None
         combined_allocations: list[
             CombinedCashAllocationResponse | ForgivenessAllocationResponse
         ] = []
+        forgiven_by_obligation = {
+            a.obligation_id: a.effective_forgiven
+            if a.effective_forgiven is not None
+            else a.forgiven
+            for a, _, _, _ in rows
+            if a.kind == "forgiveness"
+        }
         forgiven = Decimal(0)
-        for allocation, obligation, advance, _ in rows:
+        for allocation, obligation, advance, remaining in rows:
+            assert remaining is not None
             if allocation.kind == "forgiveness":
                 forgiven = subtract(forgiven, subtract(Decimal(0), allocation.forgiven))
                 combined_allocations.append(
@@ -553,6 +621,9 @@ async def inspect_settlement(
                         advanceId=advance.id,
                         sourceDate=advance.transaction_date,
                         remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                        effectiveRemainingAfter=_effective_remaining_after(
+                            allocation, remaining, settlement.currency
+                        ),
                         forgiven=_money(allocation.forgiven, settlement.currency),
                         effectiveForgiven=_money(allocation.effective_forgiven, settlement.currency)
                         if allocation.effective_forgiven is not None
@@ -560,6 +631,8 @@ async def inspect_settlement(
                     )
                 )
             else:
+                # The cash stage precedes this Settlement's forgiveness on the same debt.
+                forgiven_here = forgiven_by_obligation.get(obligation.id, Decimal(0))
                 combined_allocations.append(
                     CombinedCashAllocationResponse(
                         position=allocation.position,
@@ -567,6 +640,11 @@ async def inspect_settlement(
                         advanceId=advance.id,
                         sourceDate=advance.transaction_date,
                         remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                        effectiveRemainingAfter=_effective_remaining_after(
+                            allocation,
+                            subtract(remaining, forgiven_here.copy_negate()),
+                            settlement.currency,
+                        ),
                         cashPaid=_money(allocation.cash_paid, settlement.currency),
                         effectiveCashPaid=_money(
                             allocation.effective_cash_paid, settlement.currency
@@ -576,6 +654,9 @@ async def inspect_settlement(
                     )
                 )
         origin = await session.get(FinanceCreditOrigin, settlement.id)
+        income = await session.get(FinanceSettlementIncome, settlement.id)
+        if income is not None:
+            transaction_ids.append(income.transaction_id)
         credit_origin = (
             await _link_receipt_credit(session, settlement, origin, transaction_ids)
             if origin is not None
@@ -589,6 +670,12 @@ async def inspect_settlement(
             transactionDate=settlement.transaction_date,
             amount=_money(settlement.amount, settlement.currency),
             forgivenessAmount=_money(forgiven, settlement.currency),
+            effectiveCashAmount=_money(settlement.effective_cash_amount, settlement.currency)
+            if settlement.effective_cash_amount is not None
+            else None,
+            effectiveForgivenessAmount=effective_forgiveness,
+            acceptedSurplus=_money(income.amount, settlement.currency) if income else None,
+            incomeTransactionId=income.transaction_id if income else None,
             reason=settlement.reason,
             note=settlement.note,
             confirmedAt=settlement.confirmed_at,
@@ -606,6 +693,7 @@ async def inspect_settlement(
             participantId=settlement.participant_id,
             transactionDate=settlement.transaction_date,
             amount=_money(settlement.amount, settlement.currency),
+            effectiveForgivenessAmount=effective_forgiveness,
             reason=settlement.reason,
             note=settlement.note,
             confirmedAt=settlement.confirmed_at,
@@ -623,26 +711,16 @@ async def inspect_settlement(
                     if allocation.effective_forgiven is not None
                     else None,
                     remainingAfter=_money(allocation.remaining_after, settlement.currency),
+                    effectiveRemainingAfter=_effective_remaining_after(
+                        allocation, remaining, settlement.currency
+                    )
+                    if remaining is not None
+                    else None,
                 )
-                for allocation, obligation, advance, _ in rows
+                for allocation, obligation, advance, remaining in rows
             ],
         )
     assert settlement.receiving_account_id is not None
-    correction_transactions = list(
-        await session.scalars(
-            select(FinanceSettlementCorrectionTransaction.transaction_id)
-            .join(
-                FinanceSettlementCorrection,
-                FinanceSettlementCorrection.id
-                == FinanceSettlementCorrectionTransaction.correction_id,
-            )
-            .where(FinanceSettlementCorrection.settlement_id == settlement_id)
-            .order_by(
-                FinanceSettlementCorrection.revision,
-                FinanceSettlementCorrectionTransaction.transaction_id,
-            )
-        )
-    )
     result = SettlementResponse(
         id=settlement.id,
         ledgerId=ledger_id,
@@ -653,7 +731,7 @@ async def inspect_settlement(
         note=settlement.note,
         confirmedAt=settlement.confirmed_at,
         confirmationOrder=settlement.confirmation_order,
-        transactionIds=[*transaction_ids, *correction_transactions],
+        transactionIds=transaction_ids,
         allocations=[
             CashAllocationResponse(
                 position=allocation.position,

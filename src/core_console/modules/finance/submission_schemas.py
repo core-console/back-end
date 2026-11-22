@@ -965,7 +965,7 @@ class SettlementCorrectionRejectedOutcome(_Evidence):
 
 
 class _SettlementCorrectionReceipt(_ReceiptMetadata):
-    command_version: Literal["1"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlementCorrection"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
@@ -986,13 +986,13 @@ class SettlementCorrectionSubmissionReceipt(_SettlementCorrectionReceipt):
 
 
 class SettlementCorrectionSubmissionUnfinished(_UnfinishedMetadata):
-    command_version: Literal["1"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlementCorrection"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 
 
 class SettlementCorrectionCommandValidationRejection(_CommandValidationRejectionMetadata):
-    command_version: Literal["1"] = Field(alias="commandVersion")
+    command_version: Literal["1", "2"] = Field(alias="commandVersion")
     operation: Literal["createFinanceSettlementCorrection"]
     target_ledger_id: UUID = Field(alias="targetLedgerId")
 

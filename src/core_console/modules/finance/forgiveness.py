@@ -121,6 +121,7 @@ async def preview_forgiveness(
         raise _problem(422, "validation_error", "Forgiveness exceeds selected outstanding debt.")
     amount = _money(Decimal(draft.amount.amount), currency)
     return ForgivenessPreview(
+        selected_allocation_order=[row.id for row in rows],
         previewToken=token,
         amount=amount,
         expense=amount,
@@ -146,6 +147,7 @@ async def execute_create_forgiveness(
         currency=command.amount.currency,
         note=command.note,
         selected_obligation_ids=sorted(command.selected_obligation_ids),
+        selected_allocation_order=preview.selected_allocation_order,
     )
     session.add(settlement)
     await session.flush()

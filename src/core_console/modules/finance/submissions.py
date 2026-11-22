@@ -41,7 +41,10 @@ from core_console.modules.finance.service import (
     execute_create_finance_transaction,
     execute_create_internal_transfer_transaction,
 )
-from core_console.modules.finance.settlement_correction_schemas import SettlementCorrectionCommandV1
+from core_console.modules.finance.settlement_correction_schemas import (
+    SettlementCorrectionCommandV1,
+    SettlementCorrectionCommandV2,
+)
 from core_console.modules.finance.settlement_corrections import execute_create_settlement_correction
 from core_console.modules.finance.settlement_schemas import (
     CombinedSettlementCommandV6,
@@ -291,7 +294,15 @@ async def _submit_create(
         await _authorize_binding(session, row)
         _compare(row, version)
     if version != "1" and not (
-        (version == "2" and operation in ("createFinanceAdvance", "createFinanceSettlement"))
+        (
+            version == "2"
+            and operation
+            in (
+                "createFinanceAdvance",
+                "createFinanceSettlement",
+                "createFinanceSettlementCorrection",
+            )
+        )
         or (version in ("3", "4", "5", "6", "7", "8") and operation == "createFinanceSettlement")
     ):
         raise submission_problem(
@@ -318,7 +329,9 @@ async def _submit_create(
             | type[SettlementCommandV3],
         ] = {
             "createFinanceAdvanceCorrection": AdvanceCorrectionCommandV1,
-            "createFinanceSettlementCorrection": SettlementCorrectionCommandV1,
+            "createFinanceSettlementCorrection": SettlementCorrectionCommandV1
+            if version == "1"
+            else SettlementCorrectionCommandV2,
             "createFinanceLedger": LedgerCommandV1,
             "createFinanceAccount": AccountCommandV1,
             "createFinanceCategory": CategoryCommandV1,

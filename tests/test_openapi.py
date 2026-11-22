@@ -1150,8 +1150,11 @@ def test_cash_repayment_contract_is_closed_and_uses_problem_details(app: FastAPI
         "forgiven",
         "effectiveForgiven",
         "remainingAfter",
+        "effectiveRemainingAfter",
     }
-    assert "effectiveForgiven" not in forgiveness_allocation["required"]
+    assert {"effectiveForgiven", "effectiveRemainingAfter"}.isdisjoint(
+        forgiveness_allocation["required"]
+    )
     for name in ("ForgivenessPreview", "ForgivenessResponse"):
         assert "receivingAccountId" not in schema["components"]["schemas"][name]["properties"]
         assert "receivingBalance" not in schema["components"]["schemas"][name]["properties"]

@@ -68,6 +68,13 @@ class FinanceSettlement(Base):
             name="ck_finance_settlements_amount",
         ),
         CheckConstraint(
+            "effective_cash_amount IS NULL OR (action_kind = 'standard' AND reason IS NOT NULL "
+            "AND receiving_account_id IS NOT NULL AND effective_cash_amount >= 0 "
+            "AND effective_cash_amount NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))",
+            name="ck_finance_settlements_effective_cash_amount",
+        ),
+        CheckConstraint(
             "currency IN ('CNY', 'USD', 'JPY')", name="ck_finance_settlements_currency"
         ),
         CheckConstraint(
@@ -89,9 +96,13 @@ class FinanceSettlement(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     transaction_date: Mapped[date] = mapped_column(Date)
     amount: Mapped[Decimal] = mapped_column(Numeric())
+    effective_cash_amount: Mapped[Decimal | None] = mapped_column(Numeric())
     currency: Mapped[str] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
     selected_obligation_ids: Mapped[list[UUID] | None] = mapped_column(
+        ARRAY(PostgreSQLUUID(as_uuid=True))
+    )
+    selected_allocation_order: Mapped[list[UUID] | None] = mapped_column(
         ARRAY(PostgreSQLUUID(as_uuid=True))
     )
     confirmation_order: Mapped[int] = mapped_column(BigInteger, Identity())
@@ -128,7 +139,8 @@ class FinanceSettlementAllocation(Base):
         ),
         CheckConstraint(
             "effective_forgiven IS NULL OR (kind = 'forgiveness' AND effective_forgiven >= 0 "
-            "AND effective_forgiven <= forgiven)",
+            "AND effective_forgiven NOT IN "
+            "('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))",
             name="ck_finance_settlement_allocation_effective_forgiven",
         ),
         CheckConstraint(
@@ -141,8 +153,10 @@ class FinanceSettlementAllocation(Base):
             name="ck_finance_settlement_allocation_cash",
         ),
         CheckConstraint(
-            "(kind = 'cash' AND cash_paid > 0 AND forgiven = 0) OR "
-            "(kind = 'forgiveness' AND cash_paid = 0 AND forgiven > 0 "
+            "(kind = 'cash' AND (cash_paid > 0 OR effective_cash_paid IS NOT NULL) "
+            "AND forgiven = 0) OR "
+            "(kind = 'forgiveness' AND cash_paid = 0 AND forgiven >= 0 "
+            "AND (forgiven > 0 OR effective_forgiven IS NOT NULL) "
             "AND forgiven NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))",
             name="ck_finance_settlement_allocation_kind",
         ),

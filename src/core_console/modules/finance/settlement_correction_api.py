@@ -5,15 +5,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.database.dependencies import get_session
 from core_console.modules.finance.advances import _problem, require_advance_ledger
 from core_console.modules.finance.api import _run_finance_workflow
 from core_console.modules.finance.settlement_correction_schemas import (
-    SettlementCorrectionCommandV1,
+    SettlementCorrectionCommandV2,
     SettlementCorrectionDraftV1,
+    SettlementCorrectionDraftV2,
     SettlementCorrectionPreview,
     SettlementCorrectionResponse,
 )
@@ -37,9 +38,14 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 }
 
 
-def _request_schema(model: type[SettlementCorrectionDraftV1]) -> dict[str, object]:
+def _request_schema(model: type[SettlementCorrectionDraftV2]) -> dict[str, object]:
     schema = model.model_json_schema()
     definitions = schema.pop("$defs")
+    schema["required"].remove("forgivenessAmount")
+    schema["properties"]["forgivenessAmount"]["description"] = (
+        "Required for version 2 forgiveness and combined Corrections. "
+        "For standalone forgiveness, amount is zero because there is no cash receipt."
+    )
 
     def inline(value: Any) -> Any:
         if isinstance(value, dict):
@@ -63,7 +69,7 @@ def _request_schema(model: type[SettlementCorrectionDraftV1]) -> dict[str, objec
         "requestBody": {
             "required": True,
             "content": {
-                "application/json": {"schema": _request_schema(SettlementCorrectionDraftV1)}
+                "application/json": {"schema": _request_schema(SettlementCorrectionDraftV2)}
             },
         },
     },
@@ -76,7 +82,9 @@ async def post_preview(
 ) -> SettlementCorrectionPreview:
     await _run_finance_workflow(require_advance_ledger(session, actor.id, ledger_id))
     try:
-        draft = SettlementCorrectionDraftV1.model_validate_json(await request.body())
+        draft: SettlementCorrectionDraftV1 = TypeAdapter(
+            SettlementCorrectionDraftV1 | SettlementCorrectionDraftV2
+        ).validate_json(await request.body())
     except ValidationError:
         raise _problem(
             422, "validation_error", "The request did not satisfy the API contract."
@@ -106,7 +114,7 @@ async def post_preview(
         "requestBody": {
             "required": True,
             "content": {
-                "application/json": {"schema": _request_schema(SettlementCorrectionCommandV1)}
+                "application/json": {"schema": _request_schema(SettlementCorrectionCommandV2)}
             },
         },
     },

@@ -1,4 +1,4 @@
-"""Atomic original-date receipt restatement without replaying other Settlements."""
+"""Atomically restate original-date cash and forgiveness facts."""
 
 import json
 from decimal import Decimal
@@ -10,12 +10,14 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core_console.modules.finance.advance_correction_models import (
+    FinanceAdvanceCorrection,
     FinanceAdvanceCorrectionTransaction,
 )
 from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
     CorrectionMovement,
 )
+from core_console.modules.finance.advance_schemas import ObligationResponse
 from core_console.modules.finance.advances import (
     _money,
     _problem,
@@ -49,6 +51,7 @@ from core_console.modules.finance.settlement_correction_schemas import (
     ReceiptFinancialEffect,
     SettlementCorrectionCommandV1,
     SettlementCorrectionDraftV1,
+    SettlementCorrectionDraftV2,
     SettlementCorrectionPreview,
     SettlementCorrectionResponse,
 )
@@ -72,12 +75,11 @@ async def _source(session: AsyncSession, ledger_id: UUID, id: UUID) -> FinanceSe
     )
     if row is None:
         raise _problem(404, "finance_settlement_not_found", "Settlement was not found.")
-    if row.action_kind != "standard" or row.receiving_account_id is None or row.reason is not None:
+    if row.action_kind != "standard":
         raise _problem(
             409,
             "finance_settlement_correction_ineligible",
-            "This workflow corrects cash-only receipts. "
-            "Other Settlement kinds require their coordinated workflow.",
+            "Credit application and return require their own coordinated Correction.",
         )
     return row
 
@@ -103,27 +105,46 @@ async def _facts(session: AsyncSession, source: FinanceSettlement) -> ReceiptCor
                 FinanceCategoryAllocation.transaction_id == income.transaction_id
             )
         )
-    return ReceiptCorrectionFacts(
-        amount=_money(source.amount, source.currency),
-        allocations=[
-            CorrectionCashAllocation(
-                position=a.position,
-                obligationId=a.obligation_id,
-                originalCashPaid=_money(a.cash_paid, source.currency),
-                cashPaid=_money(
-                    a.effective_cash_paid if a.effective_cash_paid is not None else a.cash_paid,
-                    source.currency,
-                ),
+    allocations = [
+        CorrectionCashAllocation(
+            position=a.position,
+            obligationId=a.obligation_id,
+            originalCashPaid=_money(a.cash_paid, source.currency),
+            cashPaid=_money(
+                a.effective_cash_paid if a.effective_cash_paid is not None else a.cash_paid,
+                source.currency,
+            ),
+            originalForgiven=_money(a.forgiven, source.currency)
+            if a.kind == "forgiveness"
+            else None,
+            forgiven=_money(
+                a.effective_forgiven if a.effective_forgiven is not None else a.forgiven,
+                source.currency,
             )
-            for a in await _allocations(session, source.id)
-        ],
-        retainedCredit=_money(
-            (origin.effective_amount if origin.effective_amount is not None else origin.amount)
-            if origin
-            else Decimal(0),
-            source.currency,
-        ),
-        acceptedSurplus=_money(income.amount if income else Decimal(0), source.currency),
+            if a.kind == "forgiveness"
+            else None,
+            expenseTransactionId=a.transaction_id if a.kind == "forgiveness" else None,
+        )
+        for a in await _allocations(session, source.id)
+    ]
+    retained = (
+        (origin.effective_amount if origin.effective_amount is not None else origin.amount)
+        if origin
+        else Decimal(0)
+    )
+    surplus = income.amount if income else Decimal(0)
+    cash = _add(retained, surplus)
+    forgiven = Decimal(0)
+    for allocation in allocations:
+        cash = _add(cash, Decimal(allocation.cash_paid.amount))
+        if allocation.forgiven:
+            forgiven = _add(forgiven, Decimal(allocation.forgiven.amount))
+    return ReceiptCorrectionFacts(
+        amount=_money(cash if source.reason is not None else source.amount, source.currency),
+        forgivenessAmount=_money(forgiven, source.currency) if source.reason is not None else None,
+        allocations=allocations,
+        retainedCredit=_money(retained, source.currency),
+        acceptedSurplus=_money(surplus, source.currency),
         categoryId=category_id,
     )
 
@@ -178,7 +199,10 @@ async def _effects(
         result.append(
             ReceiptFinancialEffect(
                 transactionId=id,
-                kind="income" if tx.kind == "income" else "internalTransfer",
+                kind=cast(
+                    Literal["internalTransfer", "income", "expense"],
+                    "internalTransfer" if tx.kind == "internal_transfer" else tx.kind,
+                ),
                 transactionDate=tx.transaction_date,
                 note=tx.note,
                 movements=[
@@ -189,7 +213,13 @@ async def _effects(
                     )
                     for m in movements
                 ],
-                income=_money(allocation.amount if allocation else Decimal(0), source.currency),
+                income=_money(
+                    allocation.amount if allocation and tx.kind == "income" else Decimal(0),
+                    source.currency,
+                ),
+                expense=_money(allocation.amount, source.currency)
+                if allocation and tx.kind == "expense"
+                else None,
                 categoryId=allocation.category_id if allocation else None,
             )
         )
@@ -235,6 +265,98 @@ def _transfer(
     )
 
 
+def _correct_allocations(
+    source: FinanceSettlement,
+    before: ReceiptCorrectionFacts,
+    scoped: list[ObligationResponse],
+    cash: Decimal,
+    forgiveness: Decimal,
+) -> list[CorrectionCashAllocation]:
+    zero = Decimal(0)
+    currency = source.currency
+    paid = {o.id: zero for o in scoped}
+    forgiven = dict(paid)
+    for a in before.allocations:
+        if a.forgiven is None:
+            paid[a.obligation_id] = Decimal(a.cash_paid.amount)
+        else:
+            forgiven[a.obligation_id] = Decimal(a.forgiven.amount)
+    capacity = {
+        o.id: _add(Decimal(o.remaining.amount), _add(paid[o.id], forgiven[o.id])) for o in scoped
+    }
+    total_paid = zero
+    for value in paid.values():
+        total_paid = _add(total_paid, value)
+    if cash < total_paid:
+        release = subtract(total_paid, cash)
+        for a in reversed(before.allocations):
+            if a.forgiven is None:
+                removed = min(release, paid[a.obligation_id])
+                paid[a.obligation_id] = subtract(paid[a.obligation_id], removed)
+                release = subtract(release, removed)
+    elif cash > Decimal(before.amount.amount):
+        left = subtract(cash, Decimal(before.amount.amount))
+        for o in scoped:
+            extra = min(left, subtract(capacity[o.id], paid[o.id]))
+            paid[o.id] = _add(paid[o.id], extra)
+            left = subtract(left, extra)
+
+    remaining = {id: subtract(value, paid[id]) for id, value in capacity.items()}
+    total_forgiven = zero
+    for id, value in forgiven.items():
+        forgiven[id] = min(value, remaining[id])
+        total_forgiven = _add(total_forgiven, forgiven[id])
+    if forgiveness < total_forgiven:
+        release = subtract(total_forgiven, forgiveness)
+        for a in reversed(before.allocations):
+            if a.forgiven is not None:
+                removed = min(release, forgiven[a.obligation_id])
+                forgiven[a.obligation_id] = subtract(forgiven[a.obligation_id], removed)
+                release = subtract(release, removed)
+    else:
+        left = subtract(forgiveness, total_forgiven)
+        for o in scoped:
+            extra = min(left, subtract(remaining[o.id], forgiven[o.id]))
+            forgiven[o.id] = _add(forgiven[o.id], extra)
+            left = subtract(left, extra)
+        if left:
+            raise _problem(
+                422,
+                "validation_error",
+                "Corrected forgiveness exceeds debt in the original selected scope after cash.",
+            )
+
+    result = []
+    seen = set()
+    for a in before.allocations:
+        is_forgiveness = a.forgiven is not None
+        seen.add((a.obligation_id, is_forgiveness))
+        result.append(
+            a.model_copy(
+                update={
+                    "forgiven" if is_forgiveness else "cash_paid": _money(
+                        (forgiven if is_forgiveness else paid)[a.obligation_id], currency
+                    )
+                }
+            )
+        )
+    # Existing positions remain immutable. New slots are confirmed by this Correction.
+    for values, is_forgiveness in ((paid, False), (forgiven, True)):
+        for id, value in values.items():
+            if value and (id, is_forgiveness) not in seen:
+                result.append(
+                    CorrectionCashAllocation(
+                        position=len(result) + 1,
+                        obligationId=id,
+                        originalCashPaid=_money(zero, currency),
+                        cashPaid=_money(zero if is_forgiveness else value, currency),
+                        originalForgiven=_money(zero, currency) if is_forgiveness else None,
+                        forgiven=_money(value, currency) if is_forgiveness else None,
+                    )
+                )
+    return result
+
+
 async def preview_settlement_correction(
     session: AsyncSession,
     *,
@@ -245,6 +367,13 @@ async def preview_settlement_correction(
 ) -> SettlementCorrectionPreview:
     await require_advance_ledger(session, owner_id, ledger_id)
     source = await _source(session, ledger_id, draft.settlement_id)
+    has_forgiveness = isinstance(draft, SettlementCorrectionDraftV2)
+    if has_forgiveness != (source.reason is not None):
+        raise _problem(
+            409,
+            "finance_settlement_correction_ineligible",
+            "Use the Correction command for the original Settlement kind.",
+        )
     rows = await _allocations(session, source.id)
     obligations = {
         o.id: o
@@ -256,14 +385,31 @@ async def preview_settlement_correction(
         )
     }
     origin = await session.get(FinanceCreditOrigin, source.id, populate_existing=True)
-    account_ids = {source.receiving_account_id} | {
-        obligations[a.obligation_id].receivable_account_id for a in rows
-    }
+    scope = (
+        set(source.selected_obligation_ids or ())
+        if has_forgiveness
+        else {a.obligation_id for a in rows}
+    )
+    if has_forgiveness and (
+        not scope
+        or not {a.obligation_id for a in rows} <= scope
+        or any(
+            id not in obligations or obligations[id].principal.currency != source.currency
+            for id in scope
+        )
+    ):
+        raise _problem(
+            409,
+            "finance_settlement_correction_ineligible",
+            "The original selected scope cannot be established from the confirmed Settlement.",
+        )
+    account_ids = {obligations[id].receivable_account_id for id in scope}
+    if source.receiving_account_id is not None:
+        account_ids.add(source.receiving_account_id)
     if origin:
         account_ids.add(origin.liability_account_id)
-    assert None not in account_ids
     if lock:
-        for id in sorted(cast(set[UUID], account_ids)):
+        for id in sorted(account_ids):
             await get_finance_account_for_update(session, ledger_id=ledger_id, account_id=id)
     participant = await session.scalar(
         (
@@ -287,7 +433,6 @@ async def preview_settlement_correction(
                 "finance_settlement_correction_preview_stale",
                 "Receipt credit changed. Refresh the complete preview.",
             )
-        rows = await _allocations(session, source.id)
         obligations = {
             o.id: o
             for o in await list_participant_obligations(
@@ -317,13 +462,35 @@ async def preview_settlement_correction(
     if draft.amount.currency != currency:
         raise _problem(422, "validation_error", "A Correction cannot change the receipt currency.")
     balances = {}
-    for id in sorted(cast(set[UUID], account_ids)):
+    for id in sorted(account_ids):
         balance = await get_finance_account_balance(session, ledger_id=ledger_id, account_id=id)
         assert balance is not None
         balances[id] = balance
-    assert source.receiving_account_id is not None
-    receiving = balances[source.receiving_account_id].account
+    receiving = (
+        balances[source.receiving_account_id].account if source.receiving_account_id else None
+    )
     before = await _facts(session, source)
+    untouched: dict[UUID, ObligationResponse] = {}
+    if source.selected_allocation_order is not None:
+        scoped = [obligations[id] for id in source.selected_allocation_order]
+    elif has_forgiveness:
+        # The original positive Allocations prove the FIFO prefix. Any untouched
+        # suffix can use its original Advance keys only when those keys stayed fixed.
+        original = dict.fromkeys(
+            a.obligation_id
+            for a in before.allocations
+            if Decimal(a.original_cash_paid.amount)
+            or (a.original_forgiven and Decimal(a.original_forgiven.amount))
+        )
+        untouched = {id: o for id, o in obligations.items() if id in scope and id not in original}
+        scoped = [*[obligations[id] for id in original], *untouched.values()]
+    else:
+        scoped = [obligations[a.obligation_id] for a in before.allocations]
+    eligible = (
+        [o for o in scoped if o.source_date <= source.transaction_date]
+        if has_forgiveness
+        else scoped
+    )
     category = (
         await get_finance_category(
             session, ledger_id=ledger_id, category_id=draft.category_id, for_update=lock
@@ -341,7 +508,9 @@ async def preview_settlement_correction(
     effects_before = await _effects(session, source)
     state = {
         "ledgerId": str(ledger_id),
-        "intent": SettlementCorrectionDraftV1.canonical(draft),
+        "intent": SettlementCorrectionDraftV2.canonical(draft)
+        if isinstance(draft, SettlementCorrectionDraftV2)
+        else SettlementCorrectionDraftV1.canonical(draft),
         "revision": revision,
         "receipt": before.model_dump(mode="json", by_alias=True),
         "source": [
@@ -355,10 +524,7 @@ async def preview_settlement_correction(
             if source.selected_obligation_ids
             else None,
         ],
-        "obligations": [
-            obligations[a.obligation_id].model_dump(mode="json", by_alias=True)
-            for a in before.allocations
-        ],
+        "obligations": [o.model_dump(mode="json", by_alias=True) for o in scoped],
         "financialEffects": [e.model_dump(mode="json", by_alias=True) for e in effects_before],
         "participant": [str(participant.updated_at), participant.name, participant.status],
         "accounts": [
@@ -384,33 +550,51 @@ async def preview_settlement_correction(
             "finance_settlement_correction_preview_stale",
             "Receipt facts or effects changed. Refresh the complete preview and confirm again.",
         )
-    if receiving.status != "active":
-        raise _problem(409, "finance_account_archived", "Receiving Account is archived.")
+    if has_forgiveness and not {a.obligation_id for a in before.allocations} <= {
+        o.id for o in eligible
+    }:
+        raise _problem(
+            409,
+            "finance_settlement_correction_ineligible",
+            "An original Allocation is outside the Settlement date eligibility.",
+        )
     amount = Decimal(draft.amount.amount)
-    if amount == source.amount:
-        raise _problem(422, "validation_error", "Enter a different original cash receipt amount.")
-    paid = {a.obligation_id: Decimal(a.cash_paid.amount) for a in before.allocations}
-    total_paid = Decimal(0)
-    for value in paid.values():
-        total_paid = _add(total_paid, value)
-    if amount < total_paid:
-        release = subtract(total_paid, amount)
-        for a in reversed(before.allocations):
-            removed = min(release, paid[a.obligation_id])
-            paid[a.obligation_id] = subtract(paid[a.obligation_id], removed)
-            release = subtract(release, removed)
-    elif amount > source.amount:
-        # Only newly corrected cash can resolve debt. Previously retained credit
-        # remains available until the owner explicitly applies or returns it.
-        left = subtract(amount, source.amount)
-        for a in before.allocations:
-            o = obligations[a.obligation_id]
-            extra = min(left, Decimal(o.remaining.amount))
-            paid[o.id] = _add(paid[o.id], extra)
-            left = subtract(left, extra)
+    forgiveness = (
+        Decimal(draft.forgiveness_amount.amount)
+        if isinstance(draft, SettlementCorrectionDraftV2)
+        else Decimal(0)
+    )
+    if receiving is None and amount:
+        raise _problem(422, "validation_error", "Standalone forgiveness has no cash receipt.")
+    if amount == Decimal(before.amount.amount) and forgiveness == Decimal(
+        before.forgiveness_amount.amount if before.forgiveness_amount else "0"
+    ):
+        raise _problem(422, "validation_error", "Enter a corrected amount for the original facts.")
+    allocations_after = _correct_allocations(source, before, eligible, amount, forgiveness)
+    eligible_untouched = {o.id: o for o in eligible if o.id in untouched}
+    if len(eligible_untouched) > 1 and any(
+        a.obligation_id in eligible_untouched for a in allocations_after[len(before.allocations) :]
+    ):
+        corrections = FinanceAdvanceCorrection
+        revised_dates = await session.scalar(
+            select(corrections.id)
+            .where(
+                corrections.advance_id.in_(o.advance_id for o in eligible_untouched.values()),
+                corrections.plan["before"]["transactionDate"].astext
+                != corrections.plan["after"]["transactionDate"].astext,
+            )
+            .limit(1)
+        )
+        if revised_dates:
+            raise _problem(
+                409,
+                "finance_settlement_correction_ineligible",
+                "The original order of selected debt without an Allocation cannot be established "
+                "after an Advance date Correction.",
+            )
     applied = Decimal(0)
-    for value in paid.values():
-        applied = _add(applied, value)
+    for a in allocations_after:
+        applied = _add(applied, Decimal(a.cash_paid.amount))
     excess = subtract(amount, applied)
     if (excess > 0) == (draft.excess_disposition == "none"):
         raise _problem(
@@ -426,10 +610,8 @@ async def preview_settlement_correction(
             raise _problem(409, "finance_category_archived", "Income Category is archived.")
     after = ReceiptCorrectionFacts(
         amount=_money(amount, currency),
-        allocations=[
-            a.model_copy(update={"cash_paid": _money(paid[a.obligation_id], currency)})
-            for a in before.allocations
-        ],
+        forgivenessAmount=_money(forgiveness, currency) if has_forgiveness else None,
+        allocations=allocations_after,
         retainedCredit=_money(
             excess if draft.excess_disposition == "retainCredit" else Decimal(0), currency
         ),
@@ -438,22 +620,54 @@ async def preview_settlement_correction(
         ),
         categoryId=draft.category_id,
     )
-    obligations_before = [obligations[a.obligation_id] for a in before.allocations]
-    obligations_after = []
-    for a, o in zip(before.allocations, obligations_before, strict=True):
-        delta = subtract(paid[o.id], Decimal(a.cash_paid.amount))
-        obligations_after.append(
-            o.model_copy(
-                update={
-                    "cash_paid": _money(_add(Decimal(o.cash_paid.amount), delta), currency),
-                    "remaining": _money(subtract(Decimal(o.remaining.amount), delta), currency),
-                }
-            )
-        )
+    positions = {a.position: a for a in before.allocations}
+    obligations_after = {o.id: o for o in scoped}
     effects_after = list(effects_before)
-    for a in before.allocations:
-        delta = subtract(paid[a.obligation_id], Decimal(a.cash_paid.amount))
-        if delta:
+    for a in allocations_after:
+        prior = positions.get(a.position)
+        o = obligations_after[a.obligation_id]
+        if a.forgiven is not None:
+            value = Decimal(a.forgiven.amount)
+            delta = subtract(
+                value, Decimal(prior.forgiven.amount) if prior and prior.forgiven else Decimal(0)
+            )
+            if not delta:
+                continue
+            effect_id = a.expense_transaction_id
+            effects_after = [e for e in effects_after if e.transaction_id != effect_id]
+            if value:
+                a.expense_transaction_id = effect_id or uuid5(
+                    source.id, f"correction:{revision + 1}:expense:{a.position}"
+                )
+                effects_after.append(
+                    ReceiptFinancialEffect(
+                        transactionId=a.expense_transaction_id,
+                        kind="expense",
+                        transactionDate=source.transaction_date,
+                        note=source.reason,
+                        movements=[
+                            CorrectionMovement(
+                                accountId=o.receivable_account_id,
+                                amount=_money(subtract(Decimal(0), value), currency),
+                                role="primary",
+                            )
+                        ],
+                        income=_money(Decimal(0), currency),
+                        expense=a.forgiven,
+                        categoryId=None,
+                    )
+                )
+            else:
+                a.expense_transaction_id = None
+            field = "forgiven"
+        else:
+            delta = subtract(
+                Decimal(a.cash_paid.amount),
+                Decimal(prior.cash_paid.amount) if prior else Decimal(0),
+            )
+            if not delta:
+                continue
+            assert receiving is not None
             effects_after.append(
                 _transfer(
                     source,
@@ -463,10 +677,18 @@ async def preview_settlement_correction(
                     receiving,
                 )
             )
+            field = "cash_paid"
+        obligations_after[o.id] = o.model_copy(
+            update={
+                field: _money(_add(Decimal(getattr(o, field).amount), delta), currency),
+                "remaining": _money(subtract(Decimal(o.remaining.amount), delta), currency),
+            }
+        )
     credit_delta = subtract(
         Decimal(after.retained_credit.amount), Decimal(before.retained_credit.amount)
     )
     if credit_delta:
+        assert receiving is not None
         effects_after.append(
             _transfer(
                 source,
@@ -485,6 +707,7 @@ async def preview_settlement_correction(
     if income_row:
         effects_after = [e for e in effects_after if e.transaction_id != income_row.transaction_id]
     if Decimal(after.accepted_surplus.amount) > 0:
+        assert receiving is not None
         effects_after.append(
             ReceiptFinancialEffect(
                 transactionId=income_row.transaction_id
@@ -510,6 +733,16 @@ async def preview_settlement_correction(
             )
         )
     effects_after.sort(key=lambda e: e.transaction_id)
+    if (
+        receiving
+        and receiving.status != "active"
+        and (
+            amount != Decimal(before.amount.amount)
+            or [e for e in effects_before if e.kind != "expense"]
+            != [e for e in effects_after if e.kind != "expense"]
+        )
+    ):
+        raise _problem(409, "finance_account_archived", "Receiving Account is archived.")
     deltas: dict[UUID, Decimal] = {}
     for effects, negative in ((effects_before, True), (effects_after, False)):
         for e in effects:
@@ -537,7 +770,7 @@ async def preview_settlement_correction(
         previewToken="",
         settlementId=source.id,
         participantId=source.participant_id,
-        receivingAccountId=receiving.id,
+        receivingAccountId=source.receiving_account_id,
         transactionDate=source.transaction_date,
         originalConfirmedAt=source.confirmed_at,
         confirmationOrder=source.confirmation_order,
@@ -546,8 +779,8 @@ async def preview_settlement_correction(
         excessDisposition=draft.excess_disposition,
         before=before,
         after=after,
-        obligationsBefore=obligations_before,
-        obligationsAfter=obligations_after,
+        obligationsBefore=scoped,
+        obligationsAfter=list(obligations_after.values()),
         financialEffectsBefore=effects_before,
         financialEffectsAfter=effects_after,
         accountEffects=accounts,
@@ -590,9 +823,52 @@ async def execute_create_settlement_correction(
     session.add(record)
     await session.flush()
     rows = {a.position: a for a in await _allocations(session, source.id)}
+    removed_expenses = []
+    new_allocations = []
+    remaining = {o.id: o.remaining.amount for o in plan.obligations_after}
     for a in plan.after.allocations:
-        rows[a.position].effective_cash_paid = Decimal(a.cash_paid.amount)
-    source.amount = Decimal(command.amount.amount)
+        row = rows.get(a.position)
+        if row is None:
+            row = FinanceSettlementAllocation(
+                settlement_id=source.id,
+                ledger_id=ledger_id,
+                position=a.position,
+                obligation_id=a.obligation_id,
+                kind="cash" if a.forgiven is None else "forgiveness",
+                cash_paid=Decimal(0),
+                forgiven=Decimal(0),
+                remaining_after=Decimal(remaining[a.obligation_id]),
+                transaction_id=uuid5(source.id, f"correction:{record.revision}:cash:{a.position}")
+                if a.forgiven is None
+                else None,
+            )
+            new_allocations.append(row)
+        if a.forgiven is None:
+            effective_cash = Decimal(a.cash_paid.amount)
+            if (
+                source.reason is None
+                or effective_cash != row.cash_paid
+                or row.effective_cash_paid is not None
+            ):
+                row.effective_cash_paid = effective_cash
+        else:
+            if row.transaction_id and a.expense_transaction_id is None:
+                removed_expenses.append(row.transaction_id)
+            effective = Decimal(a.forgiven.amount)
+            if row.transaction_id == a.expense_transaction_id:
+                if effective != row.forgiven or row.effective_forgiven is not None:
+                    row.effective_forgiven = effective
+            else:
+                # Defer a new Expense link until its Transaction has been written.
+                if a.expense_transaction_id is None:
+                    row.transaction_id = None
+                    row.effective_forgiven = effective
+    if source.reason is None:
+        source.amount = Decimal(command.amount.amount)
+    elif source.receiving_account_id is not None and (
+        source.effective_cash_amount is not None or Decimal(command.amount.amount) != source.amount
+    ):
+        source.effective_cash_amount = Decimal(command.amount.amount)
     origin = await session.get(FinanceCreditOrigin, source.id)
     new_credit_id = None
     if origin:
@@ -629,6 +905,11 @@ async def execute_create_settlement_correction(
         )
         await session.execute(delete(FinanceTransaction).where(FinanceTransaction.id == id))
         old_income = None
+    if removed_expenses:
+        await session.flush()
+        await session.execute(
+            delete(FinanceTransaction).where(FinanceTransaction.id.in_(removed_expenses))
+        )
     before = {e.transaction_id: e for e in plan.financial_effects_before}
     for effect in plan.financial_effects_after:
         if before.get(effect.transaction_id) == effect:
@@ -639,7 +920,7 @@ async def execute_create_settlement_correction(
                 FinanceTransaction(
                     id=effect.transaction_id,
                     ledger_id=ledger_id,
-                    kind="income" if effect.kind == "income" else "internal_transfer",
+                    kind="internal_transfer" if effect.kind == "internalTransfer" else effect.kind,
                     transaction_date=effect.transaction_date,
                     note=effect.note,
                 )
@@ -667,16 +948,21 @@ async def execute_create_settlement_correction(
                     role=m.role,
                 )
             )
-        if effect.kind == "income":
+        if effect.kind in ("income", "expense"):
+            categorized = effect.expense if effect.kind == "expense" else effect.income
+            assert categorized is not None
             session.add(
                 FinanceCategoryAllocation(
                     transaction_id=effect.transaction_id,
                     ledger_id=ledger_id,
                     category_id=effect.category_id,
-                    amount=Decimal(effect.income.amount),
+                    amount=Decimal(categorized.amount),
                     currency=source.currency,
                 )
             )
+        if effect.kind == "expense":
+            continue
+        if effect.kind == "income":
             if old_income:
                 old_income.amount = Decimal(effect.income.amount)
             else:
@@ -698,7 +984,7 @@ async def execute_create_settlement_correction(
                     amount=Decimal(plan.after.retained_credit.amount),
                 )
             )
-        else:
+        elif all(row.transaction_id != effect.transaction_id for row in new_allocations):
             session.add(
                 FinanceSettlementCorrectionTransaction(
                     transaction_id=effect.transaction_id,
@@ -706,6 +992,14 @@ async def execute_create_settlement_correction(
                     correction_id=record.id,
                 )
             )
+    rows.update({row.position: row for row in new_allocations})
+    for a in plan.after.allocations:
+        if a.forgiven is not None and a.expense_transaction_id is not None:
+            row = rows[a.position]
+            if row.transaction_id != a.expense_transaction_id:
+                row.transaction_id = a.expense_transaction_id
+                row.effective_forgiven = Decimal(a.forgiven.amount)
+    session.add_all(new_allocations)
     await session.flush()
     if (
         await _facts(session, source) != plan.after

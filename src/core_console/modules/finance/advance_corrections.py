@@ -425,7 +425,12 @@ async def preview_advance_correction(
                 confirmationOrder=settlement.confirmation_order,
                 confirmedAt=settlement.confirmed_at,
                 transactionDate=settlement.transaction_date,
-                receiptAmount=_money(settlement.amount, currency),
+                receiptAmount=_money(
+                    settlement.effective_cash_amount
+                    if settlement.effective_cash_amount is not None
+                    else settlement.amount,
+                    currency,
+                ),
                 obligationId=allocation.obligation_id,
                 position=allocation.position,
                 cashBefore=_money(cash, currency),

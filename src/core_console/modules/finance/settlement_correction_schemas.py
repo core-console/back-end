@@ -1,4 +1,4 @@
-"""Closed cash receipt correction intent and complete retained consequences."""
+"""Closed Settlement Correction intent and complete retained consequences."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -59,15 +59,48 @@ class SettlementCorrectionCommandV1(SettlementCorrectionDraftV1):
         return {**super().canonical(), "previewToken": self.preview_token}
 
 
+class SettlementCorrectionDraftV2(SettlementCorrectionDraftV1):
+    forgiveness_amount: OpeningBalanceV1 = Field(alias="forgivenessAmount")
+
+    @model_validator(mode="after")
+    def valid_receipt(self) -> Self:
+        cash = Decimal(self.amount.amount)
+        forgiven = Decimal(self.forgiveness_amount.amount)
+        if min(cash, forgiven) < 0 or max(cash, forgiven) == 0:
+            raise ValueError("Enter non-negative amounts with at least one positive amount.")
+        if self.amount.currency != self.forgiveness_amount.currency:
+            raise ValueError("Cash and forgiveness must use the same currency.")
+        if self.excess_disposition != "acceptIncome" and self.category_id is not None:
+            raise ValueError("Only accepted surplus Income has a Category.")
+        return self
+
+    def canonical(self) -> dict[str, object]:
+        return {**super().canonical(), "forgivenessAmount": self.forgiveness_amount.canonical()}
+
+
+class SettlementCorrectionCommandV2(SettlementCorrectionCommandV1, SettlementCorrectionDraftV2):
+    pass
+
+
 class CorrectionCashAllocation(_Projection):
     position: int
     obligation_id: UUID = Field(alias="obligationId")
     original_cash_paid: MoneyResponse = Field(alias="originalCashPaid")
     cash_paid: MoneyResponse = Field(alias="cashPaid")
+    original_forgiven: MoneyResponse | None = Field(
+        default=None, alias="originalForgiven", exclude_if=lambda value: value is None
+    )
+    forgiven: MoneyResponse | None = Field(default=None, exclude_if=lambda value: value is None)
+    expense_transaction_id: UUID | None = Field(
+        default=None, alias="expenseTransactionId", exclude_if=lambda value: value is None
+    )
 
 
 class ReceiptCorrectionFacts(_Projection):
     amount: MoneyResponse
+    forgiveness_amount: MoneyResponse | None = Field(
+        default=None, alias="forgivenessAmount", exclude_if=lambda value: value is None
+    )
     allocations: list[CorrectionCashAllocation]
     retained_credit: MoneyResponse = Field(alias="retainedCredit")
     accepted_surplus: MoneyResponse = Field(alias="acceptedSurplus")
@@ -76,11 +109,12 @@ class ReceiptCorrectionFacts(_Projection):
 
 class ReceiptFinancialEffect(_Projection):
     transaction_id: UUID = Field(alias="transactionId")
-    kind: Literal["internalTransfer", "income"]
+    kind: Literal["internalTransfer", "income", "expense"]
     transaction_date: date = Field(alias="transactionDate")
     note: str | None
     movements: list[CorrectionMovement]
     income: MoneyResponse
+    expense: MoneyResponse | None = Field(default=None, exclude_if=lambda value: value is None)
     category_id: UUID | None = Field(alias="categoryId")
 
 
@@ -88,7 +122,7 @@ class SettlementCorrectionPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     settlement_id: UUID = Field(alias="settlementId")
     participant_id: UUID = Field(alias="participantId")
-    receiving_account_id: UUID = Field(alias="receivingAccountId")
+    receiving_account_id: UUID | None = Field(alias="receivingAccountId")
     transaction_date: date = Field(alias="transactionDate")
     original_confirmed_at: datetime = Field(alias="originalConfirmedAt")
     confirmation_order: int = Field(alias="confirmationOrder")
