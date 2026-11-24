@@ -185,7 +185,7 @@ async def test_correct_attribution_repeatedly_retains_original_and_intermediate_
     )
 
 
-async def test_applied_credit_rejects_preview_and_confirmation_without_changes(
+async def test_credit_applied_after_preview_requires_fresh_confirmation(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
 ) -> None:
     client, actor, base, draft = advance_client
@@ -197,19 +197,19 @@ async def test_applied_credit_rejects_preview_and_confirmation_without_changes(
         client, actor, base, application(draft, [source["obligation"]["id"]], "10.00")
     )
     before = (await client.get(f"{base}/advances/{source['id']}")).json()
-    rejected = await client.post(f"{base}/advance-corrections/preview", json=body)
-    assert rejected.status_code == 409, rejected.text
-    assert rejected.json()["code"] == "finance_advance_correction_ineligible"
     headers = submission_headers(actor.id)
     command = {**body, "previewToken": plan["previewToken"]}
     rejected = await client.post(f"{base}/advance-corrections", json=command, headers=headers)
     assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["code"] == "finance_advance_correction_preview_stale"
     assert rejected.json()["submissionReceipt"]["outcome"]["kind"] == "rejected"
     assert (
         await client.post(f"{base}/advance-corrections", json=command, headers=headers)
     ).json() == rejected.json()
     assert (await client.get(f"{base}/advances/{source['id']}")).json() == before
     assert (await client.get(f"{base}/advances/{source['id']}/corrections")).json() == []
+    revised = await correct(client, actor, base, body)
+    assert revised["after"]["obligations"][0]["creditApplied"] == money("10.00")
 
 
 async def test_stale_incomplete_and_replayed_plans_require_complete_reconfirmation(

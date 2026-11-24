@@ -368,7 +368,7 @@ async def _resolution_totals(
     credit_rows = await session.execute(
         select(
             FinanceCreditApplicationAllocation.obligation_id,
-            func.sum(FinanceCreditApplicationAllocation.amount),
+            func.sum(FinanceCreditApplicationAllocation.applied),
         )
         .where(FinanceCreditApplicationAllocation.obligation_id.in_(obligation_ids))
         .group_by(FinanceCreditApplicationAllocation.obligation_id)

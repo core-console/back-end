@@ -531,25 +531,25 @@ async def inspect_settlement(
         )
         .exists()
     )
-    # Restate the balance at this receipt's confirmed Allocation boundary.
-    corrected_remaining = case(
-        (corrected_after_receipt, FinanceObligation.principal - resolved_through_receipt)
-    )
     credit = FinanceCreditApplicationAllocation
     credit_through_receipt = (
-        select(func.coalesce(func.sum(credit.amount), 0))
+        select(func.coalesce(func.sum(credit.applied), 0))
         .join(FinanceSettlement, FinanceSettlement.id == credit.settlement_id)
         .where(
             credit.obligation_id == FinanceObligation.id,
-            FinanceSettlement.confirmation_order < settlement.confirmation_order,
+            FinanceSettlement.confirmation_order <= settlement.confirmation_order,
         )
         .correlate(FinanceObligation)
         .scalar_subquery()
     )
-    remaining_projection = (
+    # Restate the balance at this receipt's confirmed Allocation boundary.
+    remaining_through_receipt = (
         FinanceObligation.principal - resolved_through_receipt - credit_through_receipt
+    )
+    remaining_projection = (
+        remaining_through_receipt
         if settlement.reason is not None
-        else corrected_remaining
+        else case((corrected_after_receipt, remaining_through_receipt))
     )
     rows = (
         await session.execute(

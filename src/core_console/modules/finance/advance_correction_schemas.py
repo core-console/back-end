@@ -14,6 +14,7 @@ from core_console.modules.finance.advance_schemas import (
     _Projection,
 )
 from core_console.modules.finance.schemas import MoneyResponse
+from core_console.modules.finance.settlement_schemas import CreditOriginResponse
 
 
 class AdvanceCorrectionDraftV1(AdvanceDraftV2):
@@ -91,6 +92,29 @@ class CorrectionForgivenessRestatement(_Projection):
     forgiven_after: MoneyResponse = Field(alias="forgivenAfter")
 
 
+class CorrectionCreditApplication(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_date: date = Field(alias="transactionDate")
+    obligation_id: UUID = Field(alias="obligationId")
+    position: int
+    application_transaction_id: UUID = Field(alias="applicationTransactionId")
+    origin: CreditOriginResponse
+    original_applied: MoneyResponse = Field(alias="originalApplied")
+    applied_before: MoneyResponse = Field(alias="appliedBefore")
+    applied_after: MoneyResponse = Field(alias="appliedAfter")
+    restored: MoneyResponse
+    financial_effect: CorrectionFinancialEffect | None = Field(alias="financialEffect")
+
+
+class CorrectionParticipantPosition(_Projection):
+    participant_id: UUID = Field(alias="participantId")
+    outstanding_receivables_before: MoneyResponse = Field(alias="outstandingReceivablesBefore")
+    outstanding_receivables_after: MoneyResponse = Field(alias="outstandingReceivablesAfter")
+    available_credit_before: MoneyResponse = Field(alias="availableCreditBefore")
+    available_credit_after: MoneyResponse = Field(alias="availableCreditAfter")
+
+
 class AdvanceCorrectionPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     advance_id: UUID = Field(alias="advanceId")
@@ -106,6 +130,12 @@ class AdvanceCorrectionPreview(_Projection):
     cash_releases: list[CorrectionCashRelease] = Field(default_factory=list, alias="cashReleases")
     forgiveness_restatements: list[CorrectionForgivenessRestatement] = Field(
         default_factory=list, alias="forgivenessRestatements", exclude_if=lambda value: not value
+    )
+    credit_applications: list[CorrectionCreditApplication] = Field(
+        default_factory=list, alias="creditApplications", exclude_if=lambda value: not value
+    )
+    participant_positions: list[CorrectionParticipantPosition] = Field(
+        default_factory=list, alias="participantPositions", exclude_if=lambda value: not value
     )
 
 

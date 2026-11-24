@@ -306,6 +306,11 @@ async def inspect_credit_application(
                 sourceDate=advance.transaction_date,
                 originSettlementId=origin.settlement_id,
                 creditApplied=_money(allocation.amount, currency),
+                effectiveCreditApplied=(
+                    _money(allocation.effective_amount, currency)
+                    if allocation.effective_amount is not None
+                    else None
+                ),
                 remainingAfter=_money(allocation.remaining_after, currency),
             )
         )

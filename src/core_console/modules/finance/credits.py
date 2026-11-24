@@ -48,6 +48,7 @@ async def _credit_origins(
                 FinanceSettlement.participant_id == participant_id,
             )
             .order_by(FinanceSettlement.confirmation_order, FinanceSettlement.id)
+            .execution_options(populate_existing=True)
         )
     ).all()
     consumed = dict(
@@ -55,7 +56,7 @@ async def _credit_origins(
             await session.execute(
                 select(
                     FinanceCreditApplicationAllocation.origin_settlement_id,
-                    func.sum(FinanceCreditApplicationAllocation.amount),
+                    func.sum(FinanceCreditApplicationAllocation.applied),
                 )
                 .where(
                     FinanceCreditApplicationAllocation.origin_settlement_id.in_(

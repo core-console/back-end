@@ -466,6 +466,9 @@ class CreditApplicationAllocationResponse(_Projection):
     source_date: date = Field(alias="sourceDate")
     origin_settlement_id: UUID = Field(alias="originSettlementId")
     credit_applied: MoneyResponse = Field(alias="creditApplied")
+    effective_credit_applied: MoneyResponse | None = Field(
+        default=None, alias="effectiveCreditApplied", exclude_if=lambda amount: amount is None
+    )
     remaining_after: MoneyResponse = Field(alias="remainingAfter")
 
 

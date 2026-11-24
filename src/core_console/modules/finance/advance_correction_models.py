@@ -45,7 +45,7 @@ class FinanceAdvanceCorrection(Base):
 
 
 class FinanceAdvanceCorrectionTransaction(Base):
-    """A protected receipt reclassification created by an Advance Correction."""
+    """A protected cash release or Credit restoration from an Advance Correction."""
 
     __tablename__ = "finance_advance_correction_transactions"
     __table_args__ = (
