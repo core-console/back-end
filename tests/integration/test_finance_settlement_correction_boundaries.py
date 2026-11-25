@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core_console.modules.users.models import User
 from integration.finance_submission_helpers import create_finance_resource, submission_headers
 from integration.test_finance_api import finance_client
-from integration.test_finance_credit_applications import application, apply_credit, retain_credit
+from integration.test_finance_credit_applications import retain_credit
 from integration.test_finance_credit_returns import credit_return, return_credit
 from integration.test_finance_settlement_corrections import correct, correction, money
 from integration.test_finance_settlements import advance, advance_client, confirm, repayment
@@ -71,21 +71,15 @@ async def test_receipt_corrections_hide_foreign_owners_and_ledgers(
     assert rejected.json()["submissionReceipt"]["outcome"]["kind"] == "rejected"
 
 
-@pytest.mark.parametrize("activity", ["applied", "returned", "combined", "forgiveness"])
+@pytest.mark.parametrize("activity", ["returned", "combined", "forgiveness"])
 async def test_later_lifecycle_workflows_are_explicitly_ineligible_without_mutation(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
     activity: str,
 ) -> None:
     client, actor, base, draft = advance_client
-    if activity in ("applied", "returned"):
+    if activity == "returned":
         source = await retain_credit(client, actor, base, draft, "50.00")
-        if activity == "applied":
-            debt = await advance(client, actor, base, draft, "10.00", "2026-10-20")
-            await apply_credit(
-                client, actor, base, application(draft, [debt["obligation"]["id"]], "10.00")
-            )
-        else:
-            await return_credit(client, actor, base, credit_return(draft, "10.00"))
+        await return_credit(client, actor, base, credit_return(draft, "10.00"))
         body = correction(source, "40.00", "retainCredit")
     else:
         debt = await advance(client, actor, base, draft, "100.00", "2026-10-20")

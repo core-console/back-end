@@ -382,6 +382,9 @@ class CreditOriginResponse(_Projection):
     confirmation_order: int = Field(alias="confirmationOrder")
     amount: MoneyResponse
     available: MoneyResponse
+    has_returned_credit: Literal[True] | None = Field(
+        default=None, alias="hasReturnedCredit", exclude_if=lambda value: value is None
+    )
 
 
 class SettlementResponse(_Projection):

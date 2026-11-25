@@ -10,9 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
     CorrectionMovement,
+    CorrectionParticipantPosition,
 )
 from core_console.modules.finance.advance_schemas import ObligationResponse, _Projection
 from core_console.modules.finance.schemas import MoneyResponse
+from core_console.modules.finance.settlement_schemas import CreditOriginResponse
 from core_console.modules.finance.submission_commands import OpeningBalanceV1
 
 
@@ -118,6 +120,27 @@ class ReceiptFinancialEffect(_Projection):
     category_id: UUID | None = Field(alias="categoryId")
 
 
+class ReceiptCreditApplication(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_date: date = Field(alias="transactionDate")
+    obligation_id: UUID = Field(alias="obligationId")
+    position: int
+    application_transaction_id: UUID = Field(alias="applicationTransactionId")
+    original_applied: MoneyResponse = Field(alias="originalApplied")
+    applied_before: MoneyResponse = Field(alias="appliedBefore")
+    applied_after: MoneyResponse = Field(alias="appliedAfter")
+    released: MoneyResponse
+    restatement_transaction_id: UUID | None = Field(alias="restatementTransactionId")
+
+
+class ReceiptCreditCorrection(_Projection):
+    origin: CreditOriginResponse
+    available_after: MoneyResponse = Field(alias="availableAfter")
+    applications: list[ReceiptCreditApplication]
+    participant_position: CorrectionParticipantPosition = Field(alias="participantPosition")
+
+
 class SettlementCorrectionPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     settlement_id: UUID = Field(alias="settlementId")
@@ -138,6 +161,9 @@ class SettlementCorrectionPreview(_Projection):
     financial_effects_before: list[ReceiptFinancialEffect] = Field(alias="financialEffectsBefore")
     financial_effects_after: list[ReceiptFinancialEffect] = Field(alias="financialEffectsAfter")
     account_effects: list[CorrectionAccountEffect] = Field(alias="accountEffects")
+    credit_correction: ReceiptCreditCorrection | None = Field(
+        default=None, alias="creditCorrection", exclude_if=lambda value: value is None
+    )
 
 
 class SettlementCorrectionResponse(SettlementCorrectionPreview):

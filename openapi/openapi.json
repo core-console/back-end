@@ -5107,6 +5107,18 @@
             "title": "Confirmedat",
             "type": "string"
           },
+          "hasReturnedCredit": {
+            "anyOf": [
+              {
+                "const": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hasreturnedcredit"
+          },
           "ledgerId": {
             "format": "uuid",
             "title": "Ledgerid",
@@ -7235,6 +7247,107 @@
         "title": "ReceiptCorrectionFacts",
         "type": "object"
       },
+      "ReceiptCreditApplication": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationTransactionId": {
+            "format": "uuid",
+            "title": "Applicationtransactionid",
+            "type": "string"
+          },
+          "appliedAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "appliedBefore": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "obligationId": {
+            "format": "uuid",
+            "title": "Obligationid",
+            "type": "string"
+          },
+          "originalApplied": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "released": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "restatementTransactionId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restatementtransactionid"
+          },
+          "settlementId": {
+            "format": "uuid",
+            "title": "Settlementid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "settlementId",
+          "confirmationOrder",
+          "transactionDate",
+          "obligationId",
+          "position",
+          "applicationTransactionId",
+          "originalApplied",
+          "appliedBefore",
+          "appliedAfter",
+          "released",
+          "restatementTransactionId"
+        ],
+        "title": "ReceiptCreditApplication",
+        "type": "object"
+      },
+      "ReceiptCreditCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "applications": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptCreditApplication"
+            },
+            "title": "Applications",
+            "type": "array"
+          },
+          "availableAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CreditOriginResponse"
+          },
+          "participantPosition": {
+            "$ref": "#/components/schemas/CorrectionParticipantPosition"
+          }
+        },
+        "required": [
+          "origin",
+          "availableAfter",
+          "applications",
+          "participantPosition"
+        ],
+        "title": "ReceiptCreditCorrection",
+        "type": "object"
+      },
       "ReceiptFinancialEffect": {
         "additionalProperties": false,
         "properties": {
@@ -8242,6 +8355,16 @@
             "title": "Confirmationorder",
             "type": "integer"
           },
+          "creditCorrection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptCreditCorrection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "excessDisposition": {
             "enum": [
               "none",
@@ -8484,6 +8607,16 @@
             "format": "date-time",
             "title": "Confirmedat",
             "type": "string"
+          },
+          "creditCorrection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptCreditCorrection"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "excessDisposition": {
             "enum": [

@@ -17,7 +17,10 @@ from core_console.modules.finance.settlement_schemas import CreditOriginResponse
 
 
 def _origin_response(
-    origin: FinanceCreditOrigin, settlement: FinanceSettlement, consumed: Decimal = Decimal(0)
+    origin: FinanceCreditOrigin,
+    settlement: FinanceSettlement,
+    applied: Decimal,
+    returned: Decimal,
 ) -> CreditOriginResponse:
     assert settlement.receiving_account_id is not None
     amount = origin.effective_amount if origin.effective_amount is not None else origin.amount
@@ -32,7 +35,8 @@ def _origin_response(
         confirmedAt=settlement.confirmed_at,
         confirmationOrder=settlement.confirmation_order,
         amount=_money(amount, settlement.currency),
-        available=_money(subtract(amount, consumed), settlement.currency),
+        available=_money(subtract(subtract(amount, applied), returned), settlement.currency),
+        hasReturnedCredit=True if returned else None,
     )
 
 
@@ -83,9 +87,12 @@ async def _credit_origins(
             )
         ).all()
     )
-    for id, amount in returned.items():
-        consumed[id] = subtract(consumed.get(id, Decimal(0)), subtract(Decimal(0), amount))
     return [
-        _origin_response(origin, settlement, consumed.get(origin.settlement_id, Decimal(0)))
+        _origin_response(
+            origin,
+            settlement,
+            consumed.get(origin.settlement_id, Decimal(0)),
+            returned.get(origin.settlement_id, Decimal(0)),
+        )
         for origin, settlement in rows
     ]

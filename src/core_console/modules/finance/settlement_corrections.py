@@ -1,4 +1,4 @@
-"""Atomically restate original-date cash and forgiveness facts."""
+"""Atomically restate receipt facts and their linked Settlement effects."""
 
 import json
 from decimal import Decimal
@@ -16,6 +16,7 @@ from core_console.modules.finance.advance_correction_models import (
 from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
     CorrectionMovement,
+    CorrectionParticipantPosition,
 )
 from core_console.modules.finance.advance_schemas import ObligationResponse
 from core_console.modules.finance.advances import (
@@ -27,7 +28,7 @@ from core_console.modules.finance.advances import (
 from core_console.modules.finance.credit_application_models import (
     FinanceCreditApplicationAllocation,
 )
-from core_console.modules.finance.credit_return_models import FinanceCreditReturnFragment
+from core_console.modules.finance.credits import _credit_origins
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -48,6 +49,8 @@ from core_console.modules.finance.settlement_correction_models import (
 from core_console.modules.finance.settlement_correction_schemas import (
     CorrectionCashAllocation,
     ReceiptCorrectionFacts,
+    ReceiptCreditApplication,
+    ReceiptCreditCorrection,
     ReceiptFinancialEffect,
     SettlementCorrectionCommandV1,
     SettlementCorrectionDraftV1,
@@ -93,6 +96,24 @@ async def _allocations(session: AsyncSession, id: UUID) -> list[FinanceSettlemen
             .execution_options(populate_existing=True)
         )
     )
+
+
+async def _origin_applications(
+    session: AsyncSession, settlement_id: UUID
+) -> list[tuple[FinanceCreditApplicationAllocation, FinanceSettlement]]:
+    allocation = FinanceCreditApplicationAllocation
+    rows = await session.execute(
+        select(allocation, FinanceSettlement)
+        .join(FinanceSettlement, FinanceSettlement.id == allocation.settlement_id)
+        .where(allocation.origin_settlement_id == settlement_id, allocation.applied > 0)
+        .order_by(
+            FinanceSettlement.confirmation_order.desc(),
+            FinanceSettlement.id.desc(),
+            allocation.position.desc(),
+        )
+        .execution_options(populate_existing=True)
+    )
+    return [(fragment, settlement) for fragment, settlement in rows]
 
 
 async def _facts(session: AsyncSession, source: FinanceSettlement) -> ReceiptCorrectionFacts:
@@ -265,6 +286,31 @@ def _transfer(
     )
 
 
+def _release_application(
+    id: UUID,
+    application: FinanceSettlement,
+    liability_id: UUID,
+    receivable_id: UUID,
+    amount: Decimal,
+) -> ReceiptFinancialEffect:
+    money = _money(amount, application.currency)
+    return ReceiptFinancialEffect(
+        transactionId=id,
+        kind="internalTransfer",
+        transactionDate=application.transaction_date,
+        note="Credit application restated by receipt correction",
+        income=_money(Decimal(0), application.currency),
+        categoryId=None,
+        movements=sorted(
+            [
+                CorrectionMovement(accountId=liability_id, amount=money, role="source"),
+                CorrectionMovement(accountId=receivable_id, amount=money, role="destination"),
+            ],
+            key=lambda m: m.account_id,
+        ),
+    )
+
+
 def _correct_allocations(
     source: FinanceSettlement,
     before: ReceiptCorrectionFacts,
@@ -375,6 +421,9 @@ async def preview_settlement_correction(
             "Use the Correction command for the original Settlement kind.",
         )
     rows = await _allocations(session, source.id)
+    origin = await session.get(FinanceCreditOrigin, source.id, populate_existing=True)
+    # The Obligation read must include any debt discovered through a Credit application.
+    applications = await _origin_applications(session, source.id) if origin else []
     obligations = {
         o.id: o
         for o in await list_participant_obligations(
@@ -384,7 +433,6 @@ async def preview_settlement_correction(
             participant_id=source.participant_id,
         )
     }
-    origin = await session.get(FinanceCreditOrigin, source.id, populate_existing=True)
     scope = (
         set(source.selected_obligation_ids or ())
         if has_forgiveness
@@ -404,6 +452,7 @@ async def preview_settlement_correction(
             "The original selected scope cannot be established from the confirmed Settlement.",
         )
     account_ids = {obligations[id].receivable_account_id for id in scope}
+    account_ids.update(obligations[a.obligation_id].receivable_account_id for a, _ in applications)
     if source.receiving_account_id is not None:
         account_ids.add(source.receiving_account_id)
     if origin:
@@ -442,34 +491,41 @@ async def preview_settlement_correction(
                 participant_id=source.participant_id,
             )
         }
-    if origin:
-        for model in (FinanceCreditApplicationAllocation, FinanceCreditReturnFragment):
-            if (
-                await session.scalar(
-                    select(model.settlement_id)
-                    .where(model.origin_settlement_id == source.id)
-                    .limit(1)
-                )
-                is not None
-            ):
-                raise _problem(
-                    409,
-                    "finance_settlement_correction_ineligible",
-                    "Receipt credit has been applied or returned "
-                    "and requires a complete lifecycle Correction.",
-                )
+        applications = await _origin_applications(session, source.id) if origin else []
+        if any(
+            obligations[a.obligation_id].receivable_account_id not in account_ids
+            for a, _ in applications
+        ):
+            raise _problem(
+                409,
+                "finance_settlement_correction_preview_stale",
+                "Receipt Credit applications changed. Refresh the complete preview.",
+            )
+    credits = await _credit_origins(session, ledger_id, source.participant_id) if origin else []
+    credit_source = next((credit for credit in credits if credit.settlement_id == source.id), None)
+    if credit_source and credit_source.has_returned_credit:
+        raise _problem(
+            409,
+            "finance_settlement_correction_ineligible",
+            "This receipt has returned Credit. Corrections of returned Credit are unavailable.",
+        )
     currency = source.currency
     if draft.amount.currency != currency:
         raise _problem(422, "validation_error", "A Correction cannot change the receipt currency.")
-    balances = {}
-    for id in sorted(account_ids):
-        balance = await get_finance_account_balance(session, ledger_id=ledger_id, account_id=id)
-        assert balance is not None
-        balances[id] = balance
-    receiving = (
-        balances[source.receiving_account_id].account if source.receiving_account_id else None
-    )
     before = await _facts(session, source)
+    consumed = Decimal(0)
+    for allocation, _ in applications:
+        consumed = _add(consumed, allocation.applied)
+    if credit_source and (
+        credit_source.amount != before.retained_credit
+        or Decimal(credit_source.available.amount)
+        != subtract(Decimal(before.retained_credit.amount), consumed)
+    ):
+        raise _problem(
+            409,
+            "finance_settlement_correction_preview_stale",
+            "Receipt Credit changed. Refresh the complete preview.",
+        )
     untouched: dict[UUID, ObligationResponse] = {}
     if source.selected_allocation_order is not None:
         scoped = [obligations[id] for id in source.selected_allocation_order]
@@ -506,6 +562,18 @@ async def preview_settlement_correction(
         )
     ) or 0
     effects_before = await _effects(session, source)
+    # Retained release effects can still reference receivables with no effective application.
+    account_ids.update(m.account_id for effect in effects_before for m in effect.movements)
+    balances = {}
+    for id in sorted(account_ids):
+        balance = await get_finance_account_balance(session, ledger_id=ledger_id, account_id=id)
+        assert balance is not None
+        balances[id] = balance
+    receiving = (
+        balances[source.receiving_account_id].account if source.receiving_account_id else None
+    )
+    affected = {o.id: o for o in scoped}
+    affected.update((a.obligation_id, obligations[a.obligation_id]) for a, _ in applications)
     state = {
         "ledgerId": str(ledger_id),
         "intent": SettlementCorrectionDraftV2.canonical(draft)
@@ -524,7 +592,7 @@ async def preview_settlement_correction(
             if source.selected_obligation_ids
             else None,
         ],
-        "obligations": [o.model_dump(mode="json", by_alias=True) for o in scoped],
+        "obligations": [o.model_dump(mode="json", by_alias=True) for o in affected.values()],
         "financialEffects": [e.model_dump(mode="json", by_alias=True) for e in effects_before],
         "participant": [str(participant.updated_at), participant.name, participant.status],
         "accounts": [
@@ -543,6 +611,19 @@ async def preview_settlement_correction(
         if category
         else None,
     }
+    outstanding_before = available_before = Decimal(0)
+    if applications:
+        for o in obligations.values():
+            if o.remaining.currency == currency:
+                outstanding_before = _add(outstanding_before, Decimal(o.remaining.amount))
+        for credit in credits:
+            if credit.available.currency == currency:
+                available_before = _add(available_before, Decimal(credit.available.amount))
+        state["creditApplications"] = [
+            [str(s.id), s.confirmation_order, str(s.transaction_date), a.position, str(a.applied)]
+            for a, s in applications
+        ]
+        state["participantPosition"] = [str(outstanding_before), str(available_before)]
     token = sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if lock and isinstance(draft, SettlementCorrectionCommandV1) and token != draft.preview_token:
         raise _problem(
@@ -621,7 +702,7 @@ async def preview_settlement_correction(
         categoryId=draft.category_id,
     )
     positions = {a.position: a for a in before.allocations}
-    obligations_after = {o.id: o for o in scoped}
+    obligations_after = dict(affected)
     effects_after = list(effects_before)
     for a in allocations_after:
         prior = positions.get(a.position)
@@ -703,6 +784,85 @@ async def preview_settlement_correction(
                 credit=True,
             )
         )
+    credit_correction = None
+    if applications:
+        assert credit_source is not None
+        retained = Decimal(after.retained_credit.amount)
+        shortfall = max(Decimal(0), subtract(consumed, retained))
+        available_after = max(Decimal(0), subtract(retained, consumed))
+        impacts = []
+        for allocation, application in applications:
+            applied = allocation.applied
+            released = min(applied, shortfall)
+            shortfall = subtract(shortfall, released)
+            effect_id = None
+            if released:
+                obligation = obligations_after[allocation.obligation_id]
+                effect_id = uuid5(
+                    source.id,
+                    f"correction:{revision + 1}:credit-release:{application.id}"
+                    f":{allocation.position}",
+                )
+                effects_after.append(
+                    _release_application(
+                        effect_id,
+                        application,
+                        credit_source.liability_account_id,
+                        obligation.receivable_account_id,
+                        released,
+                    )
+                )
+                obligations_after[obligation.id] = obligation.model_copy(
+                    update={
+                        "credit_applied": _money(
+                            subtract(Decimal(obligation.credit_applied.amount), released), currency
+                        ),
+                        "remaining": _money(
+                            _add(Decimal(obligation.remaining.amount), released), currency
+                        ),
+                    }
+                )
+            impacts.append(
+                ReceiptCreditApplication(
+                    settlementId=application.id,
+                    confirmationOrder=application.confirmation_order,
+                    transactionDate=application.transaction_date,
+                    obligationId=allocation.obligation_id,
+                    position=allocation.position,
+                    applicationTransactionId=allocation.transaction_id,
+                    originalApplied=_money(allocation.amount, currency),
+                    appliedBefore=_money(applied, currency),
+                    appliedAfter=_money(subtract(applied, released), currency),
+                    released=_money(released, currency),
+                    restatementTransactionId=effect_id,
+                )
+            )
+        outstanding_after = outstanding_before
+        for id, obligation in obligations_after.items():
+            outstanding_after = _add(
+                outstanding_after,
+                subtract(
+                    Decimal(obligation.remaining.amount), Decimal(affected[id].remaining.amount)
+                ),
+            )
+        credit_correction = ReceiptCreditCorrection(
+            origin=credit_source,
+            availableAfter=_money(available_after, currency),
+            applications=impacts,
+            participantPosition=CorrectionParticipantPosition(
+                participantId=source.participant_id,
+                outstandingReceivablesBefore=_money(outstanding_before, currency),
+                outstandingReceivablesAfter=_money(outstanding_after, currency),
+                availableCreditBefore=_money(available_before, currency),
+                availableCreditAfter=_money(
+                    _add(
+                        available_before,
+                        subtract(available_after, Decimal(credit_source.available.amount)),
+                    ),
+                    currency,
+                ),
+            ),
+        )
     income_row = await session.get(FinanceSettlementIncome, source.id)
     if income_row:
         effects_after = [e for e in effects_after if e.transaction_id != income_row.transaction_id]
@@ -779,11 +939,12 @@ async def preview_settlement_correction(
         excessDisposition=draft.excess_disposition,
         before=before,
         after=after,
-        obligationsBefore=scoped,
+        obligationsBefore=list(affected.values()),
         obligationsAfter=list(obligations_after.values()),
         financialEffectsBefore=effects_before,
         financialEffectsAfter=effects_after,
         accountEffects=accounts,
+        creditCorrection=credit_correction,
     )
     plan.preview_token = token
     return plan
@@ -891,6 +1052,15 @@ async def execute_create_settlement_correction(
             )
         )
         await session.flush()
+    if plan.credit_correction:
+        for application in plan.credit_correction.applications:
+            if application.restatement_transaction_id is not None:
+                allocation = await session.get(
+                    FinanceCreditApplicationAllocation,
+                    (application.settlement_id, application.position),
+                )
+                assert allocation is not None
+                allocation.effective_amount = Decimal(application.applied_after.amount)
     old_income = await session.get(FinanceSettlementIncome, source.id)
     after_ids = {e.transaction_id for e in plan.financial_effects_after}
     if old_income and old_income.transaction_id not in after_ids:
