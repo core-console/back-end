@@ -16,6 +16,29 @@ from core_console.modules.finance.settlement_models import FinanceCreditOrigin, 
 from core_console.modules.finance.settlement_schemas import CreditOriginResponse
 
 
+async def credit_applications_by_origin(
+    session: AsyncSession, origin_ids: set[UUID]
+) -> dict[UUID, list[tuple[FinanceCreditApplicationAllocation, FinanceSettlement]]]:
+    if not origin_ids:
+        return {}
+    allocation = FinanceCreditApplicationAllocation
+    rows = await session.execute(
+        select(allocation, FinanceSettlement)
+        .join(FinanceSettlement, FinanceSettlement.id == allocation.settlement_id)
+        .where(allocation.origin_settlement_id.in_(origin_ids))
+        .order_by(
+            FinanceSettlement.confirmation_order.desc(),
+            FinanceSettlement.id.desc(),
+            allocation.position.desc(),
+        )
+        .execution_options(populate_existing=True)
+    )
+    result: dict[UUID, list[tuple[FinanceCreditApplicationAllocation, FinanceSettlement]]] = {}
+    for fragment, settlement in rows:
+        result.setdefault(fragment.origin_settlement_id, []).append((fragment, settlement))
+    return result
+
+
 def _origin_response(
     origin: FinanceCreditOrigin,
     settlement: FinanceSettlement,

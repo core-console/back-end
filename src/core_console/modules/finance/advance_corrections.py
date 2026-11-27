@@ -25,6 +25,8 @@ from core_console.modules.finance.advance_correction_schemas import (
     CorrectionForgivenessRestatement,
     CorrectionMovement,
     CorrectionParticipantPosition,
+    CorrectionReturnedCreditOrigin,
+    ReceiptCreditApplication,
 )
 from core_console.modules.finance.advance_models import (
     FinanceAdvance,
@@ -43,8 +45,8 @@ from core_console.modules.finance.advances import (
 from core_console.modules.finance.credit_application_models import (
     FinanceCreditApplicationAllocation,
 )
-from core_console.modules.finance.credit_return_models import FinanceCreditReturnFragment
-from core_console.modules.finance.credits import _credit_origins
+from core_console.modules.finance.credit_returns import credit_returns_by_origin
+from core_console.modules.finance.credits import _credit_origins, credit_applications_by_origin
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -346,9 +348,30 @@ async def preview_advance_correction(
         before.obligations if isinstance(before, SharedAdvanceResponse) else [before.obligation]
     )
     previous = {o.id: o for o in before_obligations}
+    returns_by_origin = await credit_returns_by_origin(
+        session, ledger_id, {origin.settlement_id for _, _, origin in allocation_rows if origin}
+    )
+    if (
+        returns_by_origin
+        and draft.funding_account_id != source.funding_account_id
+        and (
+            Decimal(draft.amount.amount) != Decimal(before.amount.amount)
+            or Decimal(draft.owner_share.amount) != source.owner_share
+            or shares != {o.participant_id: o.principal for o in obligations if o.principal > 0}
+            or draft.note != source.note
+        )
+    ):
+        raise _problem(
+            409,
+            "finance_advance_correction_ineligible",
+            "Correct the funding Account separately from other Advance facts "
+            "when associated Credit has been returned.",
+        )
     origins = {
         origin.settlement_id: origin
-        for participant_id in sorted(participant_ids if application_rows else ())
+        for participant_id in sorted(
+            participant_ids if application_rows or returns_by_origin else ()
+        )
         for origin in await _credit_origins(session, ledger_id, participant_id)
         if origin.amount.currency == currency
     }
@@ -421,23 +444,6 @@ async def preview_advance_correction(
             applied_after[id] = subtract(applied_after[id], restored)
             effect = None
             if restored > 0:
-                if (
-                    await session.scalar(
-                        select(FinanceCreditReturnFragment.settlement_id)
-                        .where(
-                            FinanceCreditReturnFragment.origin_settlement_id
-                            == receipt.settlement_id
-                        )
-                        .limit(1)
-                    )
-                    is not None
-                ):
-                    raise _problem(
-                        409,
-                        "finance_advance_correction_ineligible",
-                        "Restoration involving a returned Credit origin requires a later "
-                        "Correction.",
-                    )
                 effect = _allocation_transfer(
                     uuid5(
                         source.id,
@@ -475,22 +481,22 @@ async def preview_advance_correction(
         released = min(excess_resolution[id], cash)
         if released <= 0:
             continue
-        if origin is not None and settlement.id not in credit_after:
-            for model in (FinanceCreditApplicationAllocation, FinanceCreditReturnFragment):
-                if (
-                    await session.scalar(
-                        select(model.settlement_id)
-                        .where(model.origin_settlement_id == settlement.id)
-                        .limit(1)
-                    )
-                    is not None
-                ):
-                    raise _problem(
-                        409,
-                        "finance_advance_correction_ineligible",
-                        "Applied or returned receipt credit requires a later "
-                        "coordinated Correction.",
-                    )
+        if (
+            origin is not None
+            and settlement.id not in credit_after
+            and settlement.id not in returns_by_origin
+            and await session.scalar(
+                select(FinanceCreditApplicationAllocation.settlement_id)
+                .where(FinanceCreditApplicationAllocation.origin_settlement_id == settlement.id)
+                .limit(1)
+            )
+            is not None
+        ):
+            raise _problem(
+                409,
+                "finance_advance_correction_ineligible",
+                "Applied receipt Credit requires a coordinated Correction.",
+            )
         excess_resolution[id] = subtract(excess_resolution[id], released)
         paid_after[id] = subtract(paid_after[id], released)
         prior_credit = credit_after.get(
@@ -674,7 +680,7 @@ async def preview_advance_correction(
             )
         )
     positions = []
-    if applications:
+    if applications or returns_by_origin:
         for obligation in projected:
             participant_id = obligation.participant_id
             debt = Decimal(0)
@@ -709,6 +715,62 @@ async def preview_advance_correction(
                     availableCreditAfter=_money(available_after, currency),
                 )
             )
+    returned_origins = []
+    if returns_by_origin:
+        application_changes = {(a.settlement_id, a.position): a for a in applications}
+        origin_applications = await credit_applications_by_origin(session, set(returns_by_origin))
+        receipts = await session.scalars(
+            select(FinanceSettlement)
+            .where(FinanceSettlement.id.in_(returns_by_origin))
+            .order_by(FinanceSettlement.confirmation_order, FinanceSettlement.id)
+            .execution_options(populate_existing=True)
+        )
+        for receipt_row in receipts:
+            origin_view = origins[receipt_row.id]
+            prior_retained = Decimal(origin_view.amount.amount)
+            retained = credit_after.get(receipt_row.id, prior_retained)
+            available = _add(
+                Decimal(origin_view.available.amount), subtract(retained, prior_retained)
+            )
+            impacts = []
+            for allocation, settlement in origin_applications.get(receipt_row.id, []):
+                change = application_changes.get((settlement.id, allocation.position))
+                restored_money = change.restored if change else _money(Decimal(0), currency)
+                available = _add(available, Decimal(restored_money.amount))
+                impacts.append(
+                    ReceiptCreditApplication(
+                        settlementId=settlement.id,
+                        confirmationOrder=settlement.confirmation_order,
+                        transactionDate=settlement.transaction_date,
+                        obligationId=allocation.obligation_id,
+                        position=allocation.position,
+                        applicationTransactionId=allocation.transaction_id,
+                        originalApplied=_money(allocation.amount, currency),
+                        appliedBefore=_money(allocation.applied, currency),
+                        appliedAfter=change.applied_after
+                        if change
+                        else _money(allocation.applied, currency),
+                        released=restored_money,
+                        restatementTransactionId=change.financial_effect.transaction_id
+                        if change and change.financial_effect
+                        else None,
+                    )
+                )
+            returned_origins.append(
+                CorrectionReturnedCreditOrigin(
+                    origin=origin_view,
+                    receiptAmount=_money(
+                        receipt_row.effective_cash_amount
+                        if receipt_row.effective_cash_amount is not None
+                        else receipt_row.amount,
+                        currency,
+                    ),
+                    retainedAfter=_money(retained, currency),
+                    availableAfter=_money(available, currency),
+                    applications=impacts,
+                    returns=returns_by_origin[receipt_row.id],
+                )
+            )
     data = {
         "advanceId": source.id,
         "reason": draft.reason,
@@ -723,6 +785,7 @@ async def preview_advance_correction(
         "forgivenessRestatements": restatements,
         "creditApplications": applications,
         "participantPositions": positions,
+        "returnedCreditOrigins": returned_origins,
     }
     state = {
         "plan": AdvanceCorrectionPreview.model_validate({"previewToken": "", **data}).model_dump(
@@ -975,7 +1038,7 @@ async def execute_create_advance_correction(
     )
     if effective != plan.after:
         raise RuntimeError("Correction effects did not match the confirmed plan")
-    if plan.credit_applications:
+    if plan.credit_applications or plan.returned_credit_origins:
         for account_effect in plan.account_effects:
             balance = await get_finance_account_balance(
                 session, ledger_id=ledger_id, account_id=account_effect.account_id

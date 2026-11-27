@@ -1,4 +1,4 @@
-"""Opt-in Advance correction production-browser checks against guarded PostgreSQL."""
+"""Opt-in Correction production-browser checks against guarded PostgreSQL."""
 
 import asyncio
 import json
@@ -34,7 +34,7 @@ def browser_config() -> tuple[Path, str, str]:
     return consumer, node, pnpm
 
 
-async def test_real_browser_advance_corrections(
+async def test_real_browser_corrections(
     browser_config: tuple[Path, str, str],
     postgres_database_url: str,
     postgres_engine: AsyncEngine,
@@ -96,7 +96,7 @@ async def test_real_browser_advance_corrections(
                 check=False,
             )
             assert result.returncode == 0, result.stdout + result.stderr
-            assert "2 passed" in result.stdout, result.stdout + result.stderr
+            assert "6 passed" in result.stdout, result.stdout + result.stderr
         finally:
             server.should_exit = True
             await task

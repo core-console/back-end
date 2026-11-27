@@ -115,6 +115,40 @@ class CorrectionParticipantPosition(_Projection):
     available_credit_after: MoneyResponse = Field(alias="availableCreditAfter")
 
 
+class CorrectionCreditReturn(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    position: int
+    transaction_id: UUID = Field(alias="transactionId")
+    transaction_date: date = Field(alias="transactionDate")
+    paying_account_id: UUID = Field(alias="payingAccountId")
+    return_amount: MoneyResponse = Field(alias="returnAmount")
+    origin_amount: MoneyResponse = Field(alias="originAmount")
+
+
+class ReceiptCreditApplication(_Projection):
+    settlement_id: UUID = Field(alias="settlementId")
+    confirmation_order: int = Field(alias="confirmationOrder")
+    transaction_date: date = Field(alias="transactionDate")
+    obligation_id: UUID = Field(alias="obligationId")
+    position: int
+    application_transaction_id: UUID = Field(alias="applicationTransactionId")
+    original_applied: MoneyResponse = Field(alias="originalApplied")
+    applied_before: MoneyResponse = Field(alias="appliedBefore")
+    applied_after: MoneyResponse = Field(alias="appliedAfter")
+    released: MoneyResponse
+    restatement_transaction_id: UUID | None = Field(alias="restatementTransactionId")
+
+
+class CorrectionReturnedCreditOrigin(_Projection):
+    origin: CreditOriginResponse
+    receipt_amount: MoneyResponse = Field(alias="receiptAmount")
+    retained_after: MoneyResponse = Field(alias="retainedAfter")
+    available_after: MoneyResponse = Field(alias="availableAfter")
+    applications: list[ReceiptCreditApplication]
+    returns: list[CorrectionCreditReturn]
+
+
 class AdvanceCorrectionPreview(_Projection):
     preview_token: str = Field(alias="previewToken")
     advance_id: UUID = Field(alias="advanceId")
@@ -136,6 +170,9 @@ class AdvanceCorrectionPreview(_Projection):
     )
     participant_positions: list[CorrectionParticipantPosition] = Field(
         default_factory=list, alias="participantPositions", exclude_if=lambda value: not value
+    )
+    returned_credit_origins: list[CorrectionReturnedCreditOrigin] = Field(
+        default_factory=list, alias="returnedCreditOrigins", exclude_if=lambda value: not value
     )
 
 

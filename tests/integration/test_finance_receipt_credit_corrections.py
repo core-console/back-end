@@ -40,6 +40,129 @@ pytestmark = pytest.mark.anyio
 __all__ = ["advance_client"]
 
 
+async def test_receipt_releases_last_direct_allocation_to_preserve_actual_return(
+    advance_client: tuple[AsyncClient, User, str, dict[str, object]],
+) -> None:
+    client, actor, base, draft = advance_client
+    first = await advance(client, actor, base, draft, "30.00", "2026-10-20")
+    last = await advance(client, actor, base, draft, "50.00", "2026-10-21")
+    origin = await retain_credit(client, actor, base, draft, "100.00")
+    returned = await return_credit(client, actor, base, credit_return(draft, "20.00"))
+    plan = await correct(client, actor, base, correction(origin, "90.00"))
+    assert plan["after"]["amount"] == money("90.00")
+    assert plan["after"]["retainedCredit"] == money("20.00")
+    assert plan["after"]["acceptedSurplus"] == money("0.00")
+    assert [a["cashPaid"] for a in plan["after"]["allocations"]] == [
+        money("30.00"),
+        money("40.00"),
+    ]
+    assert plan["creditCorrection"]["availableAfter"] == money("0.00")
+    assert plan["creditCorrection"]["directCashReleasedForReturns"] == money("10.00")
+    assert plan["creditCorrection"]["returns"][0]["settlementId"] == returned["id"]
+    assert (await client.get(f"{base}/settlements/{returned['id']}")).json() == returned
+    for advance_id, remaining in ((first["id"], "0.00"), (last["id"], "10.00")):
+        debt = (await client.get(f"{base}/advances/{advance_id}")).json()["obligation"]
+        assert debt["remaining"] == money(remaining)
+    accounts = {a["id"]: a for a in (await client.get(f"{base}/accounts")).json()}
+    assert accounts[str(draft["fundingAccountId"])]["currentBalance"] == money("90.00")
+    [gross] = (await client.get(f"{base}/overview", params={"month": "2026-10"})).json()[
+        "monthSummaryByCurrency"
+    ]
+    assert gross["income"] == gross["expense"] == money("0.00")
+    rejected = await client.post(
+        f"{base}/settlement-corrections/preview", json=correction(origin, "19.00")
+    )
+    assert rejected.status_code == 409 and "actual Credit returned" in rejected.json()["detail"]
+    followup = await correct(client, actor, base, correction(origin, "60.00"))
+    assert [a["cashPaid"] for a in followup["after"]["allocations"]] == [
+        money("30.00"),
+        money("10.00"),
+    ]
+    assert followup["before"] == plan["after"]
+    assert followup["creditCorrection"]["returns"] == plan["creditCorrection"]["returns"]
+    detail = (await client.get(f"{base}/settlements/{origin['id']}")).json()
+    assert detail["allocations"][1]["remainingAfter"] == money("40.00")
+    assert (await client.get(f"{base}/settlements/{origin['id']}/corrections")).json() == [
+        plan,
+        followup,
+    ]
+
+
+async def test_receipt_reduction_uses_available_credit_then_releases_newest_applications(
+    advance_client: tuple[AsyncClient, User, str, dict[str, object]],
+) -> None:
+    client, actor, base, draft = advance_client
+    origin = await retain_credit(client, actor, base, draft, "50.00")
+    first = await advance(client, actor, base, draft, "12.00", "2026-10-23")
+    last = await advance(client, actor, base, draft, "8.00", "2026-10-24")
+    for advance_detail, amount in ((first, "12.00"), (last, "8.00")):
+        await apply_credit(
+            client, actor, base, application(draft, [advance_detail["obligation"]["id"]], amount)
+        )
+    returned = await return_credit(client, actor, base, credit_return(draft, "20.00"))
+    for amount, available, applications in (
+        ("45.00", "5.00", ["8.00", "12.00"]),
+        ("32.00", "0.00", ["0.00", "12.00"]),
+        ("20.00", "0.00", ["0.00", "0.00"]),
+    ):
+        plan = await correct(client, actor, base, correction(origin, amount, "retainCredit"))
+        credit = plan["creditCorrection"]
+        assert [item["appliedAfter"] for item in credit["applications"]] == [
+            money(value) for value in applications
+        ]
+        assert credit["availableAfter"] == money(available)
+        assert credit["directCashReleasedForReturns"] == money("0.00")
+    assert (await client.get(f"{base}/settlements/{returned['id']}")).json() == returned
+
+
+async def test_direct_cash_releases_only_after_affected_applications_are_exhausted(
+    advance_client: tuple[AsyncClient, User, str, dict[str, object]],
+) -> None:
+    client, actor, base, draft = advance_client
+    direct = await advance(client, actor, base, draft, "60.00", "2026-10-20")
+    origin = await retain_credit(client, actor, base, draft, "100.00")
+    later = await advance(client, actor, base, draft, "15.00", "2026-10-23")
+    await apply_credit(
+        client, actor, base, application(draft, [later["obligation"]["id"]], "15.00")
+    )
+    await return_credit(client, actor, base, credit_return(draft, "20.00"))
+
+    first = await correct(client, actor, base, correction(origin, "85.00"))
+    assert first["after"]["allocations"][0]["cashPaid"] == money("60.00")
+    assert first["creditCorrection"]["applications"][0]["appliedAfter"] == money("5.00")
+
+    second = await correct(client, actor, base, correction(origin, "75.00"))
+    assert second["after"]["allocations"][0]["cashPaid"] == money("55.00")
+    assert second["creditCorrection"]["applications"][0]["appliedAfter"] == money("0.00")
+    assert second["creditCorrection"]["directCashReleasedForReturns"] == money("5.00")
+    debts = {item["id"]: item for item in second["obligationsAfter"]}
+    assert debts[direct["obligation"]["id"]]["remaining"] == money("5.00")
+    assert debts[later["obligation"]["id"]]["remaining"] == money("15.00")
+
+
+async def test_shared_return_preserves_both_original_fragments_and_other_origin(
+    advance_client: tuple[AsyncClient, User, str, dict[str, object]],
+) -> None:
+    client, actor, base, draft = advance_client
+    older = await retain_credit(client, actor, base, draft, "20.00")
+    newer = await retain_credit(client, actor, base, draft, "30.00")
+    returned = await return_credit(client, actor, base, credit_return(draft, "25.00"))
+    older_path = f"{base}/settlements/{older['id']}"
+    older_before = (await client.get(older_path)).json()
+    plan = await correct(client, actor, base, correction(newer, "10.00", "retainCredit"))
+    credit = plan["creditCorrection"]
+    assert credit["availableAfter"] == money("5.00")
+    [fragment] = credit["returns"]
+    assert fragment["originAmount"] == money("5.00") and fragment["returnAmount"] == money("25.00")
+    assert fragment["position"] == 2
+    assert (await client.get(older_path)).json() == older_before
+    assert (await client.get(f"{base}/settlements/{returned['id']}")).json() == returned
+    blocked = await client.post(
+        f"{base}/settlement-corrections/preview", json=correction(older, "18.00", "retainCredit")
+    )
+    assert blocked.status_code == 409
+
+
 @pytest.mark.parametrize(
     "corrected, applied_after, available_after, remaining_after, cash_after",
     [
@@ -260,7 +383,7 @@ async def test_confirmation_rechecks_credit_activity_and_requires_a_fresh_plan(
     else:
         returned = await return_credit(client, actor, base, credit_return(draft, "5.00"))
         assert returned["amount"] == money("5.00")
-        code = "finance_settlement_correction_ineligible"
+        code = "finance_settlement_correction_preview_stale"
     history_path = f"settlements/{origin['id']}/corrections"
     reads = ["accounts", "transactions", f"settlements/{origin['id']}", history_path]
     before = [(await client.get(f"{base}/{read}")).json() for read in reads]
@@ -276,8 +399,9 @@ async def test_confirmation_rechecks_credit_activity_and_requires_a_fresh_plan(
     assert before[-1] == []
     if activity == "return":
         assert before[-2]["creditOrigin"]["hasReturnedCredit"] is True
-        blocked = await client.post(f"{path}/preview", json=body)
-        assert blocked.status_code == 409 and blocked.json()["code"] == code
+        renewed = await correct(client, actor, base, body)
+        assert renewed["previewToken"] != preview.json()["previewToken"]
+        assert renewed["creditCorrection"]["applications"][0]["appliedAfter"] == money("5.00")
         assert (await client.get(f"{base}/settlements/{returned['id']}")).json() == returned
     else:
         renewed = await correct(client, actor, base, body)
@@ -286,12 +410,16 @@ async def test_confirmation_rechecks_credit_activity_and_requires_a_fresh_plan(
         assert renewed["creditCorrection"]["applications"][0]["appliedAfter"] == money("0.00")
 
 
+@pytest.mark.parametrize("returned", [False, True])
 async def test_confirmation_records_stale_conflict_for_application_to_concurrent_new_debt(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
     monkeypatch: pytest.MonkeyPatch,
+    returned: bool,
 ) -> None:
     client, actor, base, draft = advance_client
     origin = await retain_credit(client, actor, base, draft, "30.00")
+    if returned:
+        await return_credit(client, actor, base, credit_return(draft, "5.00"))
     body = correction(origin, "15.00", "retainCredit")
     preview = await preview_correction(client, base, body)
     command = body | {"previewToken": preview["previewToken"]}
@@ -439,21 +567,25 @@ async def test_restatement_protects_managed_positions_and_transactions(
 
 
 @pytest.mark.parametrize("phase", ["rollback", "response_loss"])
+@pytest.mark.parametrize("returned", [False, True])
 async def test_receipt_credit_correction_recovers_one_atomic_outcome(
     advance_client: tuple[AsyncClient, User, str, dict[str, object]],
     postgres_session: AsyncSession,
     postgres_database_url: str,
     monkeypatch: pytest.MonkeyPatch,
     phase: str,
+    returned: bool,
 ) -> None:
     client, actor, base, draft = advance_client
-    origin = await retain_credit(client, actor, base, draft, "20.00")
+    origin = await retain_credit(client, actor, base, draft, "25.00" if returned else "20.00")
     debt = await advance(client, actor, base, draft, "25.00", "2026-10-23")
     allocation = await apply_credit(
         client, actor, base, application(draft, [debt["obligation"]["id"]], "20.00")
     )
+    if returned:
+        await return_credit(client, actor, base, credit_return(draft, "5.00"))
     path = f"{base}/settlement-corrections"
-    body = correction(origin, "10.00", "retainCredit")
+    body = correction(origin, "15.00" if returned else "10.00", "retainCredit")
     preview = await client.post(f"{path}/preview", json=body)
     assert preview.status_code == 200, preview.text
     command = body | {"previewToken": preview.json()["previewToken"]}

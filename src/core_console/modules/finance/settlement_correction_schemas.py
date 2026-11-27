@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
+    CorrectionCreditReturn,
     CorrectionMovement,
     CorrectionParticipantPosition,
+    ReceiptCreditApplication,
 )
 from core_console.modules.finance.advance_schemas import ObligationResponse, _Projection
 from core_console.modules.finance.schemas import MoneyResponse
@@ -120,25 +122,17 @@ class ReceiptFinancialEffect(_Projection):
     category_id: UUID | None = Field(alias="categoryId")
 
 
-class ReceiptCreditApplication(_Projection):
-    settlement_id: UUID = Field(alias="settlementId")
-    confirmation_order: int = Field(alias="confirmationOrder")
-    transaction_date: date = Field(alias="transactionDate")
-    obligation_id: UUID = Field(alias="obligationId")
-    position: int
-    application_transaction_id: UUID = Field(alias="applicationTransactionId")
-    original_applied: MoneyResponse = Field(alias="originalApplied")
-    applied_before: MoneyResponse = Field(alias="appliedBefore")
-    applied_after: MoneyResponse = Field(alias="appliedAfter")
-    released: MoneyResponse
-    restatement_transaction_id: UUID | None = Field(alias="restatementTransactionId")
-
-
 class ReceiptCreditCorrection(_Projection):
     origin: CreditOriginResponse
     available_after: MoneyResponse = Field(alias="availableAfter")
     applications: list[ReceiptCreditApplication]
     participant_position: CorrectionParticipantPosition = Field(alias="participantPosition")
+    returns: list[CorrectionCreditReturn] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
+    direct_cash_released_for_returns: MoneyResponse | None = Field(
+        default=None, alias="directCashReleasedForReturns", exclude_if=lambda value: value is None
+    )
 
 
 class SettlementCorrectionPreview(_Projection):

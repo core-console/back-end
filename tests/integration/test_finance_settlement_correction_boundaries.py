@@ -78,9 +78,9 @@ async def test_later_lifecycle_workflows_are_explicitly_ineligible_without_mutat
 ) -> None:
     client, actor, base, draft = advance_client
     if activity == "returned":
-        source = await retain_credit(client, actor, base, draft, "50.00")
-        await return_credit(client, actor, base, credit_return(draft, "10.00"))
-        body = correction(source, "40.00", "retainCredit")
+        await retain_credit(client, actor, base, draft, "50.00")
+        source = await return_credit(client, actor, base, credit_return(draft, "10.00"))
+        body = correction(source, "8.00")
     else:
         debt = await advance(client, actor, base, draft, "100.00", "2026-10-20")
         action: dict[str, Any] = {

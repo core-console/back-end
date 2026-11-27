@@ -17,6 +17,7 @@ from core_console.modules.finance.advance_correction_schemas import (
     CorrectionAccountEffect,
     CorrectionMovement,
     CorrectionParticipantPosition,
+    ReceiptCreditApplication,
 )
 from core_console.modules.finance.advance_schemas import ObligationResponse
 from core_console.modules.finance.advances import (
@@ -28,7 +29,8 @@ from core_console.modules.finance.advances import (
 from core_console.modules.finance.credit_application_models import (
     FinanceCreditApplicationAllocation,
 )
-from core_console.modules.finance.credits import _credit_origins
+from core_console.modules.finance.credit_returns import credit_returns_by_origin
+from core_console.modules.finance.credits import _credit_origins, credit_applications_by_origin
 from core_console.modules.finance.models import (
     FinanceAccount,
     FinanceAccountMovement,
@@ -49,7 +51,6 @@ from core_console.modules.finance.settlement_correction_models import (
 from core_console.modules.finance.settlement_correction_schemas import (
     CorrectionCashAllocation,
     ReceiptCorrectionFacts,
-    ReceiptCreditApplication,
     ReceiptCreditCorrection,
     ReceiptFinancialEffect,
     SettlementCorrectionCommandV1,
@@ -96,24 +97,6 @@ async def _allocations(session: AsyncSession, id: UUID) -> list[FinanceSettlemen
             .execution_options(populate_existing=True)
         )
     )
-
-
-async def _origin_applications(
-    session: AsyncSession, settlement_id: UUID
-) -> list[tuple[FinanceCreditApplicationAllocation, FinanceSettlement]]:
-    allocation = FinanceCreditApplicationAllocation
-    rows = await session.execute(
-        select(allocation, FinanceSettlement)
-        .join(FinanceSettlement, FinanceSettlement.id == allocation.settlement_id)
-        .where(allocation.origin_settlement_id == settlement_id, allocation.applied > 0)
-        .order_by(
-            FinanceSettlement.confirmation_order.desc(),
-            FinanceSettlement.id.desc(),
-            allocation.position.desc(),
-        )
-        .execution_options(populate_existing=True)
-    )
-    return [(fragment, settlement) for fragment, settlement in rows]
 
 
 async def _facts(session: AsyncSession, source: FinanceSettlement) -> ReceiptCorrectionFacts:
@@ -423,7 +406,11 @@ async def preview_settlement_correction(
     rows = await _allocations(session, source.id)
     origin = await session.get(FinanceCreditOrigin, source.id, populate_existing=True)
     # The Obligation read must include any debt discovered through a Credit application.
-    applications = await _origin_applications(session, source.id) if origin else []
+    applications = (
+        (await credit_applications_by_origin(session, {source.id})).get(source.id, [])
+        if origin
+        else []
+    )
     obligations = {
         o.id: o
         for o in await list_participant_obligations(
@@ -491,7 +478,11 @@ async def preview_settlement_correction(
                 participant_id=source.participant_id,
             )
         }
-        applications = await _origin_applications(session, source.id) if origin else []
+        applications = (
+            (await credit_applications_by_origin(session, {source.id})).get(source.id, [])
+            if origin
+            else []
+        )
         if any(
             obligations[a.obligation_id].receivable_account_id not in account_ids
             for a, _ in applications
@@ -503,12 +494,13 @@ async def preview_settlement_correction(
             )
     credits = await _credit_origins(session, ledger_id, source.participant_id) if origin else []
     credit_source = next((credit for credit in credits if credit.settlement_id == source.id), None)
-    if credit_source and credit_source.has_returned_credit:
-        raise _problem(
-            409,
-            "finance_settlement_correction_ineligible",
-            "This receipt has returned Credit. Corrections of returned Credit are unavailable.",
-        )
+    returns = (
+        (await credit_returns_by_origin(session, ledger_id, {source.id})).get(source.id, [])
+        if credit_source and credit_source.has_returned_credit
+        else []
+    )
+    if not returns:
+        applications = [(a, settlement) for a, settlement in applications if a.applied > 0]
     currency = source.currency
     if draft.amount.currency != currency:
         raise _problem(422, "validation_error", "A Correction cannot change the receipt currency.")
@@ -516,10 +508,13 @@ async def preview_settlement_correction(
     consumed = Decimal(0)
     for allocation, _ in applications:
         consumed = _add(consumed, allocation.applied)
+    returned = Decimal(0)
+    for fragment in returns:
+        returned = _add(returned, Decimal(fragment.origin_amount.amount))
     if credit_source and (
         credit_source.amount != before.retained_credit
         or Decimal(credit_source.available.amount)
-        != subtract(Decimal(before.retained_credit.amount), consumed)
+        != subtract(subtract(Decimal(before.retained_credit.amount), consumed), returned)
     ):
         raise _problem(
             409,
@@ -612,7 +607,7 @@ async def preview_settlement_correction(
         else None,
     }
     outstanding_before = available_before = Decimal(0)
-    if applications:
+    if applications or returns:
         for o in obligations.values():
             if o.remaining.currency == currency:
                 outstanding_before = _add(outstanding_before, Decimal(o.remaining.amount))
@@ -624,6 +619,8 @@ async def preview_settlement_correction(
             for a, s in applications
         ]
         state["participantPosition"] = [str(outstanding_before), str(available_before)]
+    if returns:
+        state["creditReturns"] = [r.model_dump(mode="json", by_alias=True) for r in returns]
     token = sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if lock and isinstance(draft, SettlementCorrectionCommandV1) and token != draft.preview_token:
         raise _problem(
@@ -651,7 +648,22 @@ async def preview_settlement_correction(
         before.forgiveness_amount.amount if before.forgiveness_amount else "0"
     ):
         raise _problem(422, "validation_error", "Enter a corrected amount for the original facts.")
-    allocations_after = _correct_allocations(source, before, eligible, amount, forgiveness)
+    if amount < returned:
+        raise _problem(
+            409,
+            "finance_settlement_correction_ineligible",
+            "The corrected receipt cannot cover the actual Credit returned from this receipt.",
+        )
+    cash_budget = amount
+    direct_release = Decimal(0)
+    if returned and amount < Decimal(before.amount.amount):
+        cash_budget = subtract(amount, returned)
+        previous_paid = Decimal(0)
+        for cash_allocation in before.allocations:
+            previous_paid = _add(previous_paid, Decimal(cash_allocation.cash_paid.amount))
+        # Only the additional release beyond the ordinary cash reduction backs the return.
+        direct_release = max(Decimal(0), subtract(min(previous_paid, amount), cash_budget))
+    allocations_after = _correct_allocations(source, before, eligible, cash_budget, forgiveness)
     eligible_untouched = {o.id: o for o in eligible if o.id in untouched}
     if len(eligible_untouched) > 1 and any(
         a.obligation_id in eligible_untouched for a in allocations_after[len(before.allocations) :]
@@ -677,7 +689,20 @@ async def preview_settlement_correction(
     for a in allocations_after:
         applied = _add(applied, Decimal(a.cash_paid.amount))
     excess = subtract(amount, applied)
-    if (excess > 0) == (draft.excess_disposition == "none"):
+    if excess < returned:
+        raise _problem(
+            409,
+            "finance_settlement_correction_ineligible",
+            "The corrected Allocations cannot preserve the backing for the actual Credit return.",
+        )
+    # Preserve all supported applications before classifying additional excess.
+    committed_credit = min(excess, _add(returned, consumed)) if returns else Decimal(0)
+    uncommitted_excess = subtract(excess, committed_credit)
+    if (uncommitted_excess > 0 and draft.excess_disposition == "none") or (
+        uncommitted_excess == 0
+        and draft.excess_disposition != "none"
+        and not (returned and draft.excess_disposition == "retainCredit")
+    ):
         raise _problem(
             422,
             "validation_error",
@@ -694,10 +719,11 @@ async def preview_settlement_correction(
         forgivenessAmount=_money(forgiveness, currency) if has_forgiveness else None,
         allocations=allocations_after,
         retainedCredit=_money(
-            excess if draft.excess_disposition == "retainCredit" else Decimal(0), currency
+            excess if draft.excess_disposition == "retainCredit" else committed_credit, currency
         ),
         acceptedSurplus=_money(
-            excess if draft.excess_disposition == "acceptIncome" else Decimal(0), currency
+            uncommitted_excess if draft.excess_disposition == "acceptIncome" else Decimal(0),
+            currency,
         ),
         categoryId=draft.category_id,
     )
@@ -785,11 +811,11 @@ async def preview_settlement_correction(
             )
         )
     credit_correction = None
-    if applications:
+    if applications or returns:
         assert credit_source is not None
-        retained = Decimal(after.retained_credit.amount)
-        shortfall = max(Decimal(0), subtract(consumed, retained))
-        available_after = max(Decimal(0), subtract(retained, consumed))
+        after_returns = subtract(Decimal(after.retained_credit.amount), returned)
+        shortfall = max(Decimal(0), subtract(consumed, after_returns))
+        available_after = max(Decimal(0), subtract(after_returns, consumed))
         impacts = []
         for allocation, application in applications:
             applied = allocation.applied
@@ -849,6 +875,8 @@ async def preview_settlement_correction(
             origin=credit_source,
             availableAfter=_money(available_after, currency),
             applications=impacts,
+            returns=returns,
+            directCashReleasedForReturns=_money(direct_release, currency) if returns else None,
             participantPosition=CorrectionParticipantPosition(
                 participantId=source.participant_id,
                 outstandingReceivablesBefore=_money(outstanding_before, currency),
@@ -1176,6 +1204,15 @@ async def execute_create_settlement_correction(
         or await _effects(session, source) != plan.financial_effects_after
     ):
         raise RuntimeError("Receipt Correction effects did not match the confirmed plan")
+    if plan.credit_correction and plan.credit_correction.returns:
+        for account_effect in plan.account_effects:
+            balance = await get_finance_account_balance(
+                session, ledger_id=ledger_id, account_id=account_effect.account_id
+            )
+            if balance is None or balance.current_balance != Decimal(
+                account_effect.balance_after.amount
+            ):
+                raise RuntimeError("Receipt Correction Account effects did not match the plan")
     await inspect_settlement_correction(
         session, owner_id=owner_id, ledger_id=ledger_id, correction_id=record.id
     )

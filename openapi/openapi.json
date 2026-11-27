@@ -1985,6 +1985,13 @@
           "reason": {
             "title": "Reason",
             "type": "string"
+          },
+          "returnedCreditOrigins": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionReturnedCreditOrigin"
+            },
+            "title": "Returnedcreditorigins",
+            "type": "array"
           }
         },
         "required": [
@@ -2196,6 +2203,13 @@
           "reason": {
             "title": "Reason",
             "type": "string"
+          },
+          "returnedCreditOrigins": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionReturnedCreditOrigin"
+            },
+            "title": "Returnedcreditorigins",
+            "type": "array"
           },
           "revision": {
             "title": "Revision",
@@ -4595,6 +4609,57 @@
         "title": "CorrectionCreditApplication",
         "type": "object"
       },
+      "CorrectionCreditReturn": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmationOrder": {
+            "title": "Confirmationorder",
+            "type": "integer"
+          },
+          "originAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "payingAccountId": {
+            "format": "uuid",
+            "title": "Payingaccountid",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "returnAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "settlementId": {
+            "format": "uuid",
+            "title": "Settlementid",
+            "type": "string"
+          },
+          "transactionDate": {
+            "format": "date",
+            "title": "Transactiondate",
+            "type": "string"
+          },
+          "transactionId": {
+            "format": "uuid",
+            "title": "Transactionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "settlementId",
+          "confirmationOrder",
+          "position",
+          "transactionId",
+          "transactionDate",
+          "payingAccountId",
+          "returnAmount",
+          "originAmount"
+        ],
+        "title": "CorrectionCreditReturn",
+        "type": "object"
+      },
       "CorrectionFinancialEffect": {
         "additionalProperties": false,
         "properties": {
@@ -4762,6 +4827,47 @@
           "availableCreditAfter"
         ],
         "title": "CorrectionParticipantPosition",
+        "type": "object"
+      },
+      "CorrectionReturnedCreditOrigin": {
+        "additionalProperties": false,
+        "properties": {
+          "applications": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptCreditApplication"
+            },
+            "title": "Applications",
+            "type": "array"
+          },
+          "availableAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CreditOriginResponse"
+          },
+          "receiptAmount": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "retainedAfter": {
+            "$ref": "#/components/schemas/MoneyResponse"
+          },
+          "returns": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionCreditReturn"
+            },
+            "title": "Returns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "origin",
+          "receiptAmount",
+          "retainedAfter",
+          "availableAfter",
+          "applications",
+          "returns"
+        ],
+        "title": "CorrectionReturnedCreditOrigin",
         "type": "object"
       },
       "CreateUserRequest": {
@@ -7332,11 +7438,28 @@
           "availableAfter": {
             "$ref": "#/components/schemas/MoneyResponse"
           },
+          "directCashReleasedForReturns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "origin": {
             "$ref": "#/components/schemas/CreditOriginResponse"
           },
           "participantPosition": {
             "$ref": "#/components/schemas/CorrectionParticipantPosition"
+          },
+          "returns": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionCreditReturn"
+            },
+            "title": "Returns",
+            "type": "array"
           }
         },
         "required": [

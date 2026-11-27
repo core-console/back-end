@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core_console.modules.finance.advance_correction_schemas import CorrectionCreditReturn
 from core_console.modules.finance.advance_protection import require_unmanaged_accounts
 from core_console.modules.finance.advances import _money, _problem, require_advance_ledger
 from core_console.modules.finance.credit_return_models import FinanceCreditReturnFragment
@@ -30,6 +31,36 @@ from core_console.modules.finance.settlement_schemas import (
     CreditReturnPreview,
     CreditReturnResponse,
 )
+
+
+async def credit_returns_by_origin(
+    session: AsyncSession, ledger_id: UUID, origin_ids: set[UUID]
+) -> dict[UUID, list[CorrectionCreditReturn]]:
+    if not origin_ids:
+        return {}
+    fragment = FinanceCreditReturnFragment
+    rows = await session.execute(
+        select(fragment, FinanceSettlement)
+        .join(FinanceSettlement, FinanceSettlement.id == fragment.settlement_id)
+        .where(fragment.ledger_id == ledger_id, fragment.origin_settlement_id.in_(origin_ids))
+        .order_by(FinanceSettlement.confirmation_order, FinanceSettlement.id, fragment.position)
+    )
+    result: dict[UUID, list[CorrectionCreditReturn]] = {}
+    for link, returned in rows:
+        assert returned.paying_account_id is not None
+        result.setdefault(link.origin_settlement_id, []).append(
+            CorrectionCreditReturn(
+                settlementId=returned.id,
+                confirmationOrder=returned.confirmation_order,
+                position=link.position,
+                transactionId=link.transaction_id,
+                transactionDate=returned.transaction_date,
+                payingAccountId=returned.paying_account_id,
+                returnAmount=_money(returned.amount, returned.currency),
+                originAmount=_money(link.amount, returned.currency),
+            )
+        )
+    return result
 
 
 async def preview_credit_return(
